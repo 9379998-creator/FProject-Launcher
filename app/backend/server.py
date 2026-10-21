@@ -1,0 +1,4145 @@
+from __future__ import annotations
+
+import argparse
+import atexit
+import hashlib
+import html
+import io
+import json
+import logging
+import mimetypes
+import os
+import re
+import shlex
+import shutil
+import struct
+import subprocess
+import sys
+import threading
+import time
+import traceback
+from datetime import datetime
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
+import xml.etree.ElementTree as ET
+import zipfile
+
+try:
+    import openpyxl
+except ImportError:  # pragma: no cover - reported through the local API
+    openpyxl = None
+
+logger = logging.getLogger("fero_server")
+
+
+if getattr(sys, 'frozen', False):
+    REPO_ROOT = Path(sys.executable).resolve().parent
+else:
+    # Проверяем, не лежит ли файл внутри _internal
+    p = Path(__file__).resolve()
+    if "_internal" in p.parts:
+        idx = p.parts.index("_internal")
+        REPO_ROOT = Path(*p.parts[:idx])
+    else:
+        REPO_ROOT = p.parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+_backend_dir = str(Path(__file__).resolve().parent)
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+
+try:
+    from app.rendering import dispatcher as rendering_dispatcher
+    from app.rendering import engine_excel as _engine_excel
+    from app.rendering import engine_word as _engine_word
+except Exception:  # ядро rendering опционально: сервер стартует и без него
+    rendering_dispatcher = None
+    _engine_excel = None
+    _engine_word = None
+RUNTIME_DIR = REPO_ROOT / "runtime"
+MANIFESTS_DIR = RUNTIME_DIR / "manifests"
+FRONTEND_DIR = REPO_ROOT / "app" / "frontend"
+PDF_CACHE_DIR = RUNTIME_DIR / "cache" / "pdf"
+WORD_CACHE_DIR = RUNTIME_DIR / "cache" / "word"
+EXCEL_CACHE_DIR = RUNTIME_DIR / "cache" / "excel"
+DWG_CACHE_DIR = RUNTIME_DIR / "cache" / "dwg"
+WORD_CONVERT_SCRIPT = REPO_ROOT / "scripts" / "convert_word_to_pdf.ps1"
+EXCEL_XLS_CONVERT_SCRIPT = REPO_ROOT / "scripts" / "convert_xls_to_xlsx.ps1"
+VERSION = "0.4.0-v3-pdf-render"
+APP_VERSION = "3.1.0"
+APP_BRANCH = "dvg-main"
+SKIP_DIR_NAMES = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+
+
+def get_launcher_version_info() -> dict:
+    """Вернуть {version, branch} из app.shared.version_info или version.json.
+
+    Не падает при отсутствии файла: возвращает значения по умолчанию
+    для ветки dvg-main.
+    """
+    try:
+        from app.shared.version_info import get_version_payload
+
+        payload = get_version_payload()
+        if isinstance(payload, dict):
+            version = str(payload.get("version") or APP_VERSION)
+            branch = str(payload.get("git_branch") or payload.get("branch") or APP_BRANCH)
+            return {"version": version, "branch": branch}
+    except Exception:
+        pass
+    try:
+        manifest_path = REPO_ROOT / "version.json"
+        with manifest_path.open("r", encoding="utf-8") as manifest_file:
+            payload = json.load(manifest_file)
+        if isinstance(payload, dict):
+            version = str(payload.get("version") or APP_VERSION)
+            branch = str(payload.get("git_branch") or payload.get("branch") or APP_BRANCH)
+            return {"version": version, "branch": branch}
+    except Exception:
+        pass
+    return {"version": APP_VERSION, "branch": APP_BRANCH}
+DEFAULT_PDF_DPI = 72
+# Архитектурный стандарт (docs/CORE_ARCH_RULES.md): нарезка страниц чертежей
+# и превью — строго 150 DPI PNG. 300 DPI и WebP в дефолтном тракте запрещены
+# (нагрузка CPU/память без выигрыша читаемости на экране).
+DWG_PREVIEW_DPI = 150
+PDF_PAGE_TIMEOUT_SECONDS = 25
+PDF_DOCUMENT_TIMEOUT_SECONDS = 600
+WORD_CONVERT_TIMEOUT_SECONDS = 120
+EXCEL_CONVERT_TIMEOUT_SECONDS = 180
+DWG_RENDER_TIMEOUT_SECONDS = 600
+DWG_MODEL_PAGE_TIMEOUT_SECONDS = 120
+MAX_XLSX_ROWS = 2000
+MAX_XLSX_COLS = 100
+POPPLER_BIN_DIR = (
+    Path.home()
+    / ".cache"
+    / "codex-runtimes"
+    / "codex-primary-runtime"
+    / "dependencies"
+    / "native"
+    / "poppler"
+    / "Library"
+    / "bin"
+)
+# Portable Poppler shipped inside a release archive.  Checked before the
+# machine-wide cache path so a copied release works on a fresh computer.
+PORTABLE_POPPLER_BIN_DIR = REPO_ROOT / "runtime" / "tools" / "poppler" / "Library" / "bin"
+
+
+def object_id_for_path(path: Path) -> str:
+    return hashlib.sha1(str(path.resolve()).casefold().encode("utf-8")).hexdigest()[:16]
+
+
+def file_extension(path: Path) -> str:
+    suffix = path.suffix.upper().lstrip(".")
+    return suffix or "NO_EXT"
+
+
+def build_tree(folder: Path) -> tuple[dict, dict[str, int], int, int]:
+    counts: dict[str, int] = {}
+    folder_count = 0
+    file_count = 0
+    visited_dirs: set[Path] = set()
+
+    # Итеративный обход: стек хранит (path, parent_children_list).
+    # Каждый каталог создаёт узел и кладёт своих потомков-каталогов в стек.
+    root_node: dict = {"type": "folder", "name": folder.name, "path": str(folder), "children": []}
+    stack: list[tuple[Path, list]] = [(folder, root_node["children"])]
+
+    while stack:
+        current, parent_children = stack.pop()
+        folder_count += 1
+        try:
+            resolved_current = current.resolve()
+            if resolved_current in visited_dirs:
+                continue
+            visited_dirs.add(resolved_current)
+            entries = sorted(current.iterdir(), key=lambda item: (not item.is_dir(), item.name.casefold()))
+        except OSError as error:
+            # Ошибка чтения каталога — добавляем узел с ошибкой
+            if current != folder:
+                parent_children.append({
+                    "type": "folder",
+                    "name": current.name,
+                    "path": str(current),
+                    "error": str(error),
+                    "children": [],
+                })
+            else:
+                root_node["error"] = str(error)
+            continue
+
+        # Собираем дочерние узлы для текущего каталога
+        children_dirs_to_push: list[tuple[Path, list]] = []
+        for entry in entries:
+            if entry.name.startswith("~$") or entry.name.startswith(".~"):
+                continue
+            if entry.is_dir():
+                if entry.name in SKIP_DIR_NAMES:
+                    continue
+                child_node: dict = {"type": "folder", "name": entry.name, "path": str(entry), "children": []}
+                parent_children.append(child_node)
+                children_dirs_to_push.append((entry, child_node["children"]))
+            elif entry.is_file():
+                ext = file_extension(entry)
+                counts[ext] = counts.get(ext, 0) + 1
+                file_count += 1
+                try:
+                    stat = entry.stat()
+                    size = stat.st_size
+                    mtime_ns = stat.st_mtime_ns
+                    stat_error = None
+                except OSError as stat_err:
+                    size = 0
+                    mtime_ns = 0
+                    stat_error = str(stat_err)
+                node = {
+                    "type": "file",
+                    "name": entry.name,
+                    "path": str(entry),
+                    "extension": ext,
+                    "size": size,
+                    "mtimeNs": mtime_ns,
+                }
+                if stat_error:
+                    node["error"] = stat_error
+                parent_children.append(node)
+
+        # Добавляем подкаталоги в стек в обратном порядке для сохранения
+        # порядка обхода (первый каталог будет обработан следующим)
+        for item in reversed(children_dirs_to_push):
+            stack.append(item)
+
+    return root_node, counts, folder_count, file_count
+
+
+def tree_file_signatures(tree: dict | None) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    if not tree:
+        return result
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        if node.get("type") == "file":
+            path = node.get("path") or ""
+            result[path.casefold()] = {
+                "path": path,
+                "name": node.get("name"),
+                "size": node.get("size"),
+                "mtimeNs": node.get("mtimeNs"),
+            }
+        for child in node.get("children") or []:
+            stack.append(child)
+    return result
+
+
+def diff_trees(old_tree: dict | None, new_tree: dict | None) -> dict:
+    old = tree_file_signatures(old_tree)
+    new = tree_file_signatures(new_tree)
+
+    def signature(entry: dict) -> tuple:
+        return (entry.get("size"), entry.get("mtimeNs"))
+
+    added: list[str] = []
+    changed: list[str] = []
+    removed: list[str] = []
+    unchanged: list[str] = []
+
+    for key, entry in new.items():
+        old_entry = old.get(key)
+        if old_entry is None:
+            added.append(entry["path"])
+        elif signature(old_entry) != signature(entry):
+            changed.append(entry["path"])
+        else:
+            unchanged.append(entry["path"])
+
+    for key, entry in old.items():
+        if key not in new:
+            removed.append(entry["path"])
+
+    # Эвристика переименования: если исчез ровно один файл и появился ровно
+    # один новый с тем же размером, считаем это переносом/заменой имени,
+    # а не «удалён + добавлен». Срабатывает только для однозначной пары,
+    # чтобы не объединять случайные файлы одинакового размера.
+    renamed: set[str] = set()
+    if len(removed) == 1 and len(added) == 1:
+        removed_path = removed[0]
+        added_path = added[0]
+        removed_entry = old.get(removed_path.casefold())
+        added_entry = new.get(added_path.casefold())
+        if (
+            removed_entry is not None
+            and added_entry is not None
+            and removed_entry.get("size") == added_entry.get("size")
+        ):
+            renamed.add(added_path.casefold())
+            renamed.add(removed_path.casefold())
+            changed.append(added_path)
+    if renamed:
+        added = [path for path in added if path.casefold() not in renamed]
+        removed = [path for path in removed if path.casefold() not in renamed]
+
+    return {
+        "added": sorted(added),
+        "changed": sorted(changed),
+        "removed": sorted(removed),
+        "unchanged": sorted(unchanged),
+    }
+
+
+def scan_object(raw_path: str) -> dict:
+    if not raw_path or not raw_path.strip():
+        raise ValueError("Путь к папке объекта пустой")
+    root = Path(raw_path.strip().strip('"')).expanduser()
+    if not root.exists():
+        raise FileNotFoundError(f"Путь не найден: {root}")
+    if root.is_file():
+        root = root.parent
+    if not root.is_dir():
+        raise NotADirectoryError(f"Это не папка: {root}")
+
+    import app.backend.db as db
+    import threading
+
+    object_id = object_id_for_path(root)
+    previous = load_manifest(object_id)
+    previous_tree = (previous or {}).get("tree")
+
+    # Fast Path: Get ID and return immediately if exists
+    conn = db.get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO roots (path, is_active) VALUES (?, 1)", (str(root.resolve()),))
+        cursor.execute("SELECT id FROM roots WHERE path = ?", (str(root.resolve()),))
+        root_id = cursor.fetchone()[0]
+        conn.commit()
+        
+        # Build tree instantly from current DB state
+        tree, extension_counts, folder_count, file_count = db.build_tree_from_db(root, root_id)
+    finally:
+        conn.close()
+
+    if file_count == 0:
+        # First time opening or DB was wiped. Block and sync!
+        db.sync_root_to_db(root)
+        tree, extension_counts, folder_count, file_count = db.build_tree_from_db(root, root_id)
+    else:
+        # Async Path: Trigger disk sync in background
+        def async_sync():
+            try:
+                db.sync_root_to_db(root)
+                # In a real app, emit a WebSocket event here so the UI knows to refresh!
+            except Exception as e:
+                print(f"Background sync error: {e}")
+        
+        threading.Thread(target=async_sync, daemon=True).start()
+    
+    last_diff = diff_trees(previous_tree, tree)
+    manifest = {
+        "id": object_id,
+        "name": root.name,
+        "rootPath": str(root.resolve()),
+        "scannedAt": datetime.now().isoformat(timespec="seconds"),
+        "statistics": {
+            "folders": folder_count,
+            "files": file_count,
+            "extensions": extension_counts,
+        },
+        "tree": tree,
+        "lastDiff": last_diff,
+    }
+    MANIFESTS_DIR.mkdir(parents=True, exist_ok=True)
+    (MANIFESTS_DIR / f"{manifest['id']}.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def manifest_path(object_id: str) -> Path:
+    return MANIFESTS_DIR / f"{object_id}.json"
+
+
+def validate_and_filter_tree(node: dict) -> dict:
+    if not isinstance(node, dict):
+        return node
+    # Итеративная валидация: обрабатываем все папки через стек
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if not isinstance(current, dict):
+            continue
+        cur_path = current.get("path") or ""
+        if not os.path.exists(cur_path):
+            current["is_missing"] = True
+            current["error"] = "Путь недоступен на диске"
+            if current.get("type") == "folder":
+                current["children"] = []
+            continue
+
+        if current.get("type") == "folder":
+            valid_children = []
+            for child in current.get("children", []):
+                if not isinstance(child, dict):
+                    continue
+                c_path = child.get("path") or ""
+                if not os.path.exists(c_path):
+                    continue
+                valid_children.append(child)
+                if child.get("type") == "folder":
+                    stack.append(child)
+            current["children"] = valid_children
+    return node
+
+
+def calculate_tree_statistics(tree: dict) -> dict:
+    counts: dict[str, int] = {}
+    folder_count = 0
+    file_count = 0
+
+    stack = [tree]
+    while stack:
+        n = stack.pop()
+        if not isinstance(n, dict):
+            continue
+        if n.get("type") == "folder":
+            folder_count += 1
+            for child in n.get("children", []):
+                stack.append(child)
+        elif n.get("type") == "file":
+            file_count += 1
+            ext = (n.get("extension") or file_extension(Path(n.get("path", "")))).upper()
+            counts[ext] = counts.get(ext, 0) + 1
+
+    return {
+        "folders": folder_count,
+        "files": file_count,
+        "extensions": counts,
+    }
+
+
+def load_manifest(object_id: str) -> dict | None:
+    path = manifest_path(object_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def manifest_summary(manifest: dict) -> dict:
+    return {
+        "id": manifest.get("id"),
+        "name": manifest.get("name"),
+        "rootPath": manifest.get("rootPath"),
+        "scannedAt": manifest.get("scannedAt"),
+        "statistics": manifest.get("statistics", {}),
+    }
+
+
+def list_object_summaries() -> list[dict]:
+    MANIFESTS_DIR.mkdir(parents=True, exist_ok=True)
+    manifests: list[dict] = []
+    for path in MANIFESTS_DIR.glob("*.json"):
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            manifests.append(manifest_summary(manifest))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return sorted(manifests, key=lambda item: str(item.get("scannedAt", "")), reverse=True)
+
+
+def pdf_cache_key(path: Path, dpi: int = 0) -> str:
+    stat = path.stat()
+    dpi_tag = f"|dpi={dpi}" if dpi and dpi != DEFAULT_PDF_DPI else ""
+    raw = f"{path.resolve()}|{stat.st_mtime_ns}|{stat.st_size}{dpi_tag}"
+    return hashlib.sha1(raw.casefold().encode("utf-8")).hexdigest()[:20]
+
+
+def file_cache_key(path: Path, purpose: str) -> str:
+    stat = path.stat()
+    raw = f"{purpose}|{path.resolve()}|{stat.st_mtime_ns}|{stat.st_size}"
+    return hashlib.sha1(raw.casefold().encode("utf-8")).hexdigest()[:20]
+
+
+def is_word_file(path: Path) -> bool:
+    if path.name.startswith("~$") or path.name.startswith(".~"):
+        return False
+    return path.suffix.casefold() in {".doc", ".docx"}
+
+
+def is_excel_file(path: Path) -> bool:
+    if path.name.startswith("~$") or path.name.startswith(".~"):
+        return False
+    return path.suffix.casefold() in {".xls", ".xlsx", ".xlsm"}
+
+
+_FITZ_RENDER_LOCK = threading.Lock()
+_OPEN_FITZ_DOCS: dict[str, tuple[any, float]] = {}
+_FITZ_CACHE_LOCK = threading.Lock()
+_MANIFEST_CACHE: dict[str, dict] = {}
+_MANIFEST_LOCK = threading.Lock()
+
+
+def get_fitz_doc(path: Path):
+    with _FITZ_CACHE_LOCK:
+        p_str = str(path.resolve())
+        now = time.time()
+        # Освобождаем документы, к которым не обращались более 120 секунд
+        for k, (d, ts) in list(_OPEN_FITZ_DOCS.items()):
+            if now - ts > 120:
+                try:
+                    d.close()
+                except Exception:
+                    pass
+                _OPEN_FITZ_DOCS.pop(k, None)
+        if p_str in _OPEN_FITZ_DOCS:
+            doc, _ = _OPEN_FITZ_DOCS[p_str]
+            _OPEN_FITZ_DOCS[p_str] = (doc, now)
+            return doc
+        import fitz
+        try:
+            doc = fitz.open(p_str)
+        except Exception:
+            doc = fitz.open(stream=path.read_bytes(), filetype="pdf")
+        _OPEN_FITZ_DOCS[p_str] = (doc, now)
+        return doc
+
+
+def pdf_page_item(path: Path, key: str, page: int, png: Path) -> dict:
+    return {
+        "page": page,
+        "name": f"{path.name} · стр. {page}",
+        "url": f"/cache/pdf/{key}/{png.name}",
+        "bytes": png.stat().st_size if png.exists() else 0,
+    }
+
+
+def read_pdf_cache_manifest(path: Path, dpi: int, key: str, target_dir: Path) -> dict | None:
+    with _MANIFEST_LOCK:
+        cached = _MANIFEST_CACHE.get(key)
+        if cached:
+            return cached
+
+    manifest_path = target_dir / "manifest.json"
+    manifest = None
+    if manifest_path.exists():
+        for _ in range(5):
+            try:
+                text = manifest_path.read_text(encoding="utf-8")
+                if text.strip():
+                    manifest = json.loads(text)
+                    break
+            except (OSError, json.JSONDecodeError):
+                pass
+            time.sleep(0.02)
+        if manifest:
+            p_str = str(path) if path else ""
+            if p_str and p_str != "." and manifest.get("path") and manifest.get("path") != p_str:
+                manifest = None
+            elif key and manifest.get("cacheKey") and manifest.get("cacheKey") != key:
+                manifest = None
+            if manifest:
+                with _MANIFEST_LOCK:
+                    _MANIFEST_CACHE[key] = manifest
+                return manifest
+        else:
+            try:
+                manifest_path.unlink()
+            except OSError:
+                pass
+
+    if not manifest:
+        legacy_items = []
+        for png in sorted(target_dir.glob("page-*.png")):
+            try:
+                page = int(png.stem.removeprefix("page-"))
+            except ValueError:
+                continue
+            if page > 0 and png.stat().st_size > 0:
+                legacy_items.append(pdf_page_item(path, key, page, png))
+        if not legacy_items:
+            return None
+        m = {
+            "name": path.name,
+            "path": str(path),
+            "dpi": dpi,
+            "pages": max(item["page"] for item in legacy_items),
+            "renderedPages": len(legacy_items),
+            "cacheKey": key,
+            "complete": False,
+            "errors": [],
+            "items": legacy_items,
+        }
+        with _MANIFEST_LOCK:
+            _MANIFEST_CACHE[key] = m
+        return m
+
+    return manifest
+
+
+def write_pdf_cache_manifest(
+    path: Path,
+    dpi: int,
+    key: str,
+    target_dir: Path,
+    page_count: int,
+    items: list[dict],
+    errors: list[dict],
+) -> None:
+    rendered_count = len([it for it in items if it.get("bytes", 0) > 0])
+    manifest = {
+        "name": path.name,
+        "path": str(path),
+        "dpi": dpi,
+        "pages": page_count,
+        "renderedPages": rendered_count,
+        "cacheKey": key,
+        "complete": rendered_count == page_count and not errors,
+        "errors": errors,
+        "items": items,
+        "updatedAt": datetime.now().isoformat(timespec="seconds"),
+    }
+    with _MANIFEST_LOCK:
+        _MANIFEST_CACHE[key] = manifest
+        tmp = None
+        try:
+            import uuid
+            tmp = target_dir / f"manifest_{uuid.uuid4().hex}.tmp"
+            tmp.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(tmp, target_dir / "manifest.json")
+        except Exception:
+            if tmp and tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+
+
+def poppler_tool(name: str) -> str | None:
+    for candidate in (PORTABLE_POPPLER_BIN_DIR, POPPLER_BIN_DIR):
+        exe = candidate / f"{name}.exe"
+        if exe.exists():
+            return str(exe)
+    found = shutil.which(name)
+    if found and found.lower().endswith(".cmd"):
+        return None
+    return found
+
+
+def hidden_process_kwargs() -> dict:
+    """Флаги скрытого запуска фоновых процессов: никаких чёрных окон консоли."""
+    if os.name != "nt":
+        return {}
+    try:
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        return {
+            "startupinfo": startupinfo,
+            "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        }
+    except Exception:
+        return {}
+
+
+def decode_folder_dialog_output(raw: bytes | None) -> str:
+    """Последняя непустая строка stdout диалога выбора папки -> путь.
+
+    Декодируем терпимо: сначала UTF-8 (скрипт выставляет
+    [Console]::OutputEncoding в UTF-8 без BOM), затем OEM/ANSI консоли,
+    чтобы кириллические пути не падали с UnicodeDecodeError
+    (было: errors="strict" -> тихая ошибка выбора папки).
+    Из строк выбираем последнюю существующую на диске: в stdout могут
+    попасть предупреждения PowerShell, а путь скрипт пишет последним.
+    """
+    if not raw:
+        return ""
+    text: str | None = None
+    for encoding in ("utf-8", "cp866", "cp1251"):
+        try:
+            text = raw.decode(encoding)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    if text is None:
+        text = raw.decode("utf-8", errors="replace")
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    for line in reversed(lines):
+        try:
+            if Path(line).exists():
+                return line
+        except (OSError, ValueError):
+            continue
+    return lines[-1] if lines else ""
+
+
+def run_poppler(args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        close_fds=True,
+        **hidden_process_kwargs(),
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        process.kill()
+        stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(args, timeout, output=stdout, stderr=stderr) from error
+    return subprocess.CompletedProcess(args=args, returncode=process.returncode, stdout=stdout, stderr=stderr)
+
+
+def pdf_page_count(path: Path) -> int:
+    try:
+        with _FITZ_RENDER_LOCK:
+            doc = get_fitz_doc(path)
+            return len(doc)
+    except Exception:
+        pass
+
+    pdfinfo = poppler_tool("pdfinfo")
+    if not pdfinfo:
+        raise RuntimeError("pdfinfo не найден. Нужен Poppler из runtime.")
+    result = run_poppler(
+        [pdfinfo, str(path)],
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "pdfinfo не смог прочитать PDF")
+    for line in result.stdout.splitlines():
+        if line.startswith("Pages:"):
+            return int(line.split(":", 1)[1].strip())
+    raise RuntimeError("pdfinfo не вернул количество страниц PDF")
+
+
+def word_to_pdf(path: Path) -> tuple[Path, bool]:
+    """Шим ядра rendering: COM->PDF (фолбэк для .doc). Код — в app/rendering/engine_word."""
+    if _engine_word is None:
+        raise RuntimeError("Ядро rendering недоступно (app.rendering.engine_word)")
+    key = file_cache_key(path, "word-pdf")
+    return _engine_word.ensure_word_pdf(
+        path, WORD_CACHE_DIR / key, key, WORD_CONVERT_SCRIPT,
+        WORD_CONVERT_TIMEOUT_SECONDS)
+
+
+def word_preview_html(path: Path) -> dict:
+    """Быстрый HTML-просмотр Word через ядро rendering (DOCX напрямую, .doc через fallback)."""
+    if _engine_word is None:
+        raise RuntimeError("Ядро rendering недоступно (app.rendering.engine_word)")
+    if not path.is_file():
+        raise FileNotFoundError(f"Файл не найден: {path}")
+    ext = path.suffix.casefold()
+    if ext == ".docx":
+        key = file_cache_key(path, "word-html")
+        meta = _engine_word.ensure_docx_preview(path, WORD_CACHE_DIR / "html" / key)
+        meta = dict(meta)
+        meta["url"] = f"/cache/word/html/{key}/preview.html"
+        return {"name": path.name, "path": str(path), "cacheKey": key, "thumbnailUrl": meta["url"], **meta}
+    elif ext in {".doc", ".rtf"}:
+        # Для .doc/.rtf рендерим PDF и отдаем первую страницу или конвертируем
+        pdf_path, _ = word_to_pdf(path)
+        doc = render_pdf(pdf_path, dpi=DEFAULT_PDF_DPI, first_page_only=True)
+        first_img = doc["items"][0]["url"] if doc.get("items") else ""
+        return {
+            "name": path.name,
+            "path": str(path),
+            "cacheKey": file_cache_key(path, "word-doc"),
+            "url": first_img,
+            "thumbnailUrl": first_img,
+            "paragraphs": 0,
+            "tables": 0,
+            "bytes": path.stat().st_size,
+        }
+    raise ValueError(f"Формат Word не поддерживается: {path.name}")
+
+
+def word_document_preview(path: Path) -> dict:
+    """Полное описание документа Word для HTML-просмотра и ленты (по аналогии с excel_workbook_preview)."""
+    return word_preview_html(path)
+
+
+
+
+
+
+
+
+
+
+def cleanup_dwg_workers() -> None:
+    """Остановить все фоновые воркеры печати DWG и освободить системные ресурсы."""
+    try:
+        from app.backend.dwg_engine import DwgOnDemandManager
+        DwgOnDemandManager.stop_all_workers()
+    except Exception:
+        pass
+    if os.name == "nt":
+        for cmd in (
+            ["taskkill", "/F", "/IM", "accoreconsole.exe"],
+            ["taskkill", "/F", "/FI", "WINDOWTITLE eq ", "/IM", "acad.exe"],
+        ):
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=5, close_fds=True, **hidden_process_kwargs())
+            except Exception:
+                pass
+
+
+_DWG_BG_LOCK = threading.Lock()
+_DWG_BG_ACTIVE: set[str] = set()
+
+
+def render_dwg_model(path: Path, dpi: int = DEFAULT_PDF_DPI, force: bool = False) -> dict:
+    if not path.exists():
+        return {
+            "name": path.name,
+            "path": str(path),
+            "sourcePath": str(path),
+            "sourceName": path.name,
+            "sourceType": "DWG",
+            "dpi": dpi,
+            "pages": 0,
+            "renderedPages": 0,
+            "cacheKey": "",
+            "cacheHit": False,
+            "cacheHitPages": 0,
+            "newRenderedPages": 0,
+            "is_missing": True,
+            "errors": [{"error": f"DWG-файл не найден на диске: {path.name}", "is_missing": True}],
+            "items": [],
+            "status": "missing",
+            "convertedPdfPath": "",
+            "convertCacheHit": False,
+            "previewMode": "cad-smart-layouts",
+        }
+    if not path.is_file() or path.suffix.casefold() != ".dwg":
+        raise ValueError(f"Это не DWG-файл: {path}")
+
+    key = file_cache_key(path, "dwg-smart-cad-v4")
+    target_dir = DWG_CACHE_DIR / key
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from app.backend.dwg_engine import render_dwg_model_progressive
+    except ImportError:
+        from dwg_engine import render_dwg_model_progressive
+
+    return render_dwg_model_progressive(path=path, target_dir=target_dir, cache_key=key, dpi=dpi, force=force)
+
+def set_windows_clipboard(text: str) -> bool:
+    if os.name != "nt":
+        return False
+    normalized_text = os.path.normpath(text)
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        user32.OpenClipboard.argtypes = [wintypes.HWND]
+        user32.OpenClipboard.restype = wintypes.BOOL
+        user32.EmptyClipboard.argtypes = []
+        user32.EmptyClipboard.restype = wintypes.BOOL
+        user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+        user32.SetClipboardData.restype = wintypes.HANDLE
+        user32.CloseClipboard.argtypes = []
+        user32.CloseClipboard.restype = wintypes.BOOL
+
+        kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+        kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalLock.restype = wintypes.LPVOID
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalUnlock.restype = wintypes.BOOL
+
+        GMEM_MOVEABLE = 0x0002
+        CF_UNICODETEXT = 13
+
+        opened = False
+        for _ in range(10):
+            if user32.OpenClipboard(None):
+                opened = True
+                break
+            time.sleep(0.04)
+
+        if opened:
+            try:
+                user32.EmptyClipboard()
+                encoded = (normalized_text + "\0").encode("utf-16le")
+                h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
+                if h_mem:
+                    p_mem = kernel32.GlobalLock(h_mem)
+                    if p_mem:
+                        ctypes.memmove(p_mem, encoded, len(encoded))
+                        kernel32.GlobalUnlock(h_mem)
+                        if user32.SetClipboardData(CF_UNICODETEXT, h_mem):
+                            return True
+            finally:
+                user32.CloseClipboard()
+    except Exception:
+        pass
+
+    try:
+        res = subprocess.run(["clip.exe"], input=normalized_text.encode("utf-16le"), check=True, timeout=3, close_fds=True)
+        return res.returncode == 0
+    except Exception:
+        pass
+
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "$input | Set-Clipboard"],
+            input=normalized_text,
+            text=True,
+            timeout=3,
+            check=True,
+            close_fds=True
+        )
+        return True
+    except Exception:
+        return False
+
+
+NATIVE_APPS_CONFIG_FILE = RUNTIME_DIR / "native_apps.json"
+
+DEFAULT_NATIVE_APPS: dict[str, Any] = {
+    "useNativeApps": True,
+    "defaultAction": "explorer",
+    "firstRunCompleted": False,
+    "version": 2,
+    ".dwg": "",
+    ".dxf": "",
+    ".pdf": "",
+    ".doc": "",
+    ".docx": "",
+    ".rtf": "",
+    ".odt": "",
+    ".xls": "",
+    ".xlsx": "",
+    ".xlsm": "",
+    ".csv": "",
+    ".ods": "",
+    ".ppt": "",
+    ".pptx": "",
+    ".odp": "",
+    ".jpg": "",
+    ".jpeg": "",
+    ".png": "",
+    ".bmp": "",
+    ".gif": "",
+    ".webp": "",
+    ".tif": "",
+    ".tiff": "",
+    ".ico": "",
+    ".svg": "",
+    ".zip": "",
+    ".rar": "",
+    ".7z": "",
+    ".tar": "",
+    ".gz": "",
+    ".txt": "",
+    ".log": "",
+    ".ini": "",
+    ".cfg": "",
+    ".json": "",
+    ".xml": "",
+    ".yaml": "",
+    ".yml": "",
+    ".mp4": "",
+    ".avi": "",
+    ".mov": "",
+    ".mkv": "",
+    ".mp3": "",
+    ".wav": "",
+}
+
+ALL_SUPPORTED_EXTENSIONS: list[str] = [
+    ".dwg", ".dxf", ".pdf",
+    ".docx", ".doc", ".rtf", ".odt",
+    ".xlsx", ".xls", ".xlsm", ".csv", ".ods",
+    ".pptx", ".ppt", ".odp",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".ico", ".svg",
+    ".zip", ".rar", ".7z", ".tar", ".gz",
+    ".txt", ".log", ".ini", ".cfg", ".json", ".xml", ".yaml", ".yml",
+    ".mp4", ".avi", ".mov", ".mkv", ".mp3", ".wav",
+]
+
+
+class NativeOpenError(RuntimeError):
+    """Структурированная ошибка нативного открытия файла."""
+
+    def __init__(self, message: str, error_code: str = "native_open_failed", details: dict | None = None):
+        super().__init__(message)
+        self.error_code = error_code
+        self.details = details or {}
+
+
+def normalize_file_extension(ext_or_path: str | Path) -> str:
+    """Нормализует расширение файла: всегда в нижнем регистре с ведущей точкой.
+
+    Примеры: '.DWG' -> '.dwg', 'dwg' -> '.dwg', Path('file.DXF') -> '.dxf'.
+    """
+    if isinstance(ext_or_path, Path):
+        ext = ext_or_path.suffix
+    else:
+        ext = str(ext_or_path or "").strip()
+    if not ext:
+        return ""
+    ext = ext.strip().casefold()
+    if not ext.startswith("."):
+        ext = "." + ext
+    return ext
+
+
+SAFE_EXECUTABLE_EXTENSIONS = {".exe", ".cmd", ".bat", ".com"}
+FORBIDDEN_AUTODETECT_EXES: set[str] = set()
+
+
+def _clean_configured_exe_path(raw: str) -> str:
+    """Очищает путь к исполняемому файлу от кавычек и параметров реестра."""
+    if not raw:
+        return ""
+    raw = raw.strip()
+    # 1. Снимаем любые внешние кавычки
+    stripped = raw.strip('"').strip("'").strip()
+    if stripped.lower().endswith(".exe"):
+        return stripped
+    # 2. Ищем путь в кавычках с .exe (например, из реестра: "C:\...\app.exe" "%1")
+    m = re.search(r'"([^"]+?\.exe)"', raw, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    # 3. Ищем путь с диском Windows без кавычек
+    m2 = re.search(r'([a-zA-Z]:\\[^\s"]+?\.exe)', raw, re.IGNORECASE)
+    if m2:
+        return m2.group(1).strip()
+    return stripped
+
+
+def validate_configured_executable(exe_path: str) -> tuple[bool, str]:
+    """Проверяет путь к исполняемому файлу из настроек пользователя.
+
+    Возвращает (is_valid, cleaned_path).
+    """
+    if not exe_path or not str(exe_path).strip():
+        return False, ""
+    cleaned = _clean_configured_exe_path(str(exe_path).strip())
+    if not cleaned:
+        return False, ""
+    p = Path(cleaned)
+    if not p.is_file():
+        return False, cleaned
+    if p.suffix.casefold() not in SAFE_EXECUTABLE_EXTENSIONS:
+        return False, cleaned
+    return True, cleaned
+
+
+def _extract_app_path(val: Any) -> str:
+    """Извлекает строковый путь к приложению из объекта или строки."""
+    if isinstance(val, dict):
+        return str(val.get("path", "") or "").strip()
+    if isinstance(val, str):
+        return val.strip()
+    return ""
+
+
+try:
+    import winreg
+except ImportError:
+    winreg = None
+
+
+def _get_command_from_progid(progid: str) -> str:
+    if not winreg or not progid:
+        return ""
+    keys_to_try = [
+        f"{progid}\\shell\\open\\command",
+        f"{progid}\\shell\\Open\\command",
+        f"{progid}\\shell\\edit\\command",
+    ]
+    for subkey in keys_to_try:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, subkey) as k:
+                val, _ = winreg.QueryValueEx(k, "")
+                cleaned = _clean_configured_exe_path(val)
+                if cleaned:
+                    if Path(cleaned).name.casefold() in FORBIDDEN_AUTODETECT_EXES:
+                        return ""
+                    return cleaned
+        except OSError:
+            pass
+    return ""
+
+
+def detect_windows_app_for_ext(ext: str) -> str:
+    """Определяет установленную в Windows программу по умолчанию для расширения."""
+    if not winreg:
+        return ""
+    norm_ext = normalize_file_extension(ext)
+    if not norm_ext:
+        return ""
+
+    candidate = ""
+    # 1. UserChoice (Windows 10 / 11 modern default)
+    user_choice = f"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\{norm_ext}\\UserChoice"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, user_choice) as k:
+            progid, _ = winreg.QueryValueEx(k, "ProgId")
+            res = _get_command_from_progid(progid)
+            if res:
+                candidate = res
+    except OSError:
+        pass
+
+    # 2. HKEY_CLASSES_ROOT default ProgID
+    if not candidate:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, norm_ext) as k:
+                progid = winreg.QueryValue(k, "")
+                res = _get_command_from_progid(progid)
+                if res:
+                    candidate = res
+        except OSError:
+            pass
+
+    # 3. OpenWithProgids
+    if not candidate:
+        openwith = f"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\{norm_ext}\\OpenWithProgids"
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, openwith) as k:
+                i = 0
+                while True:
+                    try:
+                        name, _, _ = winreg.EnumValue(k, i)
+                        res = _get_command_from_progid(name)
+                        if res:
+                            candidate = res
+                            break
+                        i += 1
+                    except (OSError, ValueError, TypeError):
+                        break
+        except OSError:
+            pass
+
+    if candidate:
+        exe_file = Path(candidate).name.casefold()
+        if exe_file in FORBIDDEN_AUTODETECT_EXES:
+            return ""
+        if Path(candidate).is_file():
+            return candidate
+
+    return ""
+
+
+def migrate_and_normalize_apps_config(raw_data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Мигрирует старые строковые значения в объектный формат {path, source, updated_at, valid_at_save}.
+
+    Не вызывает autodetect, не пишет на диск.
+    Возвращает (migrated_cfg, had_legacy_or_unmigrated: bool).
+    """
+    if not isinstance(raw_data, dict):
+        raw_data = {}
+    cfg: dict[str, Any] = dict(DEFAULT_NATIVE_APPS)
+    had_legacy = False
+
+    # Копируем служебные флаги
+    cfg["useNativeApps"] = bool(raw_data.get("useNativeApps", True))
+    cfg["defaultAction"] = str(raw_data.get("defaultAction", "explorer"))
+    cfg["firstRunCompleted"] = bool(raw_data.get("firstRunCompleted", False))
+    cfg["version"] = int(raw_data.get("version", 2))
+
+    now_iso = datetime.now().isoformat(timespec="seconds")
+
+    for key, val in raw_data.items():
+        if key in {"useNativeApps", "defaultAction", "firstRunCompleted", "version"}:
+            continue
+        if isinstance(val, dict):
+            path_str = _extract_app_path(val)
+            source = str(val.get("source", "manual") or "manual")
+            updated_at = str(val.get("updated_at", now_iso) or now_iso)
+            valid_at_save = bool(val.get("valid_at_save", True if path_str else False))
+            cfg[key] = {
+                "path": path_str,
+                "source": source,
+                "updated_at": updated_at,
+                "valid_at_save": valid_at_save,
+            }
+        elif isinstance(val, str):
+            path_str = val.strip()
+            had_legacy = True
+            is_valid = False
+            if path_str:
+                is_valid, _ = validate_configured_executable(path_str)
+            cfg[key] = {
+                "path": path_str,
+                "source": "manual",
+                "updated_at": now_iso,
+                "valid_at_save": is_valid,
+            }
+
+    return cfg, had_legacy
+
+
+def load_native_apps_config() -> dict[str, Any]:
+    """Чистое чтение и in-memory нормализация/миграция конфигурации приложений.
+
+    Никогда не вызывает autodetect.
+    Никогда не сохраняет на диск (no side-effects).
+    Никогда не перезаписывает ручные настройки пользователя.
+    """
+    if NATIVE_APPS_CONFIG_FILE.exists():
+        try:
+            with open(NATIVE_APPS_CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    migrated, _ = migrate_and_normalize_apps_config(data)
+                    return migrated
+        except Exception:
+            pass
+    migrated_default, _ = migrate_and_normalize_apps_config(DEFAULT_NATIVE_APPS)
+    return migrated_default
+
+
+def save_native_apps_config(data: dict[str, Any]) -> None:
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    migrated, _ = migrate_and_normalize_apps_config(data)
+    with open(NATIVE_APPS_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(migrated, f, ensure_ascii=False, indent=2)
+
+
+def get_configured_app_for_extension(ext: str, cfg: dict | None = None) -> str:
+    """Возвращает путь к настроенной программе для заданного расширения из cfg."""
+    norm_ext = normalize_file_extension(ext)
+    if not norm_ext:
+        return ""
+    if cfg is None:
+        cfg = load_native_apps_config()
+
+    # Точное нормализованное расширение (например, ".dwg")
+    val = cfg.get(norm_ext)
+    extracted = _extract_app_path(val)
+    if extracted:
+        return extracted
+
+    # Варианты без точки / в верхнем регистре для обратной совместимости
+    no_dot = norm_ext.lstrip(".")
+    for key in (no_dot, norm_ext.upper(), no_dot.upper()):
+        extracted = _extract_app_path(cfg.get(key))
+        if extracted:
+            return extracted
+
+    # Специализированные ключи формы setting...Exe
+    fallback_key = ""
+    if norm_ext in {".dwg", ".dxf"}:
+        fallback_key = "settingDwgExe"
+    elif norm_ext in {".pdf"}:
+        fallback_key = "settingPdfExe"
+    elif norm_ext in {".doc", ".docx", ".rtf", ".odt"}:
+        fallback_key = "settingWordExe"
+    elif norm_ext in {".xls", ".xlsx", ".xlsm", ".csv", ".ods", ".xlsb"}:
+        fallback_key = "settingExcelExe"
+    elif norm_ext in {".ppt", ".pptx", ".odp"}:
+        fallback_key = "settingPptExe"
+    elif norm_ext in {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff", ".ico", ".svg"}:
+        fallback_key = "settingImgExe"
+    elif norm_ext in {".zip", ".rar", ".7z", ".tar", ".gz"}:
+        fallback_key = "settingArchExe"
+    elif norm_ext in {".txt", ".log", ".ini", ".cfg", ".json", ".xml", ".yaml", ".yml"}:
+        fallback_key = "settingTxtExe"
+    elif norm_ext in {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".mp3", ".wav"}:
+        fallback_key = "settingMediaExe"
+
+    if fallback_key and cfg.get(fallback_key):
+        extracted = _extract_app_path(cfg.get(fallback_key))
+        if extracted:
+            return extracted
+
+    return ""
+
+
+def import_windows_default_app_mappings(
+    mode: str = "fill_empty",
+    cfg: dict | None = None,
+    save: bool = True
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Центральный бэкенд-механизм импорта ассоциаций Windows.
+
+    mode строго:
+      - 'fill_empty': читает Windows associations, заполняет только пустые поля,
+                      никогда не меняет существующие ручные или валидные настройки.
+      - 'replace_confirmed': читает Windows associations, заменяет сохранённые поля
+                             ТОЛЬКО на реально существующий, валидный, не запрещённый EXE.
+                             Если Windows ассоциация непригодна/отсутствует, существующее поле НЕ очищается.
+    """
+    if mode not in {"fill_empty", "replace_confirmed"}:
+        raise ValueError(f"Недопустимый режим импорта: {mode}")
+
+    if cfg is None:
+        cfg = load_native_apps_config()
+    else:
+        cfg, _ = migrate_and_normalize_apps_config(cfg)
+
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    updated_exts: list[str] = []
+    skipped_exts: list[str] = []
+    details: dict[str, Any] = {}
+
+    for ext in ALL_SUPPORTED_EXTENSIONS:
+        norm_ext = normalize_file_extension(ext)
+        curr_entry = cfg.get(norm_ext)
+        curr_path = _extract_app_path(curr_entry)
+
+        # Опрашиваем ассоциацию Windows
+        detected_exe = detect_windows_app_for_ext(norm_ext)
+
+        # Для DWG/DXF приоритетно используем официальный AcLauncher
+        if norm_ext in {".dwg", ".dxf"} and not detected_exe:
+            detected_exe = _get_autocad_launcher_exe()
+
+        is_candidate_usable, clean_candidate = validate_configured_executable(detected_exe)
+
+        if mode == "fill_empty":
+            if curr_path:
+                skipped_exts.append(norm_ext)
+                details[norm_ext] = {"path": curr_path, "status": "skipped", "reason": "already_configured"}
+                continue
+            if is_candidate_usable:
+                cfg[norm_ext] = {
+                    "path": clean_candidate,
+                    "source": "windows_import",
+                    "updated_at": now_iso,
+                    "valid_at_save": True,
+                }
+                updated_exts.append(norm_ext)
+                details[norm_ext] = {"path": clean_candidate, "status": "updated", "source": "windows_import"}
+            else:
+                skipped_exts.append(norm_ext)
+                details[norm_ext] = {"path": "", "status": "skipped", "reason": "no_usable_windows_association"}
+
+        elif mode == "replace_confirmed":
+            if is_candidate_usable:
+                cfg[norm_ext] = {
+                    "path": clean_candidate,
+                    "source": "windows_import",
+                    "updated_at": now_iso,
+                    "valid_at_save": True,
+                }
+                updated_exts.append(norm_ext)
+                details[norm_ext] = {"path": clean_candidate, "status": "updated", "source": "windows_import"}
+            else:
+                # ВАЖНО: Если ассоциация непригодна (например, AcLauncher), НЕ очищаем и НЕ заменяем существующее!
+                skipped_exts.append(norm_ext)
+                details[norm_ext] = {"path": curr_path, "status": "skipped", "reason": "no_usable_windows_association"}
+
+    if save:
+        save_native_apps_config(cfg)
+
+    imported_dict = {ext: details[ext] for ext in updated_exts}
+    skipped_dict = {ext: details[ext].get("reason", "skipped") for ext in skipped_exts}
+    report = {
+        "mode": mode,
+        "updated": updated_exts,
+        "skipped": skipped_exts,
+        "imported": imported_dict,
+        "skipped_reasons": skipped_dict,
+        "details": details,
+        "dwgHint": (
+            "Windows вернула системный CAD launcher, а не фактическое приложение. Выберите DWG Viewer или AutoCAD вручную."
+            if (not _extract_app_path(cfg.get(".dwg")) or details.get(".dwg", {}).get("reason") == "no_usable_windows_association")
+            else None
+        ),
+    }
+    return cfg, report
+    return cfg, report
+
+
+def ensure_native_apps_first_run_initialized() -> dict[str, Any]:
+    """Изолированный шаг первичной инициализации при первом старте backend (startup lifecycle).
+
+    Правила:
+    A. Config отсутствует:
+       - Создать пустой config
+       - import_windows_default_app_mappings("fill_empty")
+       - firstRunCompleted = True
+    B. Config существует в старом строковом формате:
+       - Мигрировать непустые строки в объектный формат (source="manual")
+       - Не выполнять автоматический Windows import
+       - firstRunCompleted = True
+       - Сохранить мигрированный конфиг
+    C. Config существует и содержит хотя бы один непустой application path:
+       - Это НЕ чистый first-run
+       - Не запускать autodetect автоматически
+       - firstRunCompleted = True
+    D. Config существует, все application paths пусты, firstRunCompleted == False:
+       - Разрешён один import_windows_default_app_mappings("fill_empty")
+       - firstRunCompleted = True
+    """
+    if not NATIVE_APPS_CONFIG_FILE.exists():
+        # Сценарий A: чистый первый запуск (файла нет)
+        cfg, _ = import_windows_default_app_mappings("fill_empty")
+        cfg["firstRunCompleted"] = True
+        save_native_apps_config(cfg)
+        return cfg
+
+    try:
+        with open(NATIVE_APPS_CONFIG_FILE, "r", encoding="utf-8") as f:
+            raw_data = json.load(f)
+    except Exception:
+        raw_data = {}
+
+    if not isinstance(raw_data, dict):
+        raw_data = {}
+
+    migrated, had_legacy = migrate_and_normalize_apps_config(raw_data)
+    already_completed = bool(migrated.get("firstRunCompleted", False))
+
+    non_empty_paths = [
+        _extract_app_path(migrated.get(ext))
+        for ext in ALL_SUPPORTED_EXTENSIONS
+        if _extract_app_path(migrated.get(ext))
+    ]
+
+    # Сценарий B: старый строковый формат с данными
+    if had_legacy and non_empty_paths:
+        migrated["firstRunCompleted"] = True
+        save_native_apps_config(migrated)
+        return migrated
+
+    # Сценарий C: уже есть хотя бы один путь
+    if non_empty_paths:
+        if not already_completed:
+            migrated["firstRunCompleted"] = True
+            save_native_apps_config(migrated)
+        return migrated
+
+    # Сценарий D: все пути пусты и firstRunCompleted == False
+    if not already_completed:
+        cfg, _ = import_windows_default_app_mappings("fill_empty", cfg=migrated)
+        cfg["firstRunCompleted"] = True
+        save_native_apps_config(cfg)
+        return cfg
+
+    return migrated
+
+def _force_foreground(hwnd: int, show_cmd: int = 9) -> bool:
+    """Вывести окно на передний план и проверить результат.
+
+    Прямой SetForegroundWindow фоновому процессу система режет,
+    поэтому идём лесенкой: привязка потоков, затем Alt-толчок.
+    Возвращает True, если окно действительно стало главным.
+    """
+    try:
+        import ctypes
+
+        u32 = ctypes.windll.user32
+        k32 = ctypes.windll.kernel32
+        try:
+            u32.AllowSetForegroundWindow(0xFFFFFFFF)
+        except Exception:
+            pass
+        try:
+            u32.ShowWindow(hwnd, show_cmd)  # SW_RESTORE
+        except Exception:
+            pass
+        try:
+            if u32.SetForegroundWindow(hwnd):
+                return True
+        except Exception:
+            pass
+        # Лесенка 1: привязываемся к потоку главного окна.
+        try:
+            fg = u32.GetForegroundWindow()
+            fg_thread = u32.GetWindowThreadProcessId(fg, None)
+            my_thread = k32.GetCurrentThreadId()
+            if fg_thread and u32.AttachThreadInput(my_thread, fg_thread, True):
+                try:
+                    u32.ShowWindow(hwnd, show_cmd)
+                    if u32.SetForegroundWindow(hwnd):
+                        return True
+                finally:
+                    try:
+                        u32.AttachThreadInput(my_thread, fg_thread, False)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # Лесенка 2: короткое нажатие Alt снимает блокировку, повторяем.
+        try:
+            u32.keybd_event(0x12, 0, 0, 0)
+            u32.keybd_event(0x12, 0, 2, 0)
+        except Exception:
+            pass
+        try:
+            import time as _time
+
+            _time.sleep(0.15)
+            u32.ShowWindow(hwnd, show_cmd)
+            if u32.SetForegroundWindow(hwnd):
+                return True
+            return u32.GetForegroundWindow() == hwnd
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+def _center_window_on_screen(target_hwnd) -> bool:
+    """Поставить окно по центру основного экрана, не меняя размер и фокус.
+
+    Общая helper для обоих сторожей (custom-exe и system-default).
+    Развёрнутые/свёрнутые/нулевые окна пропускаем.
+    """
+    try:
+        import ctypes
+
+        u32 = ctypes.windll.user32
+
+        class _Rect(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                        ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        if u32.IsZoomed(target_hwnd) or u32.IsIconic(target_hwnd):
+            return False
+        rect = _Rect()
+        if not u32.GetWindowRect(target_hwnd, ctypes.byref(rect)):
+            return False
+        width = rect.right - rect.left
+        height = rect.bottom - rect.top
+        if width <= 0 or height <= 0:
+            return False
+        screen_w = u32.GetSystemMetrics(0)
+        screen_h = u32.GetSystemMetrics(1)
+        if not screen_w or not screen_h:
+            return False
+        pos_x = max(0, (screen_w - width) // 2)
+        pos_y = max(0, (screen_h - height) // 2)
+        SWP_NOSIZE = 0x0001
+        SWP_NOZORDER = 0x0004
+        SWP_NOACTIVATE = 0x0010
+        return bool(u32.SetWindowPos(target_hwnd, 0, pos_x, pos_y, 0, 0,
+                                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE))
+    except Exception:
+        return False
+
+
+def _bring_window_to_front(title_part: str | None, cls_name: str | None,
+                           timeout: float = 120.0, match_title: str = "", show_cmd: int = 9) -> None:
+    """Фоном ждём новое окно и делаем его главным. Ответ API не блокирует.
+
+    Окно ищется среди появившихся после запуска: сначала по совпадению
+    заголовка, иначе первое новое окно нужного класса. Факт проверяется,
+    попытки повторяются до таймаута.
+    """
+    def _watch() -> None:
+        try:
+            import ctypes
+            import time as _time
+
+            u32 = ctypes.windll.user32
+            EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+            def _snapshot() -> dict:
+                found: dict = {}
+
+                def _cb(hwnd, _):
+                    try:
+                        if not u32.IsWindowVisible(hwnd):
+                            return True
+                        length = u32.GetWindowTextLengthW(hwnd)
+                        if length <= 0:
+                            return True
+                        buf = ctypes.create_unicode_buffer(length + 1)
+                        u32.GetWindowTextW(hwnd, buf, length + 1)
+                        cls = ctypes.create_unicode_buffer(256)
+                        u32.GetClassNameW(hwnd, cls, 256)
+                        if cls_name and cls.value != cls_name:
+                            return True
+                        found[int(hwnd)] = buf.value or ""
+                    except Exception:
+                        pass
+                    return True
+
+                u32.EnumWindows(EnumWindowsProc(_cb), 0)
+                return found
+
+            want = (match_title or "").casefold()
+            before = set(_snapshot())
+            deadline = _time.time() + timeout
+            best = None
+            last_try = 0.0
+            focus_fails = 0
+            while _time.time() < deadline:
+                _time.sleep(0.5)
+                try:
+                    after = _snapshot()
+                except Exception:
+                    continue
+                if best is not None and best not in after:
+                    best = None
+                fresh = {h: t for h, t in after.items() if h not in before}
+                for handle, title in fresh.items():
+                    if want and want in (title or "").casefold():
+                        best = handle
+                        break
+                if best is None and fresh:
+                    best = next(iter(fresh))
+                if best is None:
+                    continue
+                now = _time.time()
+                if now - last_try < 2.0:
+                    continue
+                last_try = now
+                try:
+                    _force_foreground(best, show_cmd)
+                    # Позицию правим независимо от фокуса: даже неудостоенное
+                    # фокуса окно останется по центру, а не в углу.
+                    try:
+                        _center_window_on_screen(best)
+                    except Exception:
+                        pass
+                    _time.sleep(0.3)
+                    try:
+                        if u32.GetForegroundWindow() == best:
+                            return
+                        focus_fails += 1
+                    except Exception:
+                        return
+                except Exception:
+                    focus_fails += 1
+                # Фокус не даётся подряд: дальше долбить — только мигать
+                # экраном. Позиция уже выправлена выше, выходим.
+                if focus_fails >= 6:
+                    return
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_watch, daemon=True).start()
+    except Exception:
+        pass
+
+
+def _bring_explorer_to_front(target_dir: str, timeout: float = 120.0) -> None:
+    """Фоном доводим окно проводника на передний план, как только появится.
+
+    Не блокирует ответ API: холодная облачная папка открывается минутами,
+    а пользователь должен увидеть окно главным, а не значком в панели.
+    """
+    _bring_window_to_front(None, "CabinetWClass", timeout,
+                           os.path.basename(os.path.normpath(target_dir)))
+
+
+def kill_orphan_acad_processes() -> None:
+    """Убивает только висящие скрытые/фоновые COM-сессии AutoCAD (/Automation),
+    не затрагивая интерактивные окна пользователя."""
+    if os.name != "nt":
+        return
+    try:
+        ps_cmd = (
+            "Get-CimInstance Win32_Process -Filter \"Name='acad.exe'\" -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.CommandLine -like '*Automation*' } | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+        )
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+            capture_output=True,
+            timeout=5,
+            creationflags=creationflags,
+            **hidden_process_kwargs(),
+        )
+    except Exception:
+        pass
+
+
+def _get_autocad_launcher_exe() -> str:
+    """Возвращает путь к официальному AcLauncher.exe (AutoCAD DWG Launcher), если он есть на машине."""
+    if os.name != "nt":
+        return ""
+    candidates = [
+        r"C:\Program Files\Common Files\Autodesk Shared\AcShellEx\AcLauncher.exe",
+        r"C:\Program Files (x86)\Common Files\Autodesk Shared\AcShellEx\AcLauncher.exe",
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return ""
+
+
+def _find_visible_acad_window(cad_exe: str = "") -> tuple[int, int]:
+    """Возвращает (hwnd, pid) видимого пользовательского окна AutoCAD, либо (0, 0).
+
+    Гарантирует, что мы подключаемся ТОЛЬКО к реальному окну AutoCAD, открытому
+    пользователем на рабочем столе, и НИКОГДА не цепляемся к фоновым/скрытым
+    COM-серверам или воркерам печати.
+    Учитывает как обычные развёрнутые окна, так и свёрнутые в панель задач (IsIconic).
+    """
+    if os.name != "nt":
+        return 0, 0
+    try:
+        import ctypes
+        u32 = ctypes.windll.user32
+        k32 = ctypes.windll.kernel32
+        GW_OWNER = 4
+
+        result_hwnd = 0
+        result_pid = 0
+
+        target_img = os.path.basename(cad_exe or "").casefold()
+        if not target_img:
+            target_img = "acad.exe"
+
+        class _Rect(ctypes.Structure):
+            _fields_ = [
+                ("left", ctypes.c_long),
+                ("top", ctypes.c_long),
+                ("right", ctypes.c_long),
+                ("bottom", ctypes.c_long),
+            ]
+
+        def _pid_of(h: int) -> int:
+            out = ctypes.c_ulong(0)
+            try:
+                u32.GetWindowThreadProcessId(h, ctypes.byref(out))
+            except Exception:
+                pass
+            return int(out.value)
+
+        def _image_of(test_pid: int) -> str:
+            try:
+                handle = k32.OpenProcess(0x1000, False, test_pid)
+                if not handle:
+                    return ""
+                try:
+                    buf = ctypes.create_unicode_buffer(260)
+                    size = ctypes.c_ulong(260)
+                    if k32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                        return os.path.basename(buf.value or "").casefold()
+                finally:
+                    k32.CloseHandle(handle)
+            except Exception:
+                pass
+            return ""
+
+        EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def _cb(hwnd, _):
+            nonlocal result_hwnd, result_pid
+            try:
+                if not u32.IsWindowVisible(hwnd):
+                    return True
+                if u32.GetWindow(hwnd, GW_OWNER):
+                    return True
+                p = _pid_of(hwnd)
+                if not p:
+                    return True
+                img = _image_of(p)
+                if img == target_img or img in ("acad.exe", "zwcad.exe"):
+                    title_len = u32.GetWindowTextLengthW(hwnd)
+                    if title_len > 0:
+                        is_iconic = bool(u32.IsIconic(hwnd))
+                        rect = _Rect()
+                        area = 0
+                        if u32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                            area = max(0, rect.right - rect.left) * max(0, rect.bottom - rect.top)
+                        if area > 10000 or is_iconic:
+                            result_hwnd = hwnd
+                            result_pid = p
+                            return False
+            except Exception:
+                pass
+            return True
+
+        u32.EnumWindows(EnumWindowsProc(_cb), 0)
+        return result_hwnd, result_pid
+    except Exception:
+        return 0, 0
+
+
+def _get_active_autocad_com():
+    """Подключиться к уже активному объекту AutoCAD через COM, перебирая известные ProgID."""
+    if os.name != "nt":
+        return None
+    try:
+        import win32com.client
+        for prog_id in (
+            "AutoCAD.Application",
+            "AutoCAD.Application.25",
+            "AutoCAD.Application.24.3",
+            "AutoCAD.Application.24.2",
+            "AutoCAD.Application.24.1",
+            "AutoCAD.Application.24.0",
+            "AutoCAD.Application.24",
+            "AutoCAD.Application.23.1",
+            "AutoCAD.Application.23",
+            "AutoCAD.Application.22",
+        ):
+            try:
+                acad = win32com.client.GetActiveObject(prog_id)
+                if acad:
+                    return acad
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+
+def bring_native_window_to_front(pid: int, exe_path: str, timeout: float = 120.0) -> None:
+    """Окно нативной программы — на передний план и на весь экран.
+
+    Окно AutoCAD дополнительно ставится по центру экрана (оно любит
+    открываться в левом верхнем углу).
+
+    Windows не даёт фоновому серверу фокус напрямую (новое окно только
+    мигает в панели задач), поэтому в фоновом потоке ждём главное окно
+    запущенного PID и доводим его проверенной лесенкой (_force_foreground)
+    с разворотом на весь экран. Если процесс-переходник уже вышел
+    (single-instance: файл подхватила старая сессия), берём главное окно
+    того же exe. Ответ API не блокируем.
+    """
+    exe_name = os.path.basename(exe_path or "").casefold()
+
+    def _watch() -> None:
+        try:
+            import ctypes
+            import time as _time
+
+            def _flog(msg: str) -> None:
+                try:
+                    with open(RUNTIME_DIR / "logs" / "native-front.log",
+                              "a", encoding="utf-8") as log:
+                        log.write(f"{_time.strftime('%H:%M:%S')} pid={pid} {msg}\n")
+                except Exception:
+                    pass
+
+            u32 = ctypes.windll.user32
+            k32 = ctypes.windll.kernel32
+            _flog(f"watch start exe={exe_name}")
+            EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            GW_OWNER = 4
+
+            class _Rect(ctypes.Structure):
+                _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                            ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+            def _pid_of(hwnd) -> int:
+                out = ctypes.c_ulong(0)
+                try:
+                    u32.GetWindowThreadProcessId(hwnd, ctypes.byref(out))
+                except Exception:
+                    pass
+                return int(out.value)
+
+            def _rect_area(hwnd) -> int:
+                try:
+                    rect = _Rect()
+                    if u32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                        return max(0, rect.right - rect.left) * max(0, rect.bottom - rect.top)
+                except Exception:
+                    pass
+                return 0
+
+            def _has_title(hwnd) -> bool:
+                try:
+                    return u32.GetWindowTextLengthW(hwnd) > 0
+                except Exception:
+                    return False
+
+            def _center_on_screen(target_hwnd) -> bool:
+                # Позицию считает общий helper; здесь только делегирование,
+                # чтобы не разъезжались две копии логики.
+                try:
+                    return bool(_center_window_on_screen(target_hwnd))
+                except Exception:
+                    return False
+
+            def _image_of(test_pid: int) -> str:
+                try:
+                    handle = k32.OpenProcess(0x1000, False, test_pid)
+                    if not handle:
+                        return ""
+                    try:
+                        buf = ctypes.create_unicode_buffer(260)
+                        size = ctypes.c_ulong(260)
+                        if k32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                            return os.path.basename(buf.value or "").casefold()
+                    finally:
+                        try:
+                            k32.CloseHandle(handle)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                return ""
+
+            def _pid_alive(test_pid: int) -> bool:
+                try:
+                    handle = k32.OpenProcess(0x1000, False, test_pid)
+                    if not handle:
+                        return False
+                    try:
+                        k32.CloseHandle(handle)
+                    except Exception:
+                        pass
+                    return True
+                except Exception:
+                    return False
+
+            def _main_windows(want_pid: int = 0, want_image: str = "") -> list:
+                found: list = []
+
+                def _cb(hwnd, _):
+                    try:
+                        if not u32.IsWindowVisible(hwnd):
+                            return True
+                        if u32.GetWindow(hwnd, GW_OWNER):
+                            return True
+                        if want_pid and _pid_of(hwnd) != want_pid:
+                            return True
+                        if want_image and _image_of(_pid_of(hwnd)) != want_image:
+                            return True
+                        found.append(hwnd)
+                    except Exception:
+                        pass
+                    return True
+
+                try:
+                    u32.EnumWindows(EnumWindowsProc(_cb), 0)
+                except Exception:
+                    pass
+                return found
+
+            def _best(hwnds: list):
+                titled = [h for h in hwnds if _has_title(h)]
+                pool = titled or hwnds
+                if not pool:
+                    return None
+                try:
+                    return max(pool, key=_rect_area)
+                except Exception:
+                    return pool[0]
+
+            hwnd = None
+            deadline = _time.time() + timeout
+            if pid:
+                while _time.time() < deadline and hwnd is None:
+                    if not _pid_alive(pid):
+                        break
+                    hwnd = _best(_main_windows(want_pid=pid))
+                    if hwnd is None:
+                        _time.sleep(0.5)
+            if hwnd is None and exe_name:
+                for _ in range(20):
+                    hwnd = _best(_main_windows(want_image=exe_name.casefold()))
+                    if hwnd is not None:
+                        break
+                    _time.sleep(0.5)
+            if hwnd is None:
+                _flog("no window found")
+                return
+            _flog(f"target hwnd={hwnd}")
+            # AutoCAD любит вставать в левый верхний угол: дважды ставим
+            # окно по центру (до и после доводки фокуса), пока оно грузится.
+            is_cad = exe_name.startswith("acad")
+            if is_cad:
+                try:
+                    _flog(f"centered-before={_center_on_screen(hwnd)}")
+                except Exception:
+                    pass
+            for _ in range(3):
+                try:
+                    _force_foreground(hwnd, 3)
+                except Exception:
+                    pass
+                _time.sleep(1.0)
+                try:
+                    fg = u32.GetForegroundWindow()
+                    zoomed = bool(u32.IsZoomed(hwnd))
+                    _flog(f"try fg={fg} zoomed={zoomed}")
+                    if fg == hwnd:
+                        break
+                except Exception:
+                    break
+            if is_cad:
+                try:
+                    _flog(f"centered-after={_center_on_screen(hwnd)}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_watch, daemon=True).start()
+    except Exception:
+        pass
+
+
+def open_in_explorer(path: Path) -> str:
+    """Гарантированно открывает Проводник Windows с выделением файла или переходом в папку."""
+    if not path.exists():
+        raise FileNotFoundError(f"Файл или папка не найдены: {path}")
+
+    resolved = os.path.normpath(str(path.resolve()))
+    target_dir = resolved if path.is_dir() else os.path.dirname(resolved)
+
+    if os.name != "nt":
+        target = path if path.is_dir() else path.parent
+        subprocess.Popen(["xdg-open", str(target)])
+        return "xdg-open"
+
+    try:
+        import ctypes
+        ctypes.windll.user32.AllowSetForegroundWindow(ctypes.c_uint32(0xFFFFFFFF))
+    except Exception:
+        pass
+
+    if path.is_dir():
+        try:
+            # Папку открываем явным вызовом проводника отдельными
+            # аргументами: склеенная строка вида 'explorer.exe "путь"'
+            # через Popen без shell работает ненадёжно.
+            subprocess.Popen(["explorer.exe", resolved], close_fds=True)
+            _bring_explorer_to_front(resolved)
+            return "explorer-open-folder"
+        except Exception:
+            os.startfile(resolved)
+            return "explorer-open-folder-fallback"
+
+    # Для файла: выделяем его в Проводнике Windows.
+    # Важно: "/select," и путь — ОТДЕЛЬНЫЕ аргументы. Склеенный вариант
+    # вида "/select,C:\..." проводник молча игнорирует (окно либо не
+    # открывается, либо открывается не та папка).
+    try:
+        subprocess.Popen(["explorer.exe", "/select,", resolved], close_fds=True)
+        _bring_explorer_to_front(target_dir)
+        return "explorer-select"
+    except Exception:
+        try:
+            os.startfile(target_dir)
+            return "explorer-open-dir-fallback"
+        except Exception:
+            subprocess.Popen(["explorer.exe", target_dir], close_fds=True)
+            return "explorer-open-dir-subp"
+
+
+def _shell_open(target: str, params: str = "", cwd: str = "") -> bool:
+    """Универсальный вызов ShellExecuteW в нормальном видимом окне (SW_SHOWNORMAL = 1).
+    Это эталонный механизм Windows Shell для открытия любых файлов и программ.
+    Никогда не создаёт чёрных окон консоли и никогда не запускает окно скрытым.
+    """
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        res = ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "open",
+            str(target),
+            str(params) if params else None,
+            str(cwd) if cwd else None,
+            1,  # SW_SHOWNORMAL = 1
+        )
+        # В Win32 API ShellExecute возвращает дескриптор экземпляра > 32 при успехе
+        return int(res) > 32
+    except Exception:
+        return False
+
+
+def launch_system_default(path: Path) -> str:
+    """Открыть файл программой Windows по умолчанию (системная ассоциация Windows)."""
+    if not path.exists():
+        raise FileNotFoundError(f"Файл или папка не найдены: {path}")
+    resolved = os.path.normpath(str(path.resolve()))
+    if os.name != "nt":
+        target = path if path.is_dir() else path.parent
+        subprocess.Popen(["xdg-open", str(target)])
+        return "xdg-open"
+
+    cwd = os.path.dirname(resolved)
+
+    # 1. ShellExecuteW("open", resolved, None, cwd, SW_SHOWNORMAL=1)
+    if _shell_open(resolved, "", cwd):
+        _bring_window_to_front(None, None, 120.0, path.name, 3)
+        return "system-default"
+
+    # 2. os.startfile (встроенная функция Python для Windows)
+    try:
+        if hasattr(os, "startfile"):
+            os.startfile(resolved)
+            _bring_window_to_front(None, None, 120.0, path.name, 3)
+            return "system-default"
+    except Exception:
+        pass
+
+    raise NativeOpenError(
+        f"Не удалось открыть файл программой по умолчанию: {path.name}",
+        error_code="system_default_failed",
+        details={"path": resolved},
+    )
+
+
+def launch_custom_app(exe_path: str, file_path: Path) -> str:
+    """Запустить файл в явно указанной пользователем программе (EXE).
+
+    Запускает ТОЛЬКО указанный исполняемый файл, передавая оригинальный путь
+    к файлу отдельным аргументом без объединения в командную строку.
+    Никогда не подменяет на системный запуск по умолчанию и не вызывает accoreconsole.
+    """
+    resolved_file = os.path.normpath(str(file_path.resolve()))
+    resolved_exe = os.path.normpath(str(Path(exe_path).resolve()))
+    file_dir = os.path.dirname(resolved_file)
+    norm_ext = normalize_file_extension(file_path)
+
+    if os.name != "nt":
+        subprocess.Popen([resolved_exe, resolved_file], cwd=file_dir, close_fds=True)
+        return f"custom-app:{Path(resolved_exe).name}"
+
+    # Для DWG/DXF или если указан AutoCAD (acad.exe / AcLauncher.exe):
+    # Прямой запуск acad.exe из командной строки порождает 2 копии процесса (вторую создаёт DDE-интеграция).
+    # Для AutoCAD ВСЕГДА следует использовать официальный AcLauncher.exe с ключом /O.
+    exe_name = Path(resolved_exe).name.casefold()
+    if norm_ext in (".dwg", ".dxf") or exe_name in ("acad.exe", "aclauncher.exe"):
+        ac_launcher = _get_autocad_launcher_exe()
+        if ac_launcher:
+            resolved_exe = ac_launcher
+            params = f'/O "{resolved_file}"'
+            if _shell_open(resolved_exe, params, file_dir):
+                bring_native_window_to_front(0, "acad.exe")
+                _bring_window_to_front(None, None, 120.0, file_path.name, 3)
+                return "custom-app:AcLauncher.exe"
+            try:
+                creationflags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+                proc = subprocess.Popen(
+                    [resolved_exe, "/O", resolved_file],
+                    cwd=file_dir,
+                    creationflags=creationflags,
+                    close_fds=True,
+                )
+                bring_native_window_to_front(proc.pid, "acad.exe")
+                _bring_window_to_front(None, None, 120.0, file_path.name, 3)
+                return "custom-app:AcLauncher.exe"
+            except Exception as err:
+                raise NativeOpenError(
+                    f"Не удалось запустить приложение {resolved_exe}: {err}",
+                    error_code="custom_app_launch_failed",
+                    details={"exe": resolved_exe, "file": resolved_file, "error": str(err)},
+                )
+
+    # 1. ShellExecuteW("open", resolved_exe, f'"{resolved_file}"', file_dir, SW_SHOWNORMAL=1)
+    if _shell_open(resolved_exe, f'"{resolved_file}"', file_dir):
+        bring_native_window_to_front(0, resolved_exe)
+        _bring_window_to_front(None, None, 120.0, file_path.name, 3)
+        return f"custom-app:{Path(resolved_exe).name}"
+
+    # 2. subprocess.Popen с DETACHED_PROCESS и CREATE_NEW_PROCESS_GROUP
+    try:
+        creationflags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        proc = subprocess.Popen(
+            [resolved_exe, resolved_file],
+            cwd=file_dir,
+            creationflags=creationflags,
+            close_fds=True,
+        )
+        bring_native_window_to_front(proc.pid, resolved_exe)
+        _bring_window_to_front(None, None, 120.0, file_path.name, 3)
+        return f"custom-app:{Path(resolved_exe).name}"
+    except Exception as err:
+        raise NativeOpenError(
+            f"Не удалось запустить приложение {resolved_exe}: {err}",
+            error_code="custom_app_launch_failed",
+            details={"exe": resolved_exe, "file": resolved_file, "error": str(err)},
+        )
+
+
+def launch_native_file(path: Path) -> str:
+    """Запустить файл в ассоциированной программе, либо открыть через системную ассоциацию Windows.
+
+    Приоритет:
+    A. Есть валидный EXE, сохранённый в Параметрах -> запускать ТОЛЬКО этот EXE отдельными аргументами.
+    B. Настройка отсутствует/пуста -> системный fallback (ShellExecuteW / os.startfile).
+    C. Настройка указана, но файл не существует/невалиден -> NativeOpenError("configured_app_missing") БЕЗ fallback!
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"Файл или папка не найдены: {path}")
+    if path.is_dir():
+        return open_in_explorer(path)
+
+    norm_ext = normalize_file_extension(path)
+
+    # Для DWG/DXF на Windows приоритетно используем официальный AcLauncher.exe
+    if os.name == "nt" and norm_ext in (".dwg", ".dxf"):
+        ac_launcher = _get_autocad_launcher_exe()
+        if ac_launcher:
+            target_dir = os.path.dirname(str(path.resolve()))
+            if _shell_open(ac_launcher, f'/O "{str(path.resolve())}"', target_dir):
+                bring_native_window_to_front(0, "acad.exe")
+                _bring_window_to_front(None, None, 120.0, path.name, 3)
+                return "custom-app:AcLauncher.exe"
+
+    cfg = load_native_apps_config()
+    use_native = bool(cfg.get("useNativeApps", True))
+
+    configured_exe = ""
+    if use_native:
+        configured_exe = get_configured_app_for_extension(norm_ext, cfg)
+
+    if configured_exe:
+        is_valid, clean_exe = validate_configured_executable(configured_exe)
+        if is_valid:
+            try:
+                return launch_custom_app(clean_exe, path)
+            except Exception as err:
+                logger.warning("Custom app %s failed for %s, falling back to system default: %s", clean_exe, path, err)
+        else:
+            logger.warning("Configured app %r for %s not found on disk, falling back to system default", configured_exe, norm_ext)
+
+    # Настройка отсутствует, пуста или недоступна -> системный fallback
+    return launch_system_default(path)
+
+NATIVE_OPEN_LOG_LOCK = threading.Lock()
+_OPEN_FILE_LOCK = threading.Lock()
+_LAST_OPENED_TARGETS: dict[str, float] = {}
+
+
+def append_native_open_log(event: dict) -> None:
+    """Write one UTF-8 diagnostic record for a native-open attempt.
+
+    ThreadingHTTPServer serves each request on its own thread, so concurrent
+    /api/open-file calls can interleave partial JSON lines.  A lock keeps each
+    record as one atomic write.
+    """
+    logs_dir = RUNTIME_DIR / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(event, ensure_ascii=False) + "\n"
+    with NATIVE_OPEN_LOG_LOCK:
+        with (logs_dir / "native-open.jsonl").open("a", encoding="utf-8") as log:
+            log.write(line)
+
+
+IMPORT_LOG_LOCK = threading.Lock()
+
+
+def append_import_log(event: dict) -> None:
+    """Записать одну UTF-8 строку диагностики загрузки объекта в файл."""
+    try:
+        logs_dir = RUNTIME_DIR / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(event, ensure_ascii=False) + "\n"
+        with IMPORT_LOG_LOCK:
+            with (logs_dir / "import.jsonl").open("a", encoding="utf-8") as log:
+                log.write(line)
+    except Exception:
+        pass
+
+
+def excel_html_cache_dir(path: Path) -> Path:
+    """Return an immutable cache location for one exact workbook revision."""
+    return EXCEL_CACHE_DIR / "html" / file_cache_key(path, "excel-html")
+
+
+def excel_convert_xls_to_xlsx(path: Path) -> tuple[Path, bool]:
+    """Convert a legacy .xls workbook to .xlsx via Excel COM, cached by source.
+
+    openpyxl can only read the OpenXML formats, so legacy .xls books are
+    converted once through the installed Excel and reused until the source
+    file changes.  The converted copy is only a preview source: nothing is
+    written next to the original workbook.
+    """
+    if path.suffix.casefold() not in {".xls"}:
+        raise ValueError(f"Это не файл XLS: {path}")
+    if not EXCEL_XLS_CONVERT_SCRIPT.exists():
+        raise RuntimeError(f"Скрипт конвертации XLS не найден: {EXCEL_XLS_CONVERT_SCRIPT}")
+
+    key = file_cache_key(path, "excel-xls-convert")
+    target_dir = EXCEL_CACHE_DIR / "xlsx" / key
+    target_dir.mkdir(parents=True, exist_ok=True)
+    xlsx_path = target_dir / f"{path.stem}.xlsx"
+    manifest_path = target_dir / "manifest.json"
+
+    cached = False
+    if xlsx_path.exists() and xlsx_path.stat().st_size > 0 and manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            cached = (
+                manifest.get("sourcePath") == str(path)
+                and manifest.get("sourceMtimeNs") == path.stat().st_mtime_ns
+                and manifest.get("sourceSize") == path.stat().st_size
+            )
+        except (OSError, json.JSONDecodeError):
+            cached = False
+
+    if cached:
+        return xlsx_path, True
+
+    if xlsx_path.exists():
+        xlsx_path.unlink()
+
+    proc = subprocess.Popen(
+        [
+            "powershell",
+            "-STA",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(EXCEL_XLS_CONVERT_SCRIPT),
+            "-InputPath",
+            str(path),
+            "-OutputPath",
+            str(xlsx_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        close_fds=True,
+        **hidden_process_kwargs(),
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=EXCEL_CONVERT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True,
+                    timeout=5,
+                    close_fds=True,
+                    **hidden_process_kwargs(),
+                )
+            except Exception:
+                pass
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise TimeoutError(f"Конвертация XLS превысила таймаут {EXCEL_CONVERT_TIMEOUT_SECONDS} с")
+
+    if proc.returncode != 0:
+        message = stderr.strip() or stdout.strip() or "Excel не смог сконвертировать книгу XLS"
+        raise RuntimeError(message)
+    if not xlsx_path.exists() or xlsx_path.stat().st_size <= 0:
+        raise RuntimeError("Excel не создал XLSX для preview")
+
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "sourcePath": str(path),
+                "sourceName": path.name,
+                "sourceMtimeNs": path.stat().st_mtime_ns,
+                "sourceSize": path.stat().st_size,
+                "cacheKey": key,
+                "xlsxPath": str(xlsx_path),
+                "convertedAt": datetime.now().isoformat(timespec="seconds"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return xlsx_path, False
+
+
+def excel_preview_source(path: Path) -> Path:
+    """Return an .xlsx/.xlsm path openpyxl can read, converting legacy .xls.
+
+    HTML rendering and sheet extraction both need the OpenXML workbook.
+    .xlsx/.xlsm files are used as-is; .xls is converted through Excel COM.
+    """
+    if path.name.startswith("~$") or path.name.startswith(".~"):
+        raise ValueError(f"Временный файл блокировки Office: {path.name}")
+    if path.suffix.casefold() in {".xlsx", ".xlsm"}:
+        return path
+    if path.suffix.casefold() == ".xls":
+        xlsx_path, _ = excel_convert_xls_to_xlsx(path)
+        return xlsx_path
+    raise ValueError("HTML-просмотр пока поддерживает XLSX/XLSM. Откройте XLS в Excel.")
+
+
+def excel_cell_color(color: object) -> str | None:
+    """Алиас ядра rendering (совместимость старых вызовов)."""
+    if _engine_excel is not None:
+        return _engine_excel.cell_color(color)
+    value = getattr(color, "rgb", None)
+    value = str(value) if value is not None else ""
+    if not value or len(value) < 6 or (len(value) == 8 and value[:2] == "00"):
+        return None
+    return f"#{value[-6:]}"
+
+
+def excel_sheet_html(path: Path, sheet_index: int) -> tuple[str, dict]:
+    """Шим ядра rendering: один разбор книги -> все вкладки (см. app/rendering/engine_excel)."""
+    preview_source = excel_preview_source(path)
+    if _engine_excel is None:
+        raise RuntimeError("Ядро rendering недоступно (app.rendering.engine_excel)")
+    return _engine_excel.render_sheet(
+        preview_source, sheet_index, excel_html_cache_dir(path))
+
+
+
+
+def excel_sheet_preview(path: Path, sheet_index: int) -> dict:
+    """Build one sheet on demand; opening a book must not wait for every tab."""
+    cache_dir = excel_html_cache_dir(path)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    # A new cache version makes existing pages harmless without deleting a
+    # user's cache, including the viewer controls embedded in this HTML.
+    output = cache_dir / f"sheet-{sheet_index + 1}-v10.html"
+    metadata_path = cache_dir / f"sheet-{sheet_index + 1}-v10.json"
+    metadata = None
+    if output.exists() and metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            metadata = None
+    if metadata is None:
+        page, metadata = excel_sheet_html(path, sheet_index)
+        output.write_text(page, encoding="utf-8")
+        metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+    return {
+        "index": sheet_index,
+        "url": f"/cache/excel/html/{cache_dir.name}/{output.name}",
+        **metadata,
+    }
+
+
+def excel_thumbnail_preview(path: Path) -> str:
+    """Build a visual card from the exact same HTML sheet as the large view.
+
+    A workbook must have one visual source of truth.  The former thumbnail
+    constructed a second, simplified table with its own font and row rules;
+    it could therefore disagree with the readable sheet.  The card is now a
+    scaled viewport of the cached HTML sheet used by the full viewer.
+    """
+    if openpyxl is None:
+        raise RuntimeError("Для HTML-просмотра Excel нужен пакет openpyxl")
+    # The rail already places this page in a scaled, clipped iframe.  Returning
+    # the sheet directly means its geometry, fonts and initial position are
+    # exactly the same in the card and in the large viewer.
+    return excel_sheet_preview(path, 0)["url"]
+
+
+def excel_workbook_preview(path: Path) -> dict:
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"Excel-файл не найден: {path}")
+    if path.name.startswith("~$") or path.name.startswith(".~"):
+        raise ValueError(f"Временный файл блокировки Office: {path.name}")
+    if not is_excel_file(path):
+        raise ValueError(f"Это не Excel-файл: {path}")
+    if openpyxl is None:
+        raise RuntimeError("Для HTML-просмотра Excel нужен пакет openpyxl")
+
+    preview_source = excel_preview_source(path)
+    sheet_names = None
+    if zipfile.is_zipfile(preview_source):
+        try:
+            with zipfile.ZipFile(preview_source, "r") as z:
+                tree = ET.fromstring(z.read("xl/workbook.xml"))
+                ns = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+                extracted = [el.attrib.get("name", "") for el in tree.findall(".//main:sheet", ns)]
+                if extracted and all(extracted):
+                    sheet_names = extracted
+        except Exception:
+            sheet_names = None
+    if sheet_names is None:
+        book = openpyxl.load_workbook(preview_source, read_only=True, data_only=False)
+        try:
+            sheet_names = list(book.sheetnames)
+        finally:
+            book.close()
+
+    sheets = [{"index": index, "name": name} for index, name in enumerate(sheet_names)]
+    return {
+        "name": path.name,
+        "path": str(path),
+        "sheets": sheets,
+        "maxRows": MAX_XLSX_ROWS,
+        "cacheKey": excel_html_cache_dir(path).name,
+        "thumbnailUrl": excel_thumbnail_preview(path),
+    }
+
+
+
+# PyMuPDF (fitz) дважды ронял процесс при параллельном рендеринге из
+# нескольких потоков (Application Error, access violation в нативном коде).
+# Весь нативный fitz-рендеринг идёт строго по очереди; кэш-возвраты и
+# Poppler-путь (отдельные процессы) блокировкой не затрагиваются.
+_FITZ_RENDER_LOCK = threading.Lock()
+
+
+def render_pdf(
+    path: Path,
+    dpi: int = DEFAULT_PDF_DPI,
+    page_timeout_seconds: int = PDF_PAGE_TIMEOUT_SECONDS,
+    first_page_only: bool = False,
+    force: bool = False,
+) -> dict:
+    if not path.exists():
+        return {
+            "name": path.name,
+            "path": str(path),
+            "sourcePath": str(path),
+            "dpi": dpi,
+            "pages": 0,
+            "renderedPages": 0,
+            "cacheKey": "",
+            "cacheHit": False,
+            "cacheHitPages": 0,
+            "newRenderedPages": 0,
+            "is_missing": True,
+            "errors": [{"error": f"PDF не найден на диске: {path.name}", "is_missing": True}],
+            "items": [],
+        }
+    if not path.is_file() or path.suffix.casefold() != ".pdf":
+        raise ValueError(f"Это не PDF-файл: {path}")
+
+    key = pdf_cache_key(path, dpi)
+    target_dir = PDF_CACHE_DIR / key
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    if force:
+        with _MANIFEST_LOCK:
+            _MANIFEST_CACHE.pop(key, None)
+        manifest_file = target_dir / "manifest.json"
+        if manifest_file.exists():
+            try:
+                manifest_file.unlink()
+            except OSError:
+                pass
+
+    png1 = target_dir / "page-1.png"
+    if not force:
+        cached_manifest = read_pdf_cache_manifest(path, dpi, key, target_dir)
+        if cached_manifest:
+            cached_items = cached_manifest.get("items", [])
+            cached_errors = cached_manifest.get("errors", [])
+            cached_total = cached_manifest.get("pages", len(cached_items)) or 0
+            if first_page_only and png1.exists() and png1.stat().st_size > 0:
+                item1 = cached_items[0] if cached_items else pdf_page_item(path, key, 1, png1)
+                return {
+                    "name": path.name,
+                    "path": str(path),
+                    "sourcePath": str(path),
+                    "dpi": dpi,
+                    "pages": cached_total or 1,
+                    "renderedPages": 1,
+                    "cacheKey": key,
+                    "cacheHit": True,
+                    "cacheHitPages": 1,
+                    "newRenderedPages": 0,
+                    "errors": cached_errors,
+                    "items": [item1],
+                }
+            if not first_page_only and cached_total and len(cached_items) >= cached_total:
+                all_files_exist = True
+                for it in cached_items:
+                    p_num = it.get("page", 1)
+                    p_png = target_dir / f"page-{p_num}.png"
+                    if not p_png.exists() or p_png.stat().st_size == 0:
+                        all_files_exist = False
+                        break
+                    it["bytes"] = p_png.stat().st_size
+                if all_files_exist:
+                    return {
+                        "name": path.name,
+                        "path": str(path),
+                        "sourcePath": str(path),
+                        "dpi": dpi,
+                        "pages": cached_total,
+                        "renderedPages": len(cached_items),
+                        "cacheKey": key,
+                        "cacheHit": True,
+                        "cacheHitPages": len(cached_items),
+                        "newRenderedPages": 0,
+                        "errors": cached_errors,
+                        "items": cached_items,
+                    }
+
+    # 1. Быстрый рендеринг через PyMuPDF (fitz) без создания сотен процессов
+    with _FITZ_RENDER_LOCK:
+        try:
+            doc = get_fitz_doc(path)
+            page_count = len(doc)
+            pages = []
+            errors = []
+            rendered_count = 0
+            cache_hit_count = 0
+
+            pages_to_render = 1 if first_page_only else page_count
+            for page_idx in range(pages_to_render):
+                page_num = page_idx + 1
+                png = target_dir / f"page-{page_num}.png"
+                if not force and png.exists() and png.stat().st_size > 0:
+                    cache_hit_count += 1
+                else:
+                    try:
+                        pdf_page = doc[page_idx]
+                        pix = pdf_page.get_pixmap(dpi=dpi)
+                        pix.save(str(png))
+                        rendered_count += 1
+                    except Exception as err:
+                        errors.append({"page": page_num, "error": str(err)})
+                        continue
+
+            for page_num in range(1, page_count + 1):
+                png = target_dir / f"page-{page_num}.png"
+                b = png.stat().st_size if png.exists() else 0
+                pages.append({
+                    "page": page_num,
+                    "name": f"{path.name} — стр. {page_num}",
+                    "url": f"/cache/pdf/{key}/{png.name}",
+                    "bytes": b,
+                })
+
+            if pages:
+                write_pdf_cache_manifest(path, dpi, key, target_dir, page_count, pages, errors)
+                rendered_valid = len([p for p in pages if p["bytes"] > 0])
+                return {
+                    "name": path.name,
+                    "path": str(path),
+                    "sourcePath": str(path),
+                    "dpi": dpi,
+                    "pages": page_count,
+                    "renderedPages": rendered_valid,
+                    "cacheKey": key,
+                    "cacheHit": cache_hit_count == pages_to_render,
+                    "cacheHitPages": cache_hit_count,
+                    "newRenderedPages": rendered_count,
+                    "errors": errors,
+                    "items": pages,
+                }
+        except Exception as fitz_err:
+            pass
+
+    # 2. Запасной рендеринг через Poppler (если PyMuPDF недоступен или выдал сбой)
+    pdftoppm = poppler_tool("pdftoppm")
+    if not pdftoppm:
+        raise RuntimeError("pdftoppm не найден. Нужен Poppler из runtime.")
+
+    page_count = pdf_page_count(path)
+    started_at = time.monotonic()
+
+    pages = []
+    errors = []
+    rendered_count = 0
+    cache_hit_count = 0
+
+    pages_to_render = 1 if first_page_only else page_count
+    for page in range(1, pages_to_render + 1):
+        if time.monotonic() - started_at > PDF_DOCUMENT_TIMEOUT_SECONDS:
+            for skipped_page in range(page, pages_to_render + 1):
+                errors.append({"page": skipped_page, "error": f"PDF остановлен по лимиту {PDF_DOCUMENT_TIMEOUT_SECONDS} сек. на файл."})
+            break
+
+        png = target_dir / f"page-{page}.png"
+        if not force and png.exists() and png.stat().st_size > 0:
+            cache_hit_count += 1
+        else:
+            for stale in target_dir.glob(f"page-{page}*.png"):
+                stale.unlink()
+            prefix = target_dir / f"page-{page}"
+            try:
+                result = run_poppler(
+                    [
+                        pdftoppm,
+                        "-f",
+                        str(page),
+                        "-l",
+                        str(page),
+                        "-singlefile",
+                        "-r",
+                        str(dpi),
+                        "-png",
+                        str(path),
+                        str(prefix),
+                    ],
+                    timeout=page_timeout_seconds,
+                )
+                candidate = target_dir / f"page-{page}.png"
+                if result.returncode != 0:
+                    raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "pdftoppm не смог отрендерить страницу")
+                if not candidate.exists() or candidate.stat().st_size <= 0:
+                    raise RuntimeError("pdftoppm не создал PNG страницы")
+                rendered_count += 1
+            except subprocess.TimeoutExpired:
+                errors.append({"page": page, "error": f"Таймаут рендера страницы {page}: {page_timeout_seconds} сек."})
+                continue
+            except (RuntimeError, OSError) as error:
+                errors.append({"page": page, "error": str(error)})
+                continue
+
+    for page_num in range(1, page_count + 1):
+        png = target_dir / f"page-{page_num}.png"
+        b = png.stat().st_size if png.exists() else 0
+        pages.append({
+            "page": page_num,
+            "name": f"{path.name} — стр. {page_num}",
+            "url": f"/cache/pdf/{key}/{png.name}",
+            "bytes": b,
+        })
+
+    if not pages:
+        result = run_poppler(
+            [pdftoppm, "-v"],
+            timeout=10,
+        )
+        tool_version = (result.stderr or result.stdout).strip()
+        raise RuntimeError(f"Не удалось отрендерить ни одной страницы PDF. {tool_version}. Ошибки: {errors}")
+
+    write_pdf_cache_manifest(path, dpi, key, target_dir, page_count, pages, errors)
+    rendered_valid = len([p for p in pages if p["bytes"] > 0])
+    return {
+        "name": path.name,
+        "path": str(path),
+        "sourcePath": str(path),
+        "dpi": dpi,
+        "pages": page_count,
+        "renderedPages": rendered_valid,
+        "cacheKey": key,
+        "cacheHit": cache_hit_count == page_count,
+        "cacheHitPages": cache_hit_count,
+        "newRenderedPages": rendered_count,
+        "errors": errors,
+        "items": pages,
+    }
+
+
+def render_pdf_page(path: Path, page: int, dpi: int = DEFAULT_PDF_DPI, page_timeout_seconds: int = PDF_PAGE_TIMEOUT_SECONDS) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(f"PDF не найден: {path}")
+    if not path.is_file() or path.suffix.casefold() != ".pdf":
+        raise ValueError(f"Это не PDF-файл: {path}")
+
+    key = pdf_cache_key(path, dpi)
+    target_dir = PDF_CACHE_DIR / key
+    target_dir.mkdir(parents=True, exist_ok=True)
+    png = target_dir / f"page-{page}.png"
+    cache_hit = png.exists() and png.stat().st_size > 0
+
+    page_count = 0
+    cached_manifest = read_pdf_cache_manifest(path, dpi, key, target_dir)
+    if cached_manifest:
+        page_count = cached_manifest.get("pages", 0)
+
+    # 1. Если страница уже в кэше — мгновенный возврат без сетевых обращений
+    if cache_hit and page_count > 0:
+        item = pdf_page_item(path, key, page, png)
+        return {
+            "name": path.name,
+            "path": str(path),
+            "dpi": dpi,
+            "pages": page_count,
+            "page": page,
+            "cacheKey": key,
+            "cacheHit": True,
+            "item": item,
+        }
+
+    # 2. Быстрый рендеринг через PyMuPDF (переиспользуем открытый документ в памяти)
+    if not cache_hit:
+        with _FITZ_RENDER_LOCK:
+            try:
+                doc = get_fitz_doc(path)
+                page_count = len(doc)
+                if page < 1 or page > page_count:
+                    raise ValueError(f"Страница {page} вне диапазона 1-{page_count}")
+                pdf_page = doc[page - 1]
+                pix = pdf_page.get_pixmap(dpi=dpi)
+                pix.save(str(png))
+                cache_hit = png.exists() and png.stat().st_size > 0
+            except ValueError:
+                raise
+            except Exception as fitz_err:
+                pass
+
+    # 3. Запасной рендеринг через Poppler (только если PyMuPDF не сработал)
+    if not cache_hit:
+        pdftoppm = poppler_tool("pdftoppm")
+        if not pdftoppm:
+            raise RuntimeError("Рендеринг страницы не удался (PyMuPDF и Poppler недоступны)")
+        if not page_count:
+            page_count = pdf_page_count(path)
+        if page < 1 or page > page_count:
+            raise ValueError(f"Страница {page} вне диапазона 1-{page_count}")
+        for stale in target_dir.glob(f"page-{page}*.png"):
+            stale.unlink()
+        prefix = target_dir / f"page-{page}"
+        try:
+            result = run_poppler(
+                [
+                    pdftoppm,
+                    "-f", str(page),
+                    "-l", str(page),
+                    "-singlefile",
+                    "-r", str(dpi),
+                    "-png",
+                    str(path),
+                    str(prefix),
+                ],
+                timeout=page_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(f"Таймаут рендера страницы {page}: {page_timeout_seconds} сек.") from error
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "pdftoppm не смог отрендерить страницу")
+        if not png.exists() or png.stat().st_size <= 0:
+            raise RuntimeError("pdftoppm не создал PNG страницы")
+
+    if not page_count:
+        page_count = page
+
+    item = pdf_page_item(path, key, page, png)
+    cached_manifest = read_pdf_cache_manifest(path, dpi, key, target_dir)
+    if cached_manifest and cached_manifest.get("items"):
+        all_items = cached_manifest["items"]
+        found = False
+        for it in all_items:
+            if it.get("page") == page:
+                it["bytes"] = png.stat().st_size if png.exists() else 0
+                found = True
+                break
+        if not found:
+            all_items.append(item)
+            all_items.sort(key=lambda x: x.get("page", 0))
+        write_pdf_cache_manifest(path, dpi, key, target_dir, page_count, all_items, cached_manifest.get("errors", []))
+    else:
+        write_pdf_cache_manifest(path, dpi, key, target_dir, page_count, [item], [])
+
+    return {
+        "name": path.name,
+        "path": str(path),
+        "dpi": dpi,
+        "pages": page_count,
+        "page": page,
+        "cacheKey": key,
+        "cacheHit": cache_hit,
+        "item": item,
+    }
+
+
+def get_pdf_toc(path: Path) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(f"PDF не найден: {path}")
+    if not path.is_file() or path.suffix.casefold() != ".pdf":
+        raise ValueError(f"Это не PDF-файл: {path}")
+
+    with _FITZ_RENDER_LOCK:
+        try:
+            doc = get_fitz_doc(path)
+            toc = doc.get_toc()
+            page_count = len(doc)
+            items = []
+            for level, title, page in toc:
+                items.append({
+                    "level": level,
+                    "title": title.strip(),
+                    "page": max(1, min(page, page_count))
+                })
+            return {
+                "name": path.name,
+                "path": str(path),
+                "totalPages": page_count,
+                "count": len(items),
+                "toc": items
+            }
+        except Exception as e:
+            return {
+                "name": path.name,
+                "path": str(path),
+                "totalPages": 0,
+                "count": 0,
+                "toc": []
+            }
+
+
+class LauncherHandler(BaseHTTPRequestHandler):
+    server_version = "FEngineeringLauncherV3/0.1"
+
+    def log_message(self, format: str, *args: object) -> None:
+        logs_dir = RUNTIME_DIR / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        with (logs_dir / "server.log").open("a", encoding="utf-8") as log:
+            log.write("%s - %s\n" % (self.log_date_time_string(), format % args))
+
+    def _apply_cors_headers(self) -> None:
+        origin = self.headers.get("Origin", "")
+        if origin and ("://127.0.0.1" in origin or "://localhost" in origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+        else:
+            self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With")
+        self.send_header("Access-Control-Max-Age", "86400")
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self._apply_cors_headers()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def send_json(self, status: HTTPStatus, payload: dict) -> None:
+        try:
+            body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self._apply_cors_headers()
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            pass
+
+    def read_json(self) -> dict:
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length <= 0:
+            return {}
+        raw = self.rfile.read(length)
+        return json.loads(raw.decode("utf-8-sig"))
+
+    def handle_choose_exe(self, initial_path: str = "") -> None:
+        try:
+            choose_script = REPO_ROOT / "scripts" / "choose_exe.py"
+            choose_env = dict(os.environ)
+            choose_env["PYTHONUTF8"] = "1"
+            choose_env["PYTHONIOENCODING"] = "utf-8"
+            args = [sys.executable, str(choose_script)]
+            if initial_path:
+                args.append(initial_path)
+            creation_flags = 0
+            if os.name == "nt":
+                creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            proc = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+                env=choose_env,
+                creationflags=creation_flags,
+            )
+            raw = proc.stdout.strip()
+            selected = ""
+            if raw:
+                try:
+                    parsed_json = json.loads(raw)
+                    if isinstance(parsed_json, str):
+                        selected = parsed_json
+                except Exception:
+                    selected = raw.strip('"')
+            self.send_json(HTTPStatus.OK, {"path": selected})
+        except subprocess.TimeoutExpired:
+            self.send_json(
+                HTTPStatus.OK,
+                {"path": "", "timedOut": True, "error": "Диалог выбора программы не ответил за 120 секунд."},
+            )
+        except Exception as error:
+            self.send_json(HTTPStatus.OK, {"path": "", "error": f"Ошибка вызова диалога: {error}"})
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/choose-exe":
+            self.handle_choose_exe(initial_path="")
+            return
+        if parsed.path == "/api/health":
+            self.send_json(
+                HTTPStatus.OK,
+                {
+                    "status": "ok",
+                    "service": "F.E.R.O. Launcher v4",
+                    "version": VERSION,
+                    "repoRoot": str(REPO_ROOT),
+                    "runtime": str(RUNTIME_DIR),
+                    "wordPreview": True,
+                    "excelPreview": True,
+                },
+            )
+            return
+
+        if parsed.path == "/api/version":
+            info = get_launcher_version_info()
+            self.send_json(
+                HTTPStatus.OK,
+                {"status": "ok", "version": info["version"], "branch": info["branch"]},
+            )
+            return
+
+        if parsed.path == "/api/updates/check":
+            from app.updater import check_for_updates
+
+            res = check_for_updates()
+            self.send_json(HTTPStatus.OK, res)
+            return
+
+        if parsed.path == "/api/config/apps":
+            self.send_json(HTTPStatus.OK, load_native_apps_config())
+            return
+
+        if parsed.path == "/api/file/raw":
+            try:
+                params = parse_qs(parsed.query)
+                raw_path = params.get("path", [""])[0].strip()
+                if not raw_path:
+                    self.send_error(HTTPStatus.BAD_REQUEST, "Missing path")
+                    return
+                target = Path(raw_path).expanduser().resolve()
+                if not target.exists() or not target.is_file():
+                    self.send_error(HTTPStatus.NOT_FOUND, "File not found")
+                    return
+                
+                if target.suffix.casefold() in {".tif", ".tiff"}:
+                    try:
+                        from PIL import Image
+                        import io
+                        with Image.open(target) as img:
+                            buf = io.BytesIO()
+                            if img.mode not in ("RGB", "RGBA"):
+                                img = img.convert("RGBA" if "A" in img.mode else "RGB")
+                            img.save(buf, format="PNG")
+                            png_bytes = buf.getvalue()
+                            self.send_response(HTTPStatus.OK)
+                            self.send_header("Content-Type", "image/png")
+                            self.send_header("Content-Length", str(len(png_bytes)))
+                            self._apply_cors_headers()
+                            self.end_headers()
+                            self.wfile.write(png_bytes)
+                            return
+                    except Exception as err:
+                        logger.warning("Failed to convert TIFF %s to PNG: %s", target, err)
+
+                content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+                file_size = target.stat().st_size
+                range_header = self.headers.get("Range")
+                
+                if range_header and range_header.startswith("bytes="):
+                    try:
+                        # Handle multiple ranges by ignoring them or picking the first one (RFC 9110 compliant fallback)
+                        range_str = range_header.replace("bytes=", "").split(",")[0].strip()
+                        ranges = range_str.split("-")
+                        
+                        if ranges[0] == "":
+                            # Suffix request: bytes=-1024
+                            suffix_length = int(ranges[1])
+                            start = max(0, file_size - suffix_length)
+                            end = file_size - 1
+                        else:
+                            start = int(ranges[0])
+                            end = int(ranges[1]) if len(ranges) > 1 and ranges[1] else file_size - 1
+                        
+                        # Limit end to file size
+                        end = min(end, file_size - 1)
+                        
+                        if start >= file_size or start > end:
+                            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                            self._apply_cors_headers()
+                            self.send_header("Content-Range", f"bytes */{file_size}")
+                            self.end_headers()
+                            return
+                        
+                        chunk_size = end - start + 1
+                        self.send_response(HTTPStatus.PARTIAL_CONTENT)
+                        self.send_header("Content-Type", content_type)
+                        self.send_header("Content-Length", str(chunk_size))
+                        self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+                        self.send_header("Accept-Ranges", "bytes")
+                        self._apply_cors_headers()
+                        self.end_headers()
+                        
+                        with target.open("rb") as f:
+                            f.seek(start)
+                            bytes_to_read = chunk_size
+                            while bytes_to_read > 0:
+                                chunk = f.read(min(65536, bytes_to_read))
+                                if not chunk:
+                                    break
+                                try:
+                                    self.wfile.write(chunk)
+                                except BrokenPipeError:
+                                    break
+                                bytes_to_read -= len(chunk)
+                        return
+                    except Exception as error:
+                        import traceback
+                        self.send_error(500, f"Range Error: {error}\n{traceback.format_exc()}")
+                        return
+
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(file_size))
+                self.send_header("Accept-Ranges", "bytes")
+                self._apply_cors_headers()
+                self.end_headers()
+                
+                with target.open("rb") as f:
+                    while True:
+                        chunk = f.read(65536)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                pass
+            except Exception as error:
+                self.send_error(HTTPStatus.BAD_REQUEST, str(error))
+            return
+
+
+        if parsed.path == "/api/dwg/thumbnail":
+            try:
+                params = parse_qs(parsed.query)
+                raw_path = params.get("path", [""])[0].strip()
+                if not raw_path:
+                    self.send_error(HTTPStatus.BAD_REQUEST, "Missing path")
+                    return
+                target = Path(raw_path).expanduser().resolve()
+                if not target.exists() or not target.is_file():
+                    self.send_error(HTTPStatus.NOT_FOUND, "File not found")
+                    return
+                try:
+                    from app.backend.dwg_engine import extract_raw_thumbnail_from_dwg, _generate_placeholder_png
+                except ImportError:
+                    from dwg_engine import extract_raw_thumbnail_from_dwg, _generate_placeholder_png
+                thumb = extract_raw_thumbnail_from_dwg(target)
+                body = thumb[0] if thumb else _generate_placeholder_png(target.name, "Model")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as error:
+                self.send_error(HTTPStatus.BAD_REQUEST, str(error))
+            return
+
+        if parsed.path == "/api/objects":
+            self.send_json(HTTPStatus.OK, {"items": list_object_summaries()})
+            return
+
+        if parsed.path.startswith("/api/objects/"):
+            object_id = unquote(parsed.path.removeprefix("/api/objects/")).strip()
+            manifest = load_manifest(object_id)
+            if manifest:
+                self.send_json(HTTPStatus.OK, manifest)
+            else:
+                self.send_json(HTTPStatus.NOT_FOUND, {"error": "Объект не найден в manifest-хранилище"})
+            return
+
+        if parsed.path.startswith("/cache/"):
+            self.serve_cache(parsed.path)
+            return
+
+        self.serve_static(parsed.path)
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/objects/import":
+            raw_path = ""
+            try:
+                body = self.read_json()
+                raw_path = str(body.get("path", ""))
+                manifest = scan_object(raw_path)
+                self.send_json(HTTPStatus.OK, manifest)
+            except (ValueError, FileNotFoundError, NotADirectoryError, OSError, json.JSONDecodeError) as error:
+                append_import_log(
+                    {
+                        "at": datetime.now().isoformat(timespec="seconds"),
+                        "status": "error",
+                        "path": raw_path,
+                        "error": str(error),
+                    }
+                )
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            except Exception as error:
+                append_import_log(
+                    {
+                        "at": datetime.now().isoformat(timespec="seconds"),
+                        "status": "unexpected-error",
+                        "path": raw_path,
+                        "error": "%s: %s" % (type(error).__name__, error),
+                        "traceback": traceback.format_exc(limit=12),
+                    }
+                )
+                self.send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {"error": "Загрузка не удалась (%s). Подробности записаны в runtime/logs/import.jsonl." % type(error).__name__},
+                )
+            return
+
+        if parsed.path == "/api/objects/exclude":
+            try:
+                body = self.read_json()
+                object_id = str(body.get("id", "")).strip()
+                if not object_id:
+                    raise ValueError("Не выбран объект для исключения")
+                target = MANIFESTS_DIR / f"{object_id}.json"
+                if target.exists():
+                    target.unlink()
+                self.send_json(HTTPStatus.OK, {"ok": True, "removed": object_id})
+            except (ValueError, OSError, json.JSONDecodeError) as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/objects/diff":
+            try:
+                body = self.read_json()
+                object_id = str(body.get("id", "")).strip()
+                manifest = load_manifest(object_id)
+                if not manifest:
+                    raise ValueError("Объект не найден")
+                root = Path(manifest.get("rootPath", ""))
+                if not root.exists():
+                    raise FileNotFoundError(f"Папка объекта не найдена: {root}")
+                tree, extension_counts, folder_count, file_count = build_tree(root)
+                last_diff = diff_trees(manifest.get("tree"), tree)
+                self.send_json(
+                    HTTPStatus.OK,
+                    {
+                        "id": object_id,
+                        "scannedAt": datetime.now().isoformat(timespec="seconds"),
+                        "statistics": {
+                            "folders": folder_count,
+                            "files": file_count,
+                            "extensions": extension_counts,
+                        },
+                        "lastDiff": last_diff,
+                    },
+                )
+            except (ValueError, FileNotFoundError, OSError, json.JSONDecodeError) as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/choose-folder":
+            # Контракт docs/LOAD_BUTTON_CONTRACT.md: один PowerShell
+            # FolderBrowserDialog, строго JSON в ответе.
+            try:
+                ps_command = (
+                    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+                    "Add-Type -AssemblyName System.Windows.Forms; "
+                    "$dlg = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                    '$dlg.Description = "Select object folder - FLauncher"; '
+                    "$dlg.ShowNewFolderButton = $false; "
+                    "$owner = New-Object System.Windows.Forms.Form; "
+                    "$owner.TopMost = $true; $owner.ShowInTaskbar = $false; "
+                    "$null = $owner.Handle; "
+                    "try { if ($dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) "
+                    "{ [Console]::WriteLine($dlg.SelectedPath) } } "
+                    "finally { $owner.Dispose(); $dlg.Dispose() }"
+                )
+                # Доводчик: диалог должен открыться главным окном, а не значком в фоне.
+                _bring_window_to_front(None, "#32770", 115.0, "Select object folder")
+                # ВАЖНО: без hidden_process_kwargs() — флаг STARTF_USESHOWWINDOW
+                # с wShowWindow=0 прячет модальное окно FolderBrowserDialog.
+                # Диалог выбора папки обязан открываться поверх лаунчера.
+                creation_flags = 0
+                if os.name == "nt":
+                    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                proc = subprocess.run(
+                    [
+                        "powershell.exe",
+                        "-STA",
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command",
+                        ps_command,
+                    ],
+                    capture_output=True,
+                    text=False,
+                    timeout=120,
+                    creationflags=creation_flags,
+                )
+                selected = decode_folder_dialog_output(proc.stdout)
+                if selected:
+                    self.send_json(HTTPStatus.OK, {"path": selected})
+                else:
+                    self.send_json(HTTPStatus.OK, {"path": ""})
+            except subprocess.TimeoutExpired:
+                self.send_json(
+                    HTTPStatus.OK,
+                    {
+                        "path": "",
+                        "error": "Системный диалог выбора папки Windows не ответил за 120 секунд. Попробуйте ещё раз.",
+                    },
+                )
+            except Exception as error:
+                self.send_json(HTTPStatus.OK, {"path": "", "error": f"Системный диалог выбора папки недоступен: {error}"})
+            return
+
+        if parsed.path == "/api/config/apps":
+            try:
+                body = self.read_json()
+                if not isinstance(body, dict):
+                    raise ValueError("Ожидался JSON-объект")
+                current_cfg = load_native_apps_config()
+                save_data = dict(current_cfg)
+                save_data["useNativeApps"] = bool(body.get("useNativeApps", True))
+                save_data["firstRunCompleted"] = True
+                now_iso = datetime.now().isoformat(timespec="seconds")
+                for k, v in body.items():
+                    if k in {"useNativeApps", "defaultAction", "firstRunCompleted", "version"}:
+                        continue
+                    new_path = _extract_app_path(v)
+                    is_val, clean_p = validate_configured_executable(new_path)
+                    save_data[k] = {
+                        "path": clean_p if is_val else new_path,
+                        "source": "manual",
+                        "updated_at": now_iso,
+                        "valid_at_save": is_val,
+                    }
+                save_native_apps_config(save_data)
+                self.send_json(HTTPStatus.OK, {"ok": True, "config": load_native_apps_config()})
+            except Exception as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/config/apps/import-windows":
+            try:
+                body = self.read_json()
+                mode = str(body.get("mode", "fill_empty")).strip().lower()
+                cfg, report = import_windows_default_app_mappings(mode=mode, save=True)
+                self.send_json(HTTPStatus.OK, {
+                    "ok": True,
+                    "config": cfg,
+                    "imported": report.get("imported", {}),
+                    "skipped": report.get("skipped_reasons", {}),
+                    "report": report,
+                })
+            except Exception as error:
+                traceback_str = traceback.format_exc()
+                self.log_message("[Error] /api/config/apps/import-windows failed:\n%s", traceback_str)
+                self.send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {
+                        "ok": False,
+                        "error_code": "internal_error",
+                        "message": f"Не удалось выполнить операцию: {error}. Подробности записаны в журнал Launcher.",
+                        "details": str(error),
+                    },
+                )
+            return
+
+        if parsed.path == "/api/config/apps/open-windows-settings":
+            try:
+                if os.name == "nt":
+                    opened = _shell_open("ms-settings:defaultapps")
+                    if not opened and hasattr(os, "startfile"):
+                        os.startfile("ms-settings:defaultapps")
+                self.send_json(HTTPStatus.OK, {"ok": True})
+            except Exception as error:
+                traceback_str = traceback.format_exc()
+                self.log_message("[Error] /api/config/apps/open-windows-settings failed:\n%s", traceback_str)
+                self.send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {
+                        "ok": False,
+                        "error_code": "internal_error",
+                        "message": f"Не удалось открыть настройки Windows: {error}. Подробности записаны в журнал Launcher.",
+                        "details": str(error),
+                    },
+                )
+            return
+
+        if parsed.path == "/api/choose-exe":
+            initial_path = ""
+            try:
+                body = self.read_json()
+                initial_path = str(body.get("current", "") or body.get("path", "")).strip()
+            except Exception:
+                pass
+            self.handle_choose_exe(initial_path=initial_path)
+            return
+
+        if parsed.path == "/api/config/apps/autodetect":
+            # LEGACY COMPATIBILITY ENDPOINT:
+            # Использовался прежними версиями интерфейса. Выполняет безопасный fill_empty импорт
+            # без перезаписи настроек пользователя и возвращает обратно-совместимый JSON.
+            try:
+                cfg, report = import_windows_default_app_mappings(mode="fill_empty", save=False)
+                detected = {}
+                for ext in ALL_SUPPORTED_EXTENSIONS:
+                    p = _extract_app_path(cfg.get(ext))
+                    if p:
+                        detected[ext] = p
+                self.send_json(HTTPStatus.OK, {
+                    "ok": True,
+                    "detected": detected,
+                    "config": cfg,
+                    "report": report,
+                })
+            except Exception as error:
+                traceback_str = traceback.format_exc()
+                self.log_message("[Error] /api/config/apps/autodetect failed:\n%s", traceback_str)
+                self.send_json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {
+                        "ok": False,
+                        "error_code": "internal_error",
+                        "message": f"Не удалось выполнить операцию: {error}. Подробности записаны в журнал Launcher.",
+                        "details": str(error),
+                    },
+                )
+            return
+
+        if parsed.path == "/api/pdf/render":
+            try:
+                body = self.read_json()
+                raw_files = body.get("files", [])
+                dpi = int(body.get("dpi") or DEFAULT_PDF_DPI)
+                if dpi < 72 or dpi > 600:
+                    raise ValueError("DPI должен быть в диапазоне 72-600")
+                if not isinstance(raw_files, list) or not raw_files:
+                    raise ValueError("Не выбраны PDF-файлы для отображения")
+                if len(raw_files) > 15:
+                    raise ValueError("За один раз пока можно отрендерить не больше 15 PDF")
+                first_page_only = bool(body.get("firstPageOnly", False))
+                force = bool(body.get("force", False))
+                documents = [render_pdf(Path(str(file_path)), dpi=dpi, first_page_only=first_page_only, force=force) for file_path in raw_files]
+                document_errors = [
+                    {"document": document["name"], "path": document["path"], **error}
+                    for document in documents
+                    for error in document.get("errors", [])
+                ]
+                self.send_json(
+                    HTTPStatus.OK,
+                    {
+                        "dpi": dpi,
+                        "documents": documents,
+                        "totalPages": sum(document["pages"] for document in documents),
+                        "renderedPages": sum(document["renderedPages"] for document in documents),
+                        "errors": document_errors,
+                        "renderedAt": datetime.now().isoformat(timespec="seconds"),
+                    },
+                )
+            except (ValueError, FileNotFoundError, RuntimeError, OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/pdf/page":
+            try:
+                body = self.read_json()
+                raw_file = str(body.get("file", "")).strip()
+                page = int(body.get("page") or 1)
+                dpi = int(body.get("dpi") or DEFAULT_PDF_DPI)
+                if dpi < 72 or dpi > 600:
+                    raise ValueError("DPI должен быть в диапазоне 72-600")
+                if not raw_file:
+                    raise ValueError("Не выбран PDF-файл для отображения")
+                payload_page = render_pdf_page(Path(raw_file), page=page, dpi=dpi)
+                self.send_json(HTTPStatus.OK, payload_page)
+            except (ValueError, FileNotFoundError, RuntimeError, OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/pdf/toc":
+            try:
+                body = self.read_json()
+                raw_file = str(body.get("file", "")).strip()
+                if not raw_file:
+                    raise ValueError("Не выбран PDF-файл для извлечения оглавления")
+                toc_data = get_pdf_toc(Path(raw_file))
+                self.send_json(HTTPStatus.OK, toc_data)
+            except (ValueError, FileNotFoundError, RuntimeError, OSError, json.JSONDecodeError) as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+
+        if parsed.path == "/api/dwg/cache/clear":
+            try:
+                body = self.read_json()
+                raw_file = str(body.get("file", "")).strip()
+                if raw_file:
+                    file_path = Path(raw_file)
+                    key = file_cache_key(file_path, "dwg-smart-cad-v4")
+                    target_dir = DWG_CACHE_DIR / key
+                    try:
+                        from app.backend.dwg_engine import DwgOnDemandManager
+                        DwgOnDemandManager.stop_worker(file_path)
+                    except Exception:
+                        pass
+                    if target_dir.exists():
+                        shutil.rmtree(target_dir, ignore_errors=True)
+                    self.send_json(HTTPStatus.OK, {"cleared": True, "file": raw_file, "key": key})
+                else:
+                    if DWG_CACHE_DIR.exists():
+                        for item in DWG_CACHE_DIR.iterdir():
+                            if item.is_dir():
+                                shutil.rmtree(item, ignore_errors=True)
+                    self.send_json(HTTPStatus.OK, {"cleared": True, "all": True})
+            except Exception as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/dwg/model-render":
+            try:
+                body = self.read_json()
+                raw_files = body.get("files", [])
+                dpi = DWG_PREVIEW_DPI  # DWG всегда 150 DPI: 72 давал размытые листы и ложные cache-hit
+                force = bool(body.get("force", False))
+                if dpi < 72 or dpi > 600:
+                    raise ValueError("DPI должен быть в диапазоне 72-600")
+                if not isinstance(raw_files, list) or not raw_files:
+                    raise ValueError("Не выбраны DWG-файлы для отображения")
+                if len(raw_files) > 1:
+                    raise ValueError("Model Space preview пока создаётся по одному DWG-файлу")
+                documents = [render_dwg_model(Path(str(file_path)), dpi=dpi, force=force) for file_path in raw_files]
+                document_errors = [
+                    {"document": document["name"], "path": document["path"], **error}
+                    for document in documents
+                    for error in document.get("errors", [])
+                ]
+                self.send_json(
+                    HTTPStatus.OK,
+                    {
+                        "dpi": dpi,
+                        "documents": documents,
+                        "totalPages": sum(document["pages"] for document in documents),
+                        "renderedPages": sum(document["renderedPages"] for document in documents),
+                        "errors": document_errors,
+                        "renderedAt": datetime.now().isoformat(timespec="seconds"),
+                    },
+                )
+            except (ValueError, FileNotFoundError, RuntimeError, OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/dwg/status":
+            try:
+                body = self.read_json()
+                raw_file = str(body.get("file", "")).strip()
+                if not raw_file:
+                    raise ValueError("Не указан DWG-файл")
+                file_path = Path(raw_file)
+                key = file_cache_key(file_path, "dwg-smart-cad-v4")
+                target_dir = DWG_CACHE_DIR / key
+                manifest_path = target_dir / "manifest.json"
+
+                ready_pages = []
+                empty_pages = []
+                first_content_page = None
+                is_complete = False
+                manifest_data = {}
+                # manifest.json появляется только ПОСЛЕ завершения экспорта. На фазе 0
+                # в кэше лежит лишь header_thumb.png, манифеста нет — и обращение к
+                # total_layouts ниже падало с UnboundLocalError (HTTP 400), из-за чего
+                # фронтенд гасил опрос статуса и HD-рендер никогда не подхватывался.
+                total_layouts = 0
+                if manifest_path.exists():
+                    try:
+                        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+                        is_complete = bool(manifest_data.get("isComplete", False))
+                        valid_layouts = manifest_data.get("validLayouts")
+                        if valid_layouts is not None:
+                            total_layouts = int(valid_layouts)
+                        else:
+                            total_layouts = int(manifest_data.get("totalLayouts", 0)) or len(manifest_data.get("layouts", []))
+                        if total_layouts <= 0 and is_complete:
+                            total_layouts = 1
+                    except Exception:
+                        pass
+
+                if target_dir.exists():
+                    try:
+                        from app.backend.dwg_engine import _rasterize_pdf_page, check_image_is_empty_sheet, DwgOnDemandManager
+                    except ImportError:
+                        from dwg_engine import _rasterize_pdf_page, check_image_is_empty_sheet, DwgOnDemandManager
+
+                    if is_complete:
+                        completed_dict = manifest_data.get("completedPages", {})
+                        if completed_dict:
+                            ready_pages = sorted([int(k) for k in completed_dict.keys()])
+                        else:
+                            # totalLayouts включает пустые листы, которые не печатаются: считаем по файлам.
+                            tabs = [int(lay.get("tabOrder", 1)) for lay in manifest_data.get("layouts", []) if isinstance(lay, dict)] or [0, 1]
+                            ready_pages = sorted(t for t in tabs if (target_dir / f"page-{t}.png").is_file() and (target_dir / f"page-{t}.png").stat().st_size > 0)
+                        empty_pages = manifest_data.get("emptyPages", [])
+                    else:
+                        # На лету проверяем готовые PDF от AutoCAD и нарезаем недостающие PNG
+                        for pdf_file in target_dir.glob("page_*.pdf"):
+                            m_pdf = re.match(r"^page_(\d+)\.pdf$", pdf_file.name)
+                            if m_pdf and pdf_file.stat().st_size > 4096:
+                                tab = int(m_pdf.group(1))
+                                png_p = target_dir / f"page-{tab}.png"
+                                need_raster = (not png_p.exists()) or (png_p.stat().st_size == 0) or (png_p.stat().st_mtime < pdf_file.stat().st_mtime)
+                                if need_raster:
+                                    try:
+                                        _rasterize_pdf_page(pdf_file, png_p, DWG_PREVIEW_DPI)
+                                    except Exception as rx:
+                                        self.log_message(f"Rasterize error for {pdf_file.name}: {rx}")
+
+                        for png_file in target_dir.glob("page-*.png"):
+                            m = re.match(r"^page-(\d+)\.png$", png_file.name)
+                            if m and png_file.stat().st_size > 0:
+                                p_num = int(m.group(1))
+                                ready_pages.append(p_num)
+                                if check_image_is_empty_sheet(png_file):
+                                    empty_pages.append(p_num)
+                        ready_pages.sort()
+                        empty_pages.sort()
+
+                    for p_num in ready_pages:
+                        if p_num not in empty_pages:
+                            first_content_page = p_num
+                            break
+
+                if total_layouts > 0 and len(ready_pages) >= total_layouts:
+                    is_complete = True
+
+                # Проверяем, активен ли рабочий процесс фонового плоттера или accoreconsole
+                worker_active = False
+                try:
+                    from app.backend.dwg_engine import DwgOnDemandManager, is_accore_job_active
+                    with DwgOnDemandManager._lock:
+                        proc = DwgOnDemandManager._active_workers.get(str(file_path.resolve()).casefold())
+                        if proc is not None and proc.poll() is None:
+                            worker_active = True
+                    if not worker_active and is_accore_job_active(file_path):
+                        worker_active = True
+                except Exception:
+                    pass
+
+                self.send_json(
+                    HTTPStatus.OK,
+                    {
+                        "file": raw_file,
+                        "cacheKey": key,
+                        "readyPages": ready_pages,
+                        "emptyPages": empty_pages,
+                        "firstContentPage": first_content_page,
+                        "isComplete": is_complete,
+                        "totalLayouts": total_layouts,
+                        "readyCount": len(ready_pages),
+                        "workerActive": worker_active,
+                    },
+                )
+            except Exception as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/dwg/model-page":
+            try:
+                body = self.read_json()
+                raw_file = str(body.get("file", "")).strip()
+                page = int(body.get("page") or 1)
+                # Срез страницы DWG по стандарту: 150 DPI PNG (DWG_PREVIEW_DPI).
+                # Явный dpi клиента уважаем (HiDPI-зум), дефолт 300 запрещен.
+                dpi = int(body.get("dpi") or DWG_PREVIEW_DPI)
+                if dpi < 72 or dpi > 600:
+                    raise ValueError("DPI должен быть в диапазоне 72-600")
+                if not raw_file:
+                    raise ValueError("Не выбран DWG-файл для отображения")
+                file_path = Path(raw_file)
+                key = file_cache_key(file_path, "dwg-smart-cad-v4")
+                target_dir = DWG_CACHE_DIR / key
+                target_dir.mkdir(parents=True, exist_ok=True)
+
+                try:
+                    from app.backend.dwg_engine import render_dwg_page_progressive
+                except ImportError:
+                    from dwg_engine import render_dwg_page_progressive
+
+                payload = render_dwg_page_progressive(file_path=file_path, target_dir=target_dir, cache_key=key, page=page, dpi=dpi)
+                self.send_json(HTTPStatus.OK, payload)
+            except (ValueError, FileNotFoundError, RuntimeError, OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/excel/workbook":
+            try:
+                body = self.read_json()
+                raw_file = str(body.get("file", "")).strip()
+                if not raw_file:
+                    raise ValueError("Не выбран Excel-файл для отображения")
+                self.send_json(HTTPStatus.OK, excel_workbook_preview(Path(raw_file)))
+            except Exception as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/excel/sheet":
+            try:
+                body = self.read_json()
+                raw_file = str(body.get("file", "")).strip()
+                sheet_index = int(body.get("sheetIndex", 0))
+                sheet = excel_sheet_preview(Path(raw_file), sheet_index)
+                self.send_json(HTTPStatus.OK, sheet)
+            except Exception as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+
+        if parsed.path == "/api/preview":
+            try:
+                body = self.read_json()
+                raw_file = str(body.get("file", "")).strip()
+                if not raw_file:
+                    raise ValueError("Не выбран файл для отображения")
+                if rendering_dispatcher is None:
+                    raise RuntimeError("Ядро rendering недоступно (app.rendering)")
+                payload = rendering_dispatcher.get_file_preview(
+                    Path(raw_file), runtime_dir=RUNTIME_DIR)
+                self.send_json(HTTPStatus.OK, payload)
+            except Exception as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path in {"/api/word/preview", "/api/word/document"}:
+            try:
+                body = self.read_json()
+                raw_file = str(body.get("file", "")).strip()
+                if not raw_file:
+                    raise ValueError("Не выбран Word-файл для отображения")
+                self.send_json(HTTPStatus.OK, word_document_preview(Path(raw_file)))
+            except Exception as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/open-file":
+            started = time.perf_counter()
+            raw_file = ""
+            target: Path | None = None
+            try:
+                body = self.read_json()
+                raw_file = str(body.get("path", "")).strip()
+                if not raw_file:
+                    raise ValueError("Не выбран файл для открытия")
+                target = Path(raw_file).expanduser()
+                if not target.exists():
+                    raise FileNotFoundError(f"Файл не найден: {target}")
+                opened_path = str(target)
+
+                # Защита от двойного запуска (двойной клик пользователя или повторный вызов)
+                target_key = str(target).casefold()
+                now_ts = time.perf_counter()
+                with _OPEN_FILE_LOCK:
+                    last_time = _LAST_OPENED_TARGETS.get(target_key, 0.0)
+                    if (now_ts - last_time) < 4.0:
+                        self.send_json(
+                            HTTPStatus.OK,
+                            {
+                                "ok": True,
+                                "path": str(target),
+                                "openedPath": opened_path,
+                                "mode": "deduplicated",
+                                "longPathWarning": None,
+                            },
+                        )
+                        return
+                    _LAST_OPENED_TARGETS[target_key] = now_ts
+                    if len(_LAST_OPENED_TARGETS) > 100:
+                        _LAST_OPENED_TARGETS.clear()
+
+                suffix = target.suffix.casefold() if target.is_file() else ""
+                # Google Drive shortcuts (.gsheet / .gdoc / .gslides) are virtual
+                # reparse points, not real Office documents.  Launching them
+                # through a local EXE is unpredictable, so give a clear hint.
+                if suffix in {".gsheet", ".gdoc", ".gslides"}:
+                    raise ValueError("Это облачный документ Google. Откройте его через браузер (Google Docs / Sheets).")
+                action = str(body.get("action", "") or "default").strip().lower()
+
+                if suffix in (".dwg", ".dxf") and action not in ("explorer", "system"):
+                    # Остановка всех фоновых воркеров рендеринга DWG, чтобы освободить файл
+                    try:
+                        from app.backend.dwg_engine import DwgOnDemandManager
+                        DwgOnDemandManager.stop_all_workers()
+                    except Exception:
+                        pass
+                    threading.Thread(target=kill_orphan_acad_processes, daemon=True).start()
+
+                    acad_opened = False
+                    if os.name == "nt":
+                        user_hwnd, user_pid = _find_visible_acad_window()
+
+                        if user_hwnd > 0:
+                            # Окно AutoCAD УЖЕ ОТКРЫТО у пользователя.
+                            # Если окно свёрнуто — восстанавливаем его:
+                            try:
+                                import ctypes
+                                if ctypes.windll.user32.IsIconic(user_hwnd):
+                                    ctypes.windll.user32.ShowWindow(user_hwnd, 9)  # SW_RESTORE
+                            except Exception:
+                                pass
+
+                            try:
+                                acad = _get_active_autocad_com()
+                                if acad:
+                                    try:
+                                        acad.WindowState = 3  # acMax
+                                    except Exception:
+                                        pass
+                                    if user_hwnd:
+                                        try:
+                                            _force_foreground(user_hwnd, 3)
+                                        except Exception:
+                                            pass
+                                    elif user_pid:
+                                        bring_native_window_to_front(user_pid, "acad.exe")
+
+                                    doc_already_open = False
+                                    try:
+                                        target_str = str(target.resolve()).casefold()
+                                        for doc in acad.Documents:
+                                            if str(Path(doc.FullName).resolve()).casefold() == target_str:
+                                                doc.Activate()
+                                                doc_already_open = True
+                                                break
+                                    except Exception:
+                                        pass
+
+                                    if not doc_already_open:
+                                        def _bg_open_acad_doc(target_path_str: str, target_name: str, hwnd_val: int):
+                                            import pythoncom
+                                            pythoncom.CoInitialize()
+                                            try:
+                                                ac = _get_active_autocad_com()
+                                                if ac:
+                                                    ac.Documents.Open(target_path_str)
+                                                if hwnd_val:
+                                                    try:
+                                                        _force_foreground(hwnd_val, 3)
+                                                    except Exception:
+                                                        pass
+                                                _bring_window_to_front(None, None, 10.0, target_name, 3)
+                                            except Exception as e:
+                                                logger.warning("Background AutoCAD open failed: %s", e)
+                                            finally:
+                                                pythoncom.CoUninitialize()
+
+                                        threading.Thread(
+                                            target=_bg_open_acad_doc,
+                                            args=(str(target), target.name, user_hwnd),
+                                            daemon=True,
+                                        ).start()
+
+                                    acad_opened = True
+                                    mode = "autocad-active-com"
+                            except Exception as err:
+                                logger.warning("Could not connect via COM to active AutoCAD: %s", err)
+
+                            if not acad_opened:
+                                ac_launcher = _get_autocad_launcher_exe()
+                                if ac_launcher:
+                                    target_dir = os.path.dirname(str(target.resolve()))
+                                    _shell_open(ac_launcher, f'/O "{str(target.resolve())}"', target_dir)
+                                _force_foreground(user_hwnd, 3)
+                                acad_opened = True
+                                mode = "autocad-active-window"
+
+                    if not acad_opened:
+                        ac_launcher = _get_autocad_launcher_exe()
+                        if ac_launcher:
+                            target_dir = os.path.dirname(str(target.resolve()))
+                            if _shell_open(ac_launcher, f'/O "{str(target.resolve())}"', target_dir):
+                                bring_native_window_to_front(0, "acad.exe")
+                                _bring_window_to_front(None, None, 120.0, target.name, 3)
+                                mode = "autocad-launcher-open"
+                                acad_opened = True
+
+                    if not acad_opened:
+                        mode = launch_native_file(target)
+                elif action == "explorer":
+                    mode = open_in_explorer(target)
+                elif action == "system":
+                    mode = launch_system_default(target)
+                else:
+                    mode = launch_native_file(target)
+                append_native_open_log(
+                    {
+                        "at": datetime.now().isoformat(timespec="seconds"),
+                        "status": "requested",
+                        "extension": suffix,
+                        "sourcePath": str(target),
+                        "openedPath": opened_path,
+                        "mode": mode,
+                        "elapsedMs": round((time.perf_counter() - started) * 1000),
+                    }
+                )
+                self.send_json(
+                    HTTPStatus.OK,
+                    {
+                        "ok": True,
+                        "path": str(target),
+                        "openedPath": opened_path,
+                        "mode": mode,
+                        "longPathWarning": (
+                            "Путь длиннее 240 символов — Windows может не открыть файл."
+                            if len(opened_path) > 240
+                            else None
+                        ),
+                    },
+                )
+            except NativeOpenError as error:
+                append_native_open_log(
+                    {
+                        "at": datetime.now().isoformat(timespec="seconds"),
+                        "status": "error",
+                        "error_code": error.error_code,
+                        "extension": target.suffix.casefold() if target else Path(raw_file).suffix.casefold(),
+                        "sourcePath": str(target) if target else raw_file,
+                        "error": str(error),
+                        "details": error.details,
+                        "elapsedMs": round((time.perf_counter() - started) * 1000),
+                    }
+                )
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {
+                        "ok": False,
+                        "error": str(error),
+                        "error_code": error.error_code,
+                        "details": error.details,
+                    },
+                )
+            except Exception as error:
+                append_native_open_log(
+                    {
+                        "at": datetime.now().isoformat(timespec="seconds"),
+                        "status": "error",
+                        "error_code": "unknown_error",
+                        "extension": target.suffix.casefold() if target else Path(raw_file).suffix.casefold(),
+                        "sourcePath": str(target) if target else raw_file,
+                        "error": str(error),
+                        "elapsedMs": round((time.perf_counter() - started) * 1000),
+                    }
+                )
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {
+                        "ok": False,
+                        "error": str(error),
+                        "error_code": "unknown_error",
+                    },
+                )
+            return
+
+        if parsed.path == "/api/clipboard":
+            try:
+                body = self.read_json()
+                raw_text = str(body.get("text", "")).strip()
+                if not raw_text:
+                    raise ValueError("Текст для копирования не передан")
+                ok = set_windows_clipboard(raw_text)
+                if not ok:
+                    raise RuntimeError("Не удалось записать текст в буфер обмена Windows")
+                self.send_json(HTTPStatus.OK, {"ok": True, "text": raw_text})
+            except Exception as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/updates/apply":
+            # Запуск скачивания и обновления в фоновом потоке, чтобы сразу вернуть ответ браузеру
+            from app.updater import check_for_updates, download_update_payload, apply_update_and_exit
+
+            def _worker():
+                try:
+                    info = check_for_updates()
+                    if info.get("has_update") and info.get("download_url"):
+                        zip_path = download_update_payload(info["download_url"], info.get("sha256", ""))
+                        apply_update_and_exit(zip_path)
+                except Exception as e:
+                    print(f"[Update Error] {e}")
+
+            threading.Thread(target=_worker, daemon=True).start()
+            self.send_json(HTTPStatus.OK, {"status": "updating", "message": "Загрузка обновления началась, лаунчер скоро перезапустится."})
+            return
+
+        self.send_json(HTTPStatus.NOT_FOUND, {"error": "Маршрут не найден"})
+
+    def serve_cache(self, request_path: str) -> None:
+        relative = unquote(request_path).removeprefix("/cache/").lstrip("/")
+        target = (RUNTIME_DIR / "cache" / relative).resolve()
+
+        try:
+            target.relative_to((RUNTIME_DIR / "cache").resolve())
+        except ValueError:
+            self.send_error(HTTPStatus.FORBIDDEN, "Forbidden")
+            return
+
+        if not target.exists() or not target.is_file():
+            if relative.startswith("dwg/"):
+                parts = relative.split("/")
+                if len(parts) == 3:
+                    import re
+                    match = re.match(r"^page-(\d+)\.png$", parts[2])
+                    if match:
+                        page_num = int(match.group(1))
+                        pdf_candidate = target.parent / f"page_{page_num:04d}.pdf"
+                        if pdf_candidate.exists() and pdf_candidate.stat().st_size > 1024:
+                            try:
+                                from app.backend.dwg_engine import _rasterize_pdf_page
+                            except ImportError:
+                                from dwg_engine import _rasterize_pdf_page
+                            _rasterize_pdf_page(pdf_candidate, target, DWG_PREVIEW_DPI)
+
+            if relative.startswith("pdf/"):
+                parts = relative.split("/")
+                if len(parts) == 3:
+                    import re
+                    match = re.match(r"^page-(\d+)\.png$", parts[2])
+                    if match:
+                        page_req = int(match.group(1))
+                        manifest = read_pdf_cache_manifest(Path(), 0, parts[1], target.parent)
+                        original_path = None
+                        dpi = DEFAULT_PDF_DPI
+                        if manifest and manifest.get("path"):
+                            original_path = Path(manifest["path"])
+                            dpi = manifest.get("dpi", DEFAULT_PDF_DPI)
+                        elif (target.parent / "manifest.json").exists():
+                            try:
+                                raw_text = (target.parent / "manifest.json").read_text(encoding="utf-8", errors="replace")
+                                m_path = re.search(r'"path"\s*:\s*"([^"]+)"', raw_text)
+                                if m_path:
+                                    original_path = Path(m_path.group(1).replace(r'\\', '\\'))
+                                m_dpi = re.search(r'"dpi"\s*:\s*(\d+)', raw_text)
+                                if m_dpi:
+                                    dpi = int(m_dpi.group(1))
+                            except Exception:
+                                pass
+                        if original_path and original_path.exists():
+                            try:
+                                render_pdf_page(original_path, page_req, dpi)
+                            except Exception as e:
+                                self.log_message(f"Lazy render failed: {e}")
+            if not target.exists() or not target.is_file():
+                if relative.startswith("dwg/"):
+                    parts = relative.split("/")
+                    page_label = parts[2].replace("page-", "").replace(".png", "") if len(parts) == 3 else "…"
+                    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200">
+  <rect width="100%" height="100%" fill="#1a1c23"/>
+  <rect x="6" y="6" width="288" height="188" rx="4" fill="none" stroke="#333745" stroke-width="2" stroke-dasharray="6,4"/>
+  <text x="50%" y="42%" dominant-baseline="middle" text-anchor="middle" font-size="26">⏳</text>
+  <text x="50%" y="65%" dominant-baseline="middle" text-anchor="middle" fill="#d2d5e2" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="13" font-weight="600">Лист {page_label}</text>
+  <text x="50%" y="82%" dominant-baseline="middle" text-anchor="middle" fill="#75798e" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11">рендерится в фоне…</text>
+</svg>'''
+                    body = svg.encode("utf-8")
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
+                    self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                    self.send_header("X-DWG-Pending", "1")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if relative.startswith("pdf/"):
+                    parts = relative.split("/")
+                    page_label = parts[2].replace("page-", "").replace(".png", "") if len(parts) == 3 else "…"
+                    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200">
+  <rect width="100%" height="100%" fill="#1a1c23"/>
+  <rect x="6" y="6" width="288" height="188" rx="4" fill="none" stroke="#333745" stroke-width="2" stroke-dasharray="6,4"/>
+  <text x="50%" y="42%" dominant-baseline="middle" text-anchor="middle" font-size="26">⏳</text>
+  <text x="50%" y="65%" dominant-baseline="middle" text-anchor="middle" fill="#d2d5e2" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="13" font-weight="600">Стр. {page_label}</text>
+  <text x="50%" y="82%" dominant-baseline="middle" text-anchor="middle" fill="#75798e" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11">рендерится в фоне…</text>
+</svg>'''
+                    body = svg.encode("utf-8")
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
+                    self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                    self.send_header("X-PDF-Pending", "1")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+                return
+
+        content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        body = target.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "private, max-age=31536000, immutable")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_static(self, request_path: str) -> None:
+        relative = "index.html" if request_path in ("", "/") else unquote(request_path).lstrip("/")
+        target = (FRONTEND_DIR / relative).resolve()
+
+        try:
+            target.relative_to(FRONTEND_DIR.resolve())
+        except ValueError:
+            self.send_error(HTTPStatus.FORBIDDEN, "Forbidden")
+            return
+
+        if not target.exists() or not target.is_file():
+            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+            return
+
+        content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        if content_type.startswith("text/") or content_type in {"application/javascript", "text/javascript"}:
+            content_type = f"{content_type}; charset=utf-8"
+        body = target.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        # HTML/JS/CSS must never be served stale: a cached app.js silently
+        # reverts the native-open logic to the broken WPS associations.
+        # no-store (not no-cache) also wins without a manual ?v= bump.
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class SingleInstanceHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with SO_REUSEADDR and strict HANDLE_FLAG_INHERIT=0 on Windows."""
+    allow_reuse_address = True
+    daemon_threads = True
+
+    def server_bind(self):
+        super().server_bind()
+        try:
+            self.socket.set_inheritable(False)
+        except OSError as e:
+            logger.warning("Could not set socket non-inheritable: %s", e)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run F-Engineering Launcher v3 local server.")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8780)
+    args = parser.parse_args()
+
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    (RUNTIME_DIR / "cache").mkdir(exist_ok=True)
+    PDF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    MANIFESTS_DIR.mkdir(exist_ok=True)
+    (RUNTIME_DIR / "logs").mkdir(exist_ok=True)
+
+    # Изолированный шаг первичной инициализации при первом старте backend (startup lifecycle)
+    try:
+        ensure_native_apps_first_run_initialized()
+    except Exception as init_err:
+        print(f"[Startup Warn] Native apps initialization skipped: {init_err}", file=sys.stderr, flush=True)
+
+    atexit.register(cleanup_dwg_workers)
+
+    # Initialize SQLite DB
+    import app.backend.db as db
+    db.init_db()
+
+    # Start background hashing thread
+    import app.backend.background_sync as bg
+    bg.start_background_sync()
+
+    try:
+        server = SingleInstanceHTTPServer((args.host, args.port), LauncherHandler)
+    except OSError as err:
+        if getattr(err, "winerror", None) == 10048 or getattr(err, "errno", None) == 10048 or "10048" in str(err):
+            print(f"ERROR: Port {args.port} is already in use by another process: {err}", file=sys.stderr, flush=True)
+            sys.exit(48)
+        raise
+    print(f"F-Engineering Launcher v3: http://{args.host}:{args.port}/", flush=True)
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,1240 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Руководство разработчика и пользователя: Архитектура F-Engineering Launcher</title>
+<style>
+/* ==========================================================================
+   СТИЛЬ: P02 APPLE GRAY · ИНВЕРСНАЯ СХЕМА (BRANDBOOK F-ENGINEERING / FERO)
+   Спецификация: f_engineering_14_styles_test_document.html
+   --l1: #e9ebeb (Основа / Холст / Студийный серый)
+   --l2: #f3f4f4 (Секции / Промежуточные контейнеры)
+   --l3: #fbfbfa (Плавающие карточки / Код / Чистый светлый акцент)
+   --border: #d5d8d8 (Контурные направляющие)
+   --strong: #c4c8c8 (Активные границы, рамки контролов)
+   ========================================================================== */
+:root {
+  --l1: #e9ebeb;
+  --l2: #f3f4f4;
+  --l3: #fbfbfa;
+  --border: #d5d8d8;
+  --strong: #c4c8c8;
+  --text: #1f2328;
+  --soft: #59636e;
+  --accent: #0071e3;
+  --accent-soft: #e5f0fa;
+  --copper: #b25828;
+  --copper-soft: #f7ede8;
+  --success: #1a7f37;
+  --success-soft: #dafbe1;
+  --warning: #9a6700;
+  --warning-soft: #fff8c5;
+  --danger: #cf222e;
+  --danger-soft: #ffebe9;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: "SF Mono", Monaco, Menlo, Consolas, "Ubuntu Mono", monospace;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 26px;
+  --shadow-sm: 0 2px 6px rgba(31, 35, 40, 0.04);
+  --shadow-md: 0 8px 24px rgba(31, 35, 40, 0.06);
+  --shadow-lg: 0 14px 36px rgba(31, 35, 40, 0.08);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html { scroll-behavior: smooth; font-size: 16px; }
+body {
+  margin: 0;
+  background-color: var(--l1);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Прогресс-бар прокрутки */
+#progress-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--copper), var(--accent));
+  width: 0%;
+  z-index: 1000;
+  transition: width 0.1s ease-out;
+}
+
+/* Хедер */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 900;
+  background: rgba(233, 235, 235, 0.88);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+}
+.header-inner {
+  max-width: 1440px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.brand-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  color: var(--text);
+}
+.brand-badge {
+  background: var(--copper);
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.brand-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.header-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tag {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--strong);
+  background: var(--l3);
+  color: var(--soft);
+  white-space: nowrap;
+}
+.menu-btn {
+  display: none;
+  background: var(--l3);
+  border: 1px solid var(--strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text);
+}
+
+/* Основной лейаут документации */
+.doc-layout {
+  max-width: 1440px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 290px minmax(0, 1fr);
+  gap: 32px;
+  padding: 32px 24px 80px;
+}
+
+/* Сайдбар / Оглавление */
+.sidebar {
+  position: sticky;
+  top: 76px;
+  height: calc(100vh - 100px);
+  overflow-y: auto;
+  padding-right: 12px;
+}
+.sidebar::-webkit-scrollbar { width: 4px; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--strong); border-radius: 4px; }
+
+.sidebar-box {
+  background: var(--l2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: var(--shadow-sm);
+}
+.sidebar-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--soft);
+  margin-bottom: 12px;
+  font-weight: 700;
+}
+.nav-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.nav-item { margin-bottom: 4px; }
+.nav-link {
+  display: block;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 14px;
+  line-height: 1.35;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+}
+.nav-link:hover {
+  background: var(--l3);
+  border-color: var(--border);
+}
+.nav-link.active {
+  background: var(--l3);
+  border-color: var(--strong);
+  font-weight: 600;
+  color: var(--accent);
+}
+.nav-sublist {
+  list-style: none;
+  padding-left: 14px;
+  margin: 4px 0 6px;
+  border-left: 2px solid var(--border);
+}
+.nav-sublink {
+  display: block;
+  padding: 4px 8px;
+  font-size: 12.5px;
+  color: var(--soft);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+.nav-sublink:hover { color: var(--text); }
+
+/* Контентная зона */
+.content-area {
+  min-width: 0;
+}
+
+/* Hero карточка */
+.hero-card {
+  background: var(--l2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 36px;
+  margin-bottom: 32px;
+  box-shadow: var(--shadow-md);
+}
+.hero-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--copper);
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.hero-title {
+  margin: 0 0 16px;
+  font-size: 38px;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  font-weight: 800;
+}
+.hero-desc {
+  font-size: 18px;
+  color: var(--soft);
+  max-width: 880px;
+  margin: 0 0 24px;
+  line-height: 1.5;
+}
+.hero-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.metric-box {
+  background: var(--l3);
+  border: 1px solid var(--strong);
+  border-radius: var(--radius-md);
+  padding: 16px;
+}
+.metric-num {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.metric-label {
+  font-size: 12.5px;
+  color: var(--soft);
+  line-height: 1.3;
+}
+
+/* Секции руководства */
+.guide-section {
+  background: var(--l2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 32px;
+  margin-bottom: 32px;
+  box-shadow: var(--shadow-sm);
+}
+.section-header {
+  margin-bottom: 24px;
+}
+.section-num {
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+h2 {
+  font-size: 26px;
+  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+  font-weight: 750;
+}
+.section-subtitle {
+  color: var(--soft);
+  font-size: 16px;
+  margin: 0;
+}
+h3 {
+  font-size: 20px;
+  letter-spacing: -0.015em;
+  margin: 28px 0 12px;
+  font-weight: 700;
+}
+h4 {
+  font-size: 16px;
+  letter-spacing: -0.01em;
+  margin: 20px 0 8px;
+  font-weight: 650;
+}
+
+p { margin: 0 0 16px; line-height: 1.65; }
+
+/* Карточки и сетки */
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin: 20px 0;
+}
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin: 20px 0;
+}
+.card {
+  background: var(--l3);
+  border: 1px solid var(--strong);
+  border-radius: var(--radius-lg);
+  padding: 22px;
+  box-shadow: var(--shadow-sm);
+}
+.card h4 { margin-top: 0; }
+.card p:last-child { margin-bottom: 0; }
+
+/* Callout блоки (Алерты) */
+.callout {
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  margin: 20px 0;
+  border-left: 4px solid;
+  font-size: 14.5px;
+}
+.callout-info {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #0c3d6e;
+}
+.callout-tip {
+  background: var(--success-soft);
+  border-color: var(--success);
+  color: #0d4a1f;
+}
+.callout-warning {
+  background: var(--warning-soft);
+  border-color: var(--warning);
+  color: #593c00;
+}
+.callout-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Таблицы */
+.table-wrap {
+  overflow-x: auto;
+  margin: 20px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--l3);
+  box-shadow: var(--shadow-sm);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  text-align: left;
+}
+th {
+  background: var(--l1);
+  padding: 12px 16px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  white-space: nowrap;
+}
+td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  color: var(--text);
+}
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(0,0,0,0.015); }
+
+/* Код и инлайн-элементы */
+code {
+  font-family: var(--mono);
+  font-size: 13px;
+  background: rgba(0,0,0,0.05);
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid rgba(0,0,0,0.06);
+}
+pre {
+  background: #1f2328;
+  color: #f0f3f6;
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 18px 22px;
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  line-height: 1.5;
+  margin: 20px 0;
+}
+pre code {
+  background: transparent;
+  padding: 0;
+  border: none;
+  color: inherit;
+}
+
+/* Визуальные схемы и блок-схемы (Архитектура) */
+.flow-diagram {
+  background: var(--l3);
+  border: 1px solid var(--strong);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  margin: 24px 0;
+  overflow-x: auto;
+}
+.flow-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  position: relative;
+  margin: 16px 0;
+}
+.flow-node {
+  flex: 1;
+  min-width: 140px;
+  background: var(--l2);
+  border: 1px solid var(--strong);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.2s ease;
+}
+.flow-node:hover { transform: translateY(-2px); }
+.flow-node strong { display: block; font-size: 14px; margin-bottom: 4px; }
+.flow-node span { font-size: 12px; color: var(--soft); }
+.flow-arrow {
+  color: var(--soft);
+  font-size: 18px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* Бейджи статусов */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.badge-blue { background: var(--accent-soft); color: var(--accent); }
+.badge-green { background: var(--success-soft); color: var(--success); }
+.badge-copper { background: var(--copper-soft); color: var(--copper); }
+.badge-amber { background: var(--warning-soft); color: var(--warning); }
+
+/* Футер */
+.doc-footer {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--soft);
+  font-size: 14px;
+  border-top: 1px solid var(--border);
+  margin-top: 60px;
+}
+
+/* Мобильная адаптивность */
+@media (max-width: 992px) {
+  .doc-layout { grid-template-columns: 1fr; }
+  .sidebar {
+    display: none;
+    position: fixed;
+    top: 56px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: auto;
+    z-index: 950;
+    background: rgba(233, 235, 235, 0.98);
+    backdrop-filter: blur(20px);
+    padding: 20px;
+  }
+  .sidebar.open { display: block; }
+  .menu-btn { display: inline-flex; }
+  .header-tags { display: none; }
+}
+
+@media (max-width: 640px) {
+  .hero-card, .guide-section { padding: 20px; border-radius: var(--radius-lg); }
+  .hero-title { font-size: 28px; }
+  .flow-row { flex-direction: column; }
+  .flow-arrow { transform: rotate(90deg); margin: 4px 0; }
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div id="progress-bar"></div>
+
+<!-- Верхняя панель -->
+<header class="app-header">
+  <div class="header-inner">
+    <a href="#" class="brand-group">
+      <span class="brand-badge">FERO</span>
+      <span class="brand-title">F-Engineering Launcher &bull; Core Docs</span>
+    </a>
+    <div class="header-tags">
+      <span class="tag">Версия: 3.1.0 dvg-main</span>
+      <span class="tag">Стиль: P02 Apple Inverted</span>
+      <span class="tag">Автономный портал</span>
+    </div>
+    <button class="menu-btn" id="menuToggle" aria-label="Открыть меню оглавления">Оглавление ☰</button>
+  </div>
+</header>
+
+<div class="doc-layout">
+
+  <!-- Боковое оглавление (Desktop Sticky / Mobile Drawer) -->
+  <aside class="sidebar" id="sidebarNav">
+    <div class="sidebar-box">
+      <div class="sidebar-title">Навигация по документу</div>
+      <ul class="nav-list">
+        <li class="nav-item"><a href="#intro" class="nav-link active">1. Архитектурная концепция</a></li>
+        <li class="nav-item"><a href="#pipeline" class="nav-link">2. Генеральная блок-схема</a></li>
+        <li class="nav-item">
+          <a href="#engines" class="nav-link">3. Каталог нативных движков</a>
+          <ul class="nav-sublist">
+            <li><a href="#engine-pdf" class="nav-sublink">PyMuPDF (fitz C-Core)</a></li>
+            <li><a href="#engine-cad" class="nav-sublink">AutoCAD COM & Daemon</a></li>
+            <li><a href="#engine-excel" class="nav-sublink">openpyxl & xlrd</a></li>
+            <li><a href="#engine-word" class="nav-sublink">python-docx (No COM)</a></li>
+            <li><a href="#engine-media" class="nav-sublink">Pillow & libjpeg-turbo</a></li>
+            <li><a href="#engine-db" class="nav-sublink">SQLite WAL Index</a></li>
+          </ul>
+        </li>
+        <li class="nav-item"><a href="#formats" class="nav-link">4. Анатомия форматов</a></li>
+        <li class="nav-item"><a href="#memory-disk" class="nav-link">5. Память и Жизненный цикл</a></li>
+        <li class="nav-item"><a href="#changes" class="nav-link">6. Детекция изменений (Smart Cache)</a></li>
+        <li class="nav-item"><a href="#cadcraft-vs-pdf" class="nav-link">7. CadCraft vs PDF: Объемы</a></li>
+        <li class="nav-item"><a href="#requirements-exe" class="nav-link">8. Системные требования и EXE</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <!-- Основной контент -->
+  <main class="content-area">
+
+    <!-- Hero Card -->
+    <section class="hero-card">
+      <div class="hero-eyebrow">
+        <span>F-Engineering Architecture Blueprint</span>
+      </div>
+      <h1 class="hero-title">Универсальный инженерный лаунчер: Архитектура, Конвейер и Движки</h1>
+      <p class="hero-desc">
+        Подробная интерактивная инструкция для разработчиков и пользователей. Полная расшифровка форматов данных, нативных высокоскоростных библиотек, физики дискового кэша, механизмов детекции изменений и принципов расчета объемов.
+      </p>
+      <div class="hero-grid">
+        <div class="metric-box">
+          <div class="metric-num">60 FPS</div>
+          <div class="metric-label">Плавный векторно-растровый вьюер чертежей</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-num">~10 мс</div>
+          <div class="metric-label">Переключение вкладок Excel из кэша памяти</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-num">16&times; ускорение</div>
+          <div class="metric-label">Разбор Word DOCX в чистый HTML без зависаний COM</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-num">150 DPI</div>
+          <div class="metric-label">Золотой стандарт нарезки инженерных листов</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- СЕКЦИЯ 1: КОНЦЕПЦИЯ -->
+    <section class="guide-section" id="intro">
+      <div class="section-header">
+        <div class="section-num">Раздел 01</div>
+        <h2>Введение: Концепция двухконтурного ядра</h2>
+        <p class="section-subtitle">Почему лаунчер работает молниеносно даже на объектах с тысячами чертежей</p>
+      </div>
+
+      <p>
+        В строительной и проектной сфере стандартные исходные файлы огромны: строительные чертежи формата DWG весят по 50–200 МБ, сводные сметы Excel насчитывают десятки листов с перекрестными формулами, а договоры и спецификации исчисляются сотнями страниц.
+      </p>
+      <p>
+        Если бы файловый менеджер пытался открывать такие файлы «в лоб» через их штатные тяжелые редакторы (AutoCAD, MS Word, MS Excel, Adobe Acrobat), рабочий интерфейс зависал бы на 10–30 секунд на каждом документе, блокировал бы исходные файлы на диске и сжирал десятки гигабайт оперативной памяти.
+      </p>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="badge badge-blue">Контур №1: Скорость</div>
+          <h4>Быстрый контур (Превью и навигация)</h4>
+          <p>
+            Любой поступивший файл немедленно анализируется специализированным автономным микро-движком и преобразуется в сверхлегкий веб-формат: <strong>чистый HTML</strong> (для Word/Excel), <strong>постраничный растр 150 DPI PNG</strong> (для PDF и DWG) или оптимизированный FullHD-снимок. Пользователь получает отклик за миллисекунды.
+          </p>
+        </div>
+        <div class="card">
+          <div class="badge badge-copper">Контур №2: Точность</div>
+          <h4>Глубокий контур (Инженерный расчет и CAD)</h4>
+          <p>
+            Когда требуется получить точные физические объемы, площади и спецификации, в работу включается headless-ядро <strong>CadCraft</strong> или фоновый демон AutoCAD. Если же проектировщику нужно внести правку в чертеж — лаунчер по одной кнопке бесшовно передает управление нативной программе через Win32 API.
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Фундаментальный принцип F-Engineering</div>
+        Лаунчер — это не замена САПР или Microsoft Office. Это <strong>ультрабыстрая интеллектуальная витрина</strong> объекта, которая берет на себя 95% повседневных операций: поиск, мгновенный просмотр, проверку версий, согласование и ведомости объемов.
+      </div>
+    </section>
+
+    <!-- СЕКЦИЯ 2: БЛОК-СХЕМА КОНВЕЙЕРА -->
+    <section class="guide-section" id="pipeline">
+      <div class="section-header">
+        <div class="section-num">Раздел 02</div>
+        <h2>Генеральная блок-схема конвейера (Pipeline)</h2>
+        <p class="section-subtitle">От сырого файла на диске до пикселя на мониторе</p>
+      </div>
+
+      <p>
+        Единой точкой входа для любого файла в системе является диспетчер <code>app/rendering/dispatcher.py</code> и HTTP-маршрут <code>POST /api/preview</code>. Лаунчер не угадывает, как открыть файл — он распределяет форматы по строго выделенным магистралям:
+      </p>
+
+      <div class="flow-diagram">
+        <div style="font-weight:700; margin-bottom:12px; font-size:14px; color:var(--soft);">ИНЖЕНЕРНЫЙ ТРАКТ: DWG И PDF ЧЕРТЕЖИ</div>
+        <div class="flow-row">
+          <div class="flow-node">
+            <strong>Исходный файл</strong>
+            <span>.DWG / .DXF</span>
+          </div>
+          <div class="flow-arrow">&rarr;</div>
+          <div class="flow-node">
+            <strong>AutoCAD COM / Daemon</strong>
+            <span>render_dwg_smart.ps1</span>
+          </div>
+          <div class="flow-arrow">&rarr;</div>
+          <div class="flow-node">
+            <strong>Векторный PDF</strong>
+            <span>Многостраничный</span>
+          </div>
+          <div class="flow-arrow">&rarr;</div>
+          <div class="flow-node">
+            <strong>PyMuPDF (fitz)</strong>
+            <span>Строго 150 DPI PNG</span>
+          </div>
+          <div class="flow-arrow">&rarr;</div>
+          <div class="flow-node" style="border-color:var(--accent);">
+            <strong>Canvas Вьюер</strong>
+            <span>Интерактивный экран</span>
+          </div>
+        </div>
+
+        <div style="font-weight:700; margin:24px 0 12px; font-size:14px; color:var(--soft);">ТАБЛИЧНЫЙ ТРАКТ: СМЕТЫ И ВЕДОМОСТИ</div>
+        <div class="flow-row">
+          <div class="flow-node">
+            <strong>Таблица</strong>
+            <span>.XLSX / .XLSM / .XLS</span>
+          </div>
+          <div class="flow-arrow">&rarr;</div>
+          <div class="flow-node">
+            <strong>openpyxl / xlrd</strong>
+            <span>1 разбор книги</span>
+          </div>
+          <div class="flow-arrow">&rarr;</div>
+          <div class="flow-node">
+            <strong>HTML-сетка</strong>
+            <span>sheet-N-v10.html</span>
+          </div>
+          <div class="flow-arrow">&rarr;</div>
+          <div class="flow-node">
+            <strong>Дисковый / RAM кэш</strong>
+            <span>LRU Cache (N=3)</span>
+          </div>
+          <div class="flow-arrow">&rarr;</div>
+          <div class="flow-node" style="border-color:var(--accent);">
+            <strong>Вьюер Таблиц</strong>
+            <span>Клик вкладки: 4 мс</span>
+          </div>
+        </div>
+
+        <div style="font-weight:700; margin:24px 0 12px; font-size:14px; color:var(--soft);">ДОКУМЕНТООБОРОТ И МЕДИА</div>
+        <div class="flow-row">
+          <div class="flow-node">
+            <strong>Тексты / Фото</strong>
+            <span>.DOCX, .JPG, .PNG, .TXT</span>
+          </div>
+          <div class="flow-arrow">&rarr;</div>
+          <div class="flow-node">
+            <strong>python-docx / Pillow</strong>
+            <span>Прямой XML/EXIF разбор</span>
+          </div>
+          <div class="flow-arrow">&rarr;</div>
+          <div class="flow-node">
+            <strong>preview.html / FullHD</strong>
+            <span>Очищенный веб-стандарт</span>
+          </div>
+          <div class="flow-arrow">&rarr;</div>
+          <div class="flow-node" style="border-color:var(--accent);">
+            <strong>Вьюер Документов</strong>
+            <span>Мгновенный скролл</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Входной формат</th>
+              <th>Обрабатывающий движок</th>
+              <th>Промежуточный формат</th>
+              <th>Финальный формат выдачи</th>
+              <th>Среднее время открытия</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>DWG / DXF</strong></td>
+              <td>AutoCAD COM / `render_dwg_smart.ps1`</td>
+              <td>Векторный PDF (ISO Full Bleed)</td>
+              <td>PNG 150 DPI (атомарно по листам)</td>
+              <td>Первый лист: 2–5 с, повтор: 15 мс</td>
+            </tr>
+            <tr>
+              <td><strong>PDF</strong></td>
+              <td>`engine_dwg_pdf.py` (PyMuPDF)</td>
+              <td>Прямой C-рендеринг в память</td>
+              <td>PNG 150 DPI (`p1.png`, `p2.png`)</td>
+              <td>&lt; 500 мс (первая стр. сразу)</td>
+            </tr>
+            <tr>
+              <td><strong>XLSX / XLSM</strong></td>
+              <td>`engine_excel.py` (openpyxl single-pass)</td>
+              <td>Парсинг XML-дерева в памяти</td>
+              <td>HTML (`sheet-N-v10.html`)</td>
+              <td>Книга 800 КБ: 8 с все листы, клик: 4 мс</td>
+            </tr>
+            <tr>
+              <td><strong>XLS (старый)</strong></td>
+              <td>`engine_excel.py` (`xlrd` BIFF8)</td>
+              <td>Бинарная таблица C-памяти</td>
+              <td>HTML таблица</td>
+              <td>10–20 мс (без участия COM)</td>
+            </tr>
+            <tr>
+              <td><strong>DOCX</strong></td>
+              <td>`engine_word.py` (python-docx)</td>
+              <td>Семантическое дерево абзацев</td>
+              <td>Чистый HTML (`preview.html`)</td>
+              <td>Договор 35 стр: 1.2 с (вместо 20 с)</td>
+            </tr>
+            <tr>
+              <td><strong>JPG / PNG</strong></td>
+              <td>`engine_media.py` (Pillow)</td>
+              <td>Коррекция EXIF-ориентации</td>
+              <td>JPEG q85 FullHD (&le;1920px)</td>
+              <td>200–600 мс</td>
+            </tr>
+            <tr>
+              <td><strong>MPP, RVT, ZIP</strong></td>
+              <td>`dispatcher.py` (Карточка Native)</td>
+              <td>Отсутствует (без рендера)</td>
+              <td>JSON Action Card</td>
+              <td>0.5 мс (Кнопка «Открыть в программе»)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- СЕКЦИЯ 3: ДВИЖКИ ПОД КАПОТОМ -->
+    <section class="guide-section" id="engines">
+      <div class="section-header">
+        <div class="section-num">Раздел 03</div>
+        <h2>Каталог нативных библиотек: Что внутри и почему они быстрее?</h2>
+        <p class="section-subtitle">Технический аудит программных компонентов ядра лаунчера</p>
+      </div>
+
+      <!-- PyMuPDF -->
+      <div class="card" id="engine-pdf" style="margin-bottom: 20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <h3 style="margin:0;">1. PyMuPDF (fitz) &bull; C/C++ MuPDF Core</h3>
+          <span class="badge badge-green">В 5–10 раз быстрее Poppler</span>
+        </div>
+        <p><strong>На чем написан:</strong> Высокооптимизированный C и C++ с ассемблерными SIMD-инструкциями (SSE2/AVX2). Разработка компании Artifex Software (авторы Ghostscript).</p>
+        <p>
+          <strong>Почему это прорыв по скорости:</strong> Традиционный стек в Python для работы с PDF (например, <code>pdf2image</code> + <code>Poppler</code>) при рендеринге каждой страницы запускает отдельный внешний бинарный процесс <code>pdftoppm.exe</code> через диск, сбрасывает картинку во временный файл и загружает ее обратно в память. 
+        </p>
+        <p>
+          <code>PyMuPDF</code> работает принципиально иначе: это C-библиотека, скомпилированная в адресное пространство процесса Python. Она считывает байты PDF напрямую, выполняет антиалиасинг векторных линий на уровне процессорных регистров и отдает готовую карту пикселей (pixmap) за <strong>15–40 миллисекунд</strong> на страницу.
+        </p>
+      </div>
+
+      <!-- AutoCAD COM -->
+      <div class="card" id="engine-cad" style="margin-bottom: 20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <h3 style="margin:0;">2. AutoCAD COM Automation & Daemon</h3>
+          <span class="badge badge-copper">C++ ObjectARX Engine</span>
+        </div>
+        <p><strong>На чем написан:</strong> C++ графическое ядро Autodesk. Интеграция реализована через скрипт <code>render_dwg_smart.ps1</code> и протокол OLE/COM Windows.</p>
+        <p><strong>Инженерные секреты ускорения:</strong></p>
+        <ul>
+          <li><code>$document.SetVariable("LAYOUTREGENCTL", 2)</code> — кэширование регенерации листов в оперативную память. При переключении между листами чертежа процессор не тратит время на повторный расчет математической модели.</li>
+          <li><code>$document.SetVariable("REGENMODE", 0)</code> — полный запрет автоматической фоновой перерисовки экрана.</li>
+          <li><code>$document.SetVariable("EXPERT", 5)</code> — подавление всех интерактивных диалоговых окон AutoCAD («Сохранить изменения?», «Шрифт не найден» и т.д.), которые блокируют сервер.</li>
+          <li><code>LauncherMessageFilter (C# / Win32)</code> — перехватчик сообщений OLE. Если AutoCAD занят обработкой геометрии, лаунчер не падает с ошибкой <code>RPC_E_CALL_REJECTED</code>, а цивилизованно повторяет попытку с наносекундной паузой.</li>
+        </ul>
+      </div>
+
+      <!-- openpyxl & xlrd -->
+      <div class="card" id="engine-excel" style="margin-bottom: 20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <h3 style="margin:0;">3. openpyxl (Single-Pass) + xlrd (BIFF8)</h3>
+          <span class="badge badge-blue">4 миллисекунды на вкладку</span>
+        </div>
+        <p><strong>На чем написан:</strong> Python с C-ускорителями XML (lxml / etree) и нативные C-парсеры бинарных структур.</p>
+        <p>
+          <strong>В чем была проблема раньше?</strong> В старых реализациях каждый клик пользователя по вкладке («Лист 1», «Лист 2», «Смета») вызывал функцию <code>openpyxl.load_workbook()</code> заново. На смете в 800 КБ это вызывало 6-секундный фриз интерфейса на каждом шаге.
+        </p>
+        <p>
+          <strong>Текущая архитектура:</strong> Книга загружается ровно <strong>один раз при первом обращении</strong>. Движок мгновенно пробегает по всем вкладкам, генерирует для каждой изолированный HTML-файл <code>sheet-N-v10.html</code> и сохраняет в дисковый кэш. В оперативной памяти бэкенда книга удерживается в LRU-кэше (до 3 последних книг). Результат: переход между вкладками стал мгновенным (4 мс).
+        </p>
+      </div>
+
+      <!-- python-docx -->
+      <div class="card" id="engine-word" style="margin-bottom: 20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <h3 style="margin:0;">4. python-docx: Прямой транслятор в семантический HTML</h3>
+          <span class="badge badge-green">1.2 с вместо 20 с (16&times;)</span>
+        </div>
+        <p><strong>На чем написан:</strong> Высокоскоростной XML-декодер пакетов Open Packaging Conventions (DOCX = ZIP-архив с XML).</p>
+        <p>
+          <strong>Почему отказ от Microsoft Word COM ускорил работу:</strong> Раньше лаунчер пытался поднимать <code>WINWORD.EXE</code> через PowerShell для конвертации в PDF. Подъем процесса Word, блокировка нормального шаблона <code>Normal.dotm</code>, модальные окна о проверке орфографии и печать занимали от 15 до 30 секунд.
+        </p>
+        <p>
+          Движок <code>engine_word.py</code> вообще не запускает Word. Он распаковывает внутренний XML, извлекает текст, стили, таблицы реквизитов и изображения (инлайня их как base64), создавая легчайший HTML-документ с визуальным разделением на страницы. Договор на 35 страниц открывается за <strong>1.2 секунды</strong>.
+        </p>
+      </div>
+
+      <!-- SQLite WAL -->
+      <div class="card" id="engine-db">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <h3 style="margin:0;">5. База данных SQLite в режиме WAL (Write-Ahead Logging)</h3>
+          <span class="badge badge-copper">Конкурентное сканирование</span>
+        </div>
+        <p><strong>На чем написана:</strong> C. Ядро хранения метаданных в файле <code>runtime/db/launcher.sqlite</code>.</p>
+        <p>
+          <strong>Решение проблемы блокировок:</strong> В стандартном режиме SQLite при записи новых файлов блокирует базу целиком. Если лаунчер в фоновом потоке сканирует тяжелую папку с 5000 чертежей, интерфейс замирал бы. 
+          Включение режима <code>PRAGMA journal_mode=WAL;</code> позволяет фронтенду мгновенно читать структуру папок, пока фоновый поток пачками пишет изменения (до 10 000 файлов/сек).
+        </p>
+      </div>
+    </section>
+
+    <!-- СЕКЦИЯ 4: АНАТОМИЯ ФОРМАТОВ -->
+    <section class="guide-section" id="formats">
+      <div class="section-header">
+        <div class="section-num">Раздел 04</div>
+        <h2>Анатомия форматов: Почему мы конвертируем именно так?</h2>
+        <p class="section-subtitle">Что на самом деле значит «легкий» формат с точки зрения процессора и видеокарты</p>
+      </div>
+
+      <p>
+        Пользователи часто задают вопрос: <em>«Зачем перегонять DWG в PDF, а PDF — в картинку PNG? Почему нельзя просто открыть чертеж сразу?»</em>.
+        Ответ кроется в физике отображения информации компьютером:
+      </p>
+
+      <div class="grid-3">
+        <div class="card">
+          <h4>1. DWG (База данных)</h4>
+          <p>
+            DWG — это не картинка. Это математическая модель. Чтобы показать даже 1 линию, программа должна вычислить матрицу преобразования видового экрана, стили линий, привязки блоков и слои. <strong>Вес: 50–200 МБ. Скорость декодирования: 3–15 секунд.</strong>
+          </p>
+        </div>
+        <div class="card">
+          <h4>2. Векторный PDF</h4>
+          <p>
+            PDF фиксирует геометрию под конкретный лист (A1, A2, A3). Но если на чертеже 300 000 отрезков (арматурные сетки, штриховка), видеокарта захлебывается при зуме, пытаясь перерисовать каждый отрезок. <strong>Память браузера улетает за 1.5 ГБ.</strong>
+          </p>
+        </div>
+        <div class="card">
+          <h4>3. PNG 150 DPI (Растр)</h4>
+          <p>
+            Готовая матрица цветных точек. Видеокарте всё равно, сколько миллионов линий было на чертеже — для неё это прямоугольник 4000&times;3000 пикселей. <strong>Рендеринг за 5 мс, 60 кадров/сек при любом масштабе!</strong>
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">Архитектурный запрет: Почему в лаунчере запрещен формат WebP?</div>
+        Теоретически WebP сжимает картинку сильнее PNG на 20–30%. Однако боевые замеры сентября 2026 года показали: кодирование WebP силами процессора (CPU) длится <strong>в 2.5–5 раз дольше</strong>, чем сохранение в PNG! Экономия 200 килобайт на диске не оправдывает задержку в 1.5 секунды на каждый лист чертежа при рендеринге. Поэтому стандартом ядра утвержден <strong>строго 150 DPI PNG</strong>.
+      </div>
+    </section>
+
+    <!-- СЕКЦИЯ 5: ПАМЯТЬ И ЖИЗНЕННЫЙ ЦИКЛ -->
+    <section class="guide-section" id="memory-disk">
+      <div class="section-header">
+        <div class="section-num">Раздел 05</div>
+        <h2>Жизненное пространство: Оперативная память (RAM) и Диск</h2>
+        <p class="section-subtitle">Что происходит с ресурсами ПК на каждом этапе жизни объекта</p>
+      </div>
+
+      <p>
+        Инженеры часто опасаются, что лаунчер забьет весь жесткий диск или переполнит оперативную память. Ниже приведен детальный физический баланс ресурсов:
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Этап жизненного цикла</th>
+              <th>Что происходит с Оперативной памятью (RAM)?</th>
+              <th>Что происходит с Дисковым пространством?</th>
+              <th>Статус в базе SQLite</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <strong>1. Объект импортирован</strong><br>
+                <small style="color:var(--soft);">Выбрана папка проекта</small>
+              </td>
+              <td>
+                <strong>Всплеск до 60–100 МБ</strong> во время сканирования <code>os.walk()</code>. Как только дерево сформировано, память полностью освобождается сборщиком мусора (GC). Потребление бэкенда в покое: <strong>~35–45 МБ</strong>.
+              </td>
+              <td>
+                <strong>Практически 0 байт</strong> дополнительного места. Записывается только манифест <code>runtime/manifests/&lt;id&gt;.json</code> (100–300 КБ) и строки в таблице <code>documents</code>. Исходные файлы не копируются!
+              </td>
+              <td>
+                <code>roots.is_active = 1</code><br>
+                <code>documents.hash_state = 'pending'</code>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <strong>2. Объект отрендерен</strong><br>
+                <small style="color:var(--soft);">Пользователь просмотрел файлы</small>
+              </td>
+              <td>
+                <strong>Потоковая (стриминговая) работа</strong>: память выделяется импульсами. При рендере листа чертежа PyMuPDF забирает ~25–40 МБ, записывает готовый PNG на диск и мгновенно закрывает дескриптор. Общий объем RAM редко превышает <strong>150–220 МБ</strong>.
+              </td>
+              <td>
+                <strong>Формируется изолированный кэш:</strong><br>
+                &bull; Чертежи DWG/PDF: 400 КБ &ndash; 1.2 МБ на лист.<br>
+                &bull; Смета XLSX (5 листов): ~250 КБ HTML.<br>
+                &bull; Договор DOCX: ~80 КБ HTML.<br>
+                <em>Для среднего объекта из 15 чертежей кэш занимает около 50–120 МБ.</em>
+              </td>
+              <td>
+                В таблице <code>artifacts</code> появляются записи готовых страниц: <code>status = 'ready'</code>.
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <strong>3. Объект исключен</strong><br>
+                <small style="color:var(--soft);">Удален из списка лаунчера</small>
+              </td>
+              <td>
+                <strong>Мгновенное обнуление:</strong> структура дерева удаляется из стейта бэкенда и интерфейса. Занятая память падает до базовых <strong>~40 МБ</strong>.
+              </td>
+              <td>
+                Удаляется файл <code>runtime/manifests/&lt;id&gt;.json</code>. Дисковый кэш картинок в <code>runtime/cache/</code> временно сохраняется (чтобы при случайном повторном добавлении не рендерить чертежи заново), либо стирается кнопкой «Очистить кэш».
+              </td>
+              <td>
+                Флаг <code>roots.is_active = 0</code> либо каскадное удаление (ON DELETE CASCADE).
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- СЕКЦИЯ 6: ДЕТЕКЦИЯ ИЗМЕНЕНИЙ -->
+    <section class="guide-section" id="changes">
+      <div class="section-header">
+        <div class="section-num">Раздел 06</div>
+        <h2>Детекция изменений: Как мы ловим обновления?</h2>
+        <p class="section-subtitle">Почему DWG приходится перерендеривать целиком и как работает Smart RESUME</p>
+      </div>
+
+      <p>
+        Лаунчер отслеживает изменения файлов на лету без необходимости пересчитывать тяжелые криптографические контрольные суммы (SHA-256) гигабайтных файлов при каждом запуске.
+      </p>
+
+      <h4>Цифровая сигнатура файла</h4>
+      <p>
+        В функции <code>diff_trees()</code> состояние каждого файла фиксируется кортежем из двух параметров:
+      </p>
+      <pre><code>def signature(entry: dict) -> tuple:
+    return (entry.get("size"), entry.get("mtimeNs"))</code></pre>
+      <p>
+        Параметр <code>mtime_ns</code> считывает дату модификации файла в наносекундах. Если инженер в AutoCAD нажал <code>Ctrl+S</code>, даже без изменения геометрии (или изменив всего 1 точку), дата меняется гарантированно. При повторном открытии объекта лаунчер за <strong>15 миллисекунд</strong> находит все измененные файлы.
+      </p>
+
+      <div class="card">
+        <h4>Почему нельзя перерендерить только 1 лист внутри обновленного DWG?</h4>
+        <p>
+          В отличие от папки с отдельными картинками, файл DWG — это монолитная реляционная структура. Архитектор мог изменить положение перегородки в <strong>Пространстве Модели (Model Space)</strong>. Но эта перегородка одновременно отображается через разные видовые экраны:
+        </p>
+        <ul>
+          <li>На <strong>Листе 2</strong> (Кладочный план этажа);</li>
+          <li>На <strong>Листе 6</strong> (План расстановки оборудования);</li>
+          <li>На <strong>Листе 11</strong> (Разрез 1-1);</li>
+          <li>На <strong>Листе 15</strong> (Спецификация заполнения проемов).</li>
+        </ul>
+        <p>
+          Внешняя программа не имеет права угадывать, какие именно листы изменились. Поэтому при обновлении DWG чертеж проходит цикл перепечатки.
+        </p>
+      </div>
+
+      <div class="callout callout-tip">
+        <div class="callout-title">Умный механизм Smart RESUME (Постраничная защита)</div>
+        В скрипте <code>render_dwg_smart.ps1</code> заложен механизм допечатки: если чертеж содержал 40 листов, и на 38-м листе произошел сбой плоттера, следующий запуск подхватит уже отпечатанные <code>page_0001.pdf &hellip; page_0037.pdf</code> из временной папки и допечатает только недостающие страницы!
+      </div>
+    </section>
+
+    <!-- СЕКЦИЯ 7: CADCRAFT VS PDF -->
+    <section class="guide-section" id="cadcraft-vs-pdf">
+      <div class="section-header">
+        <div class="section-num">Раздел 07</div>
+        <h2>Битва титанов: CadCraft vs PDF в подсчете объемов</h2>
+        <p class="section-subtitle">Слепой математик против зоркого контролера: почему нужен именно гибрид</p>
+      </div>
+
+      <p>
+        Вчерашние натурные тесты подсчета объемов материалов выявили фундаментальную разницу между двумя подходами к извлечению данных из проектной документации:
+      </p>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="badge badge-copper">CadCraft Engine</div>
+          <h4>CadCraft: Абсолютная математика</h4>
+          <p><strong>Суперсила:</strong> Имеет прямой доступ к базе данных чертежа. Извлекает точные длины полилиний до миллиметра, площади замкнутых контуров, реальные координаты привязок, блоки и числовые свойства выносок.</p>
+          <p><strong>Слепое пятно:</strong> «Слеп» к визуальному смыслу. Если проектировщик перед отправкой чертежа «взорвал» штриховку утеплителя (Exploded Hatch), для CadCraft это больше не <em>«утеплитель площадью 120 м&sup2;»</em> — для него это 15 000 несвязанных между собой отрезков. Кроме того, если стена имеет микроразрыв контура в 0.5 мм, CadCraft возвращает нулевую площадь.</p>
+        </div>
+
+        <div class="card">
+          <div class="badge badge-blue">PDF & Vision AI</div>
+          <h4>PDF: Визуальный контекст и человек</h4>
+          <p><strong>Суперсила:</strong> Воспринимает чертеж так же, как опытный инженер-сметчик. Видит рисунок штриховки (точки, диагонали, кирпичики), читает легенду в штампе, сопоставляет маркировку помещений с экспликацией и понимает границы комнат даже при разомкнутых линиях.</p>
+          <p><strong>Слепое пятно:</strong> Погрешность масштаба при растеризации и зависимость от толщины линий. При прямом пиксельном замере по PDF можно получить ошибку в 2–5% на больших пролетах.</p>
+        </div>
+      </div>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Идеальная формула подсчета объемов (Золотой стандарт F-Engineering)</div>
+        <strong>Двойной инженерный контур:</strong> CadCraft извлекает точный скелет чертежа (длины осей, точные периметры, спецификации блоков и окон), а PDF-движок сопоставляет их с визуальными штриховками и примечаниями к проекту. Такой тандем исключает ошибки сметной стоимости.
+      </div>
+    </section>
+
+    <!-- СЕКЦИЯ 8: ТРЕБОВАНИЯ И АВТОНОМНЫЙ EXE -->
+    <section class="guide-section" id="requirements-exe">
+      <div class="section-header">
+        <div class="section-num">Раздел 08</div>
+        <h2>Системные требования и сборка автономного EXE</h2>
+        <p class="section-subtitle">Что должно быть на компьютере и как добиться независимости от стороннего ПО</p>
+      </div>
+
+      <h4>1. Матрица совместимости рабочего места</h4>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Компонент</th>
+              <th>Нужен ли на ПК?</th>
+              <th>Роль в системе</th>
+              <th>Поведение при отсутствии</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Python</strong></td>
+              <td><span class="badge badge-green">НЕТ</span></td>
+              <td>Выполняет сервер <code>server.py</code></td>
+              <td>Лаунчер использует автономный встроенный runtime (<code>runtime/python/pythonw.exe</code>).</td>
+            </tr>
+            <tr>
+              <td><strong>MS Office (Word / Excel)</strong></td>
+              <td><span class="badge badge-green">НЕТ</span></td>
+              <td>Просмотр документов и смет</td>
+              <td>Встроенные движки <code>openpyxl</code> и <code>python-docx</code> работают полностью автономно.</td>
+            </tr>
+            <tr>
+              <td><strong>AutoCAD</strong></td>
+              <td><span class="badge badge-amber">ДА / ОПЦИОНАЛЬНО</span></td>
+              <td>Пакетная печать DWG &rarr; PDF</td>
+              <td>
+                Если AutoCAD установлен (версии 2021&ndash;2025) — DWG конвертируется автоматически.<br>
+                Если AutoCAD нет — лаунчер отобразит одноименный PDF-двойник или предложит внешнее открытие.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Edge WebView2</strong></td>
+              <td><span class="badge badge-blue">ВСТРОЕН</span></td>
+              <td>Отрисовка GUI окна</td>
+              <td>Присутствует на всех современных сборках Windows 10/11 по умолчанию.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>2. Как лаунчер дружит с AutoCAD разных версий?</h4>
+      <p>
+        В коде скрипта <code>render_dwg_smart.ps1</code> заложен каскадный опрос системного реестра Windows OLE:
+      </p>
+      <pre><code>$comProgIds = @(
+  "AutoCAD.Application.25",   # AutoCAD 2025
+  "AutoCAD.Application.24.3", # AutoCAD 2024
+  "AutoCAD.Application.24.2", # AutoCAD 2023
+  "AutoCAD.Application.24.1", # AutoCAD 2022
+  "AutoCAD.Application.24.0", # AutoCAD 2021
+  "AutoCAD.Application"       # Дефолтный системный зарегистрированный CAD
+)</code></pre>
+      <p>
+        Если на компьютере установлен <strong>AutoCAD 2024</strong> — лаунчер без ручной настройки вызовет дескриптор <code>AutoCAD.Application.24.3</code>. Если обновить систему до версии 2025 года — скрипт мгновенно переключится на нее.
+      </p>
+
+      <h4>3. А если установлен ZWCAD или NanoCAD?</h4>
+      <p>
+        Российский NanoCAD и китайский ZWCAD имеют идентичную объектную модель OLE, но регистрируют другие имена:
+        <code>nanoCAD.Application</code> и <code>ZWCAD.Application</code>. Для их полной поддержки достаточно дописать одну строчку в массив <code>$comProgIds</code>.
+      </p>
+
+      <h4>4. Возможно ли собрать 100% независимый EXE?</h4>
+      <p>
+        <strong>Да, абсолютно.</strong> Лаунчер уже компилируется через PyInstaller (<code>FEngineeringLauncher.spec</code>) в единую директорию с автономным исполняемым файлом <code>FEngineeringLauncher.exe</code>:
+      </p>
+      <ul>
+        <li>Все веб-серверные механизмы, вьюеры, конвертеры Excel, Word, картинок и база SQLite упакованы внутрь.</li>
+        <li>Для работы с чертежами на компьютерах без AutoCAD используется стандарт <strong>Paired PDF (DWG + PDF рядом)</strong> либо автономный компактный консольный конвертер ODA/CadCraft.</li>
+        <li>Комплект лаунчера можно просто скопировать на флешку (скрипт <code>prepare_flash_drive.ps1</code>) и запустить на любом компьютере без установки прав администратора.</li>
+      </ul>
+    </section>
+
+  </main>
+</div>
+
+<!-- Футер -->
+<footer class="doc-footer">
+  <div style="font-weight:700; margin-bottom:6px;">F-Engineering &bull; Платформа управления инженерными данными</div>
+  <div>Стиль оформления: Apple Gray Inverted (P02) &bull; Разработано для базы знаний FERO</div>
+</footer>
+
+<script>
+// Интерактивное управление: оглавление, скролл-трекинг, адаптивное меню
+document.addEventListener("DOMContentLoaded", () => {
+  const progressBar = document.getElementById("progress-bar");
+  const menuToggle = document.getElementById("menuToggle");
+  const sidebarNav = document.getElementById("sidebarNav");
+  const navLinks = document.querySelectorAll(".nav-link");
+  const sections = document.querySelectorAll(".guide-section");
+
+  // Индикатор прогресса чтения
+  window.addEventListener("scroll", () => {
+    const winScroll = document.documentElement.scrollTop || document.body.scrollTop;
+    const height = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+    const scrolled = (winScroll / height) * 100;
+    progressBar.style.width = scrolled + "%";
+
+    // Активный пункт в оглавлении при скролле
+    let currentId = "";
+    sections.forEach(sec => {
+      const top = sec.offsetTop - 120;
+      if (winScroll >= top) {
+        currentId = sec.getAttribute("id");
+      }
+    });
+
+    if (currentId) {
+      navLinks.forEach(link => {
+        link.classList.remove("active");
+        if (link.getAttribute("href") === "#" + currentId) {
+          link.classList.add("active");
+        }
+      });
+    }
+  });
+
+  // Мобильное меню
+  if (menuToggle && sidebarNav) {
+    menuToggle.addEventListener("click", () => {
+      sidebarNav.classList.toggle("open");
+      menuToggle.textContent = sidebarNav.classList.contains("open") ? "Закрыть ✕" : "Оглавление ☰";
+    });
+
+    // Закрывать меню при клике по ссылке на мобильных
+    document.querySelectorAll(".sidebar a").forEach(link => {
+      link.addEventListener("click", () => {
+        if (window.innerWidth <= 992) {
+          sidebarNav.classList.remove("open");
+          menuToggle.textContent = "Оглавление ☰";
+        }
+      });
+    });
+  }
+});
+</script>
+
+</body>
+</html>

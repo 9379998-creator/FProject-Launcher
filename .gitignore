@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*.db
+.venv/
+venv/
+
+# Node / frontend tooling
+node_modules/
+dist/
+dist_setup/
+dist_release/
+build/
+
+# Local runtime data
+runtime/cache/**
+runtime/manifests/**
+runtime/logs/**
+runtime/bench/**
+runtime/db/**
+runtime/native_apps.json
+!runtime/cache/.gitkeep
+!runtime/manifests/.gitkeep
+!runtime/logs/.gitkeep
+!runtime/db/.gitkeep
+
+# DWG render probe artifacts and stray test drawings
+runtime/dwg-probe/
+*.dwg.tmp
+# Loose test DWG in repo root (12 MB probe) — not source
+/да.dwg
+
+# Generated previews and exports
+renders/
+output/
+tmp/
+temp/
+*.log
+
+# Secrets
+.env
+.env.*
+*.key
+*.token
+
+# Backups
+*.bak
+
+# Local research & isolated test paths
+.local-research/
+scratch/
+runtime/tools/
+*_ab143b992d3f/
+*_46c564db6d68/
+
+# OS
+.DS_Store
+Thumbs.db
+
+
+# Review bundles and exports
+REVIEW_BUNDLE_*.txt
+export_for_review/
+*.pyc
+runtime/
