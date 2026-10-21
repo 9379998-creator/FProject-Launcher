@@ -1,4 +1,4 @@
-﻿// Perf-маяк в DevTools Console (замеры фронта, видны на вкладке Console, F12).
+// Perf-маяк в DevTools Console (замеры фронта, видны на вкладке Console, F12).
 function beaconPerf(label, ms, extra = "") {
   try {
     const text = `[perf] ${label} ${Math.round(ms)}ms ${extra}`.trim();
@@ -158,6 +158,12 @@ const els = {
   viewerSearchNext: document.getElementById("viewerSearchNext"),
   viewerSearchClose: document.getElementById("viewerSearchClose"),
   searchHighlightLayer: document.getElementById("searchHighlightLayer"),
+  viewerSearchTranslate: document.getElementById("viewerSearchTranslate"),
+  translationPopover: document.getElementById("translationPopover"),
+  translationOriginal: document.getElementById("translationOriginal"),
+  translationResult: document.getElementById("translationResult"),
+  translationClose: document.getElementById("translationClose"),
+  translationCopyBtn: document.getElementById("translationCopyBtn"),
 
 };
 
@@ -3927,6 +3933,10 @@ function showPdfPage(page, options = {}) {
   setActiveNativePath(targetDocPath);
   revealPathInTree(targetDocPath, { updateSelection: true, skipScroll: skipTreeScroll });
   state.activePageUrl = displayPage.url;
+  els.pdfPageImage.onload = () => {
+    applyPageView();
+    renderSearchHighlightsForActivePage();
+  };
   els.pdfPageImage.src = displayPage.url;
   els.pdfPageImage.hidden = false;
   if (displayPage.url && displayPage.url.includes("/dwg/")) {
@@ -6903,7 +6913,7 @@ function renderSearchHighlightsForActivePage() {
       hitEl.classList.add("active-hit");
     }
 
-    hitEl.title = `Артикул / совпадение #${idx + 1} (клик для перехода)`;
+    hitEl.title = hit.text ? `${hit.text} (клик для фокуса и перевода)` : `Совпадение #${idx + 1}`;
     hitEl.addEventListener("click", (e) => {
       e.stopPropagation();
       const flatIdx = state.search.allHitsFlat.findIndex(
@@ -6914,6 +6924,9 @@ function renderSearchHighlightsForActivePage() {
         updateSearchStatusDisplay();
         renderSearchHighlightsForActivePage();
         centerOnSearchHit(hit);
+        if (els.translationPopover && !els.translationPopover.hidden) {
+          translateCurrentSelectionOrQuery(hit.text);
+        }
       }
     });
 
@@ -6954,5 +6967,64 @@ els.viewerSearchInput?.addEventListener("keydown", (e) => {
   } else if (e.key === "Escape") {
     e.preventDefault();
     closeViewerSearch();
+  }
+});
+
+
+// =============================================================================
+// Модуль инженерного перевода (Translation Popover & API)
+// =============================================================================
+
+async function translateCurrentSelectionOrQuery(textOverride) {
+  let textToTranslate = String(textOverride || "").trim();
+  if (!textToTranslate) {
+    const currentHit = state.search?.allHitsFlat?.[state.search?.currentHitIdx];
+    if (currentHit && currentHit.text) {
+      textToTranslate = currentHit.text.trim();
+    } else if (els.viewerSearchInput && els.viewerSearchInput.value.trim()) {
+      textToTranslate = els.viewerSearchInput.value.trim();
+    }
+  }
+
+  if (!textToTranslate) {
+    showToast("Введите текст в поиск или выберите совпадение на чертеже");
+    return;
+  }
+
+  if (!els.translationPopover) return;
+  els.translationPopover.hidden = false;
+  if (els.translationOriginal) els.translationOriginal.textContent = textToTranslate;
+  if (els.translationResult) els.translationResult.textContent = "Переводим…";
+
+  try {
+    const resp = await fetch("/api/translate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: textToTranslate, target: "ru" }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "Ошибка перевода");
+    if (els.translationResult) {
+      els.translationResult.textContent = data.translated || "—";
+    }
+  } catch (err) {
+    if (els.translationResult) {
+      els.translationResult.textContent = `Ошибка: ${err.message}`;
+    }
+  }
+}
+
+els.viewerSearchTranslate?.addEventListener("click", () => translateCurrentSelectionOrQuery());
+
+els.translationClose?.addEventListener("click", () => {
+  if (els.translationPopover) els.translationPopover.hidden = true;
+});
+
+els.translationCopyBtn?.addEventListener("click", () => {
+  const resText = els.translationResult?.textContent || "";
+  if (resText && !resText.startsWith("Ошибка") && resText !== "Переводим…") {
+    navigator.clipboard.writeText(resText).then(() => {
+      showToast("Перевод скопирован в буфер");
+    });
   }
 });

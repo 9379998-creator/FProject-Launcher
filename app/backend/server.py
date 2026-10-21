@@ -2865,6 +2865,69 @@ def get_pdf_toc(path: Path) -> dict:
             }
 
 
+ENGINEERING_GLOSSARY = {
+    "mullion": "стойка (фасадная)",
+    "transom": "ригель (фасадный)",
+    "pressure plate": "прижимная планка",
+    "cover cap": "декоративная крышка (капот)",
+    "thermal break": "термомост (термовставка)",
+    "thermal isolator": "термоизолятор",
+    "gasket": "уплотнитель (EPDM)",
+    "bracket": "кронштейн опорный/несущий",
+    "anchor": "анкер / дюбель",
+    "insulation": "утеплитель / минвата",
+    "mineral wool": "минеральная вата",
+    "composite panel": "композитная панель",
+    "expansion joint": "температурный / деформационный шов",
+    "sealant": "герметик",
+    "facade": "фасад",
+    "curtain wall": "навесной светопрозрачный фасад (НСПФ / СПК)",
+    "ventilated facade": "навесной вентилируемый фасад (НВФ)",
+    "glazing": "остекление / стеклопакет",
+    "double glazing": "двухкамерный стеклопакет",
+    "spandrel": "стемалит / глухая зона межэтажного пояса",
+    "flashing": "отлив / нащельник / оцинкованный фартук",
+    "weep hole": "дренажное отверстие",
+    "fastener": "крепеж / метизы",
+    "rivet": "заклепка",
+    "self-tapping screw": "саморез",
+}
+
+def translate_text(text: str, target_lang: str = "ru") -> dict:
+    text_clean = text.strip()
+    if not text_clean:
+        return {"original": "", "translated": "", "source": "none"}
+    
+    lower_t = text_clean.lower()
+    if lower_t in ENGINEERING_GLOSSARY:
+        return {
+            "original": text_clean,
+            "translated": ENGINEERING_GLOSSARY[lower_t],
+            "source": "glossary"
+        }
+    
+    import urllib.request, json, urllib.parse
+    try:
+        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target_lang}&dt=t&q=" + urllib.parse.quote(text_clean)
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            translated = "".join([part[0] for part in data[0] if part and part[0]])
+            detected_sl = data[2] if len(data) > 2 else "auto"
+            return {
+                "original": text_clean,
+                "translated": translated,
+                "detectedSource": detected_sl,
+                "source": "google"
+            }
+    except Exception as e:
+        logger.warning("Translation error: %s", e)
+        return {
+            "original": text_clean,
+            "translated": f"Не удалось перевести: {e}",
+            "source": "error"
+        }
+
 def search_pdf_document(path: Path, query: str) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"PDF не найден: {path}")
@@ -2912,9 +2975,12 @@ def search_pdf_document(path: Path, query: str) -> dict:
             for p_idx in range(total_pages):
                 page = doc[p_idx]
                 p_num = p_idx + 1
-                rect = page.rect
-                pw = rect.width
-                ph = rect.height
+
+                # Учитываем реальный поворот листа (0, 90, 180, 270) и смещения CropBox
+                rot_mat = page.rotation_matrix
+                rot_box = (page.cropbox * rot_mat).normalize()
+                pw = rot_box.width
+                ph = rot_box.height
                 if pw <= 0 or ph <= 0:
                     continue
 
@@ -2923,22 +2989,24 @@ def search_pdf_document(path: Path, query: str) -> dict:
                     found = page.search_for(q_variant)
                     if found:
                         for r in found:
-                            if not any(abs(r.x0 - ex.x0) < 2 and abs(r.y0 - ex.y0) < 2 for ex in page_rects):
-                                page_rects.append(r)
+                            r_rot = (r * rot_mat).normalize()
+                            if not any(abs(r_rot.x0 - ex[0].x0) < 2 and abs(r_rot.y0 - ex[0].y0) < 2 for ex in page_rects):
+                                page_rects.append((r_rot, r))
 
                 if page_rects:
                     page_hits = []
-                    for r in page_rects:
+                    for r_rot, r_orig in page_rects:
+                        try:
+                            matched_txt = page.get_textbox(r_orig).strip()
+                        except Exception:
+                            matched_txt = query
                         page_hits.append({
                             "page": p_num,
-                            "x0": round(r.x0, 2),
-                            "y0": round(r.y0, 2),
-                            "x1": round(r.x1, 2),
-                            "y1": round(r.y1, 2),
-                            "left": round((r.x0 / pw) * 100, 3),
-                            "top": round((r.y0 / ph) * 100, 3),
-                            "width": round(((r.x1 - r.x0) / pw) * 100, 3),
-                            "height": round(((r.y1 - r.y0) / ph) * 100, 3),
+                            "text": matched_txt or query,
+                            "left": round(((r_rot.x0 - rot_box.x0) / pw) * 100, 3),
+                            "top": round(((r_rot.y0 - rot_box.y0) / ph) * 100, 3),
+                            "width": round((r_rot.width / pw) * 100, 3),
+                            "height": round((r_rot.height / ph) * 100, 3),
                         })
                     hits_by_page[str(p_num)] = {
                         "page": p_num,
@@ -2968,7 +3036,6 @@ def search_pdf_document(path: Path, query: str) -> dict:
                 "pages": {},
                 "error": str(e),
             }
-
 
 class LauncherHandler(BaseHTTPRequestHandler):
     server_version = "FEngineeringLauncherV3/0.1"
@@ -3556,6 +3623,17 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 search_data = search_pdf_document(Path(raw_file), query)
                 self.send_json(HTTPStatus.OK, search_data)
             except (ValueError, FileNotFoundError, RuntimeError, OSError, json.JSONDecodeError) as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/translate":
+            try:
+                body = self.read_json()
+                text_to_translate = str(body.get("text", "")).strip()
+                target_lang = str(body.get("target", "ru")).strip()
+                res = translate_text(text_to_translate, target_lang=target_lang)
+                self.send_json(HTTPStatus.OK, res)
+            except Exception as error:
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
 

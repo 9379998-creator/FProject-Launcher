@@ -1,11 +1,11 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FProject Launcher</title>
   <link rel="icon" href="favicon.ico" type="image/x-icon">
-  <link rel="stylesheet" href="styles.css?v=20261016-clean-white-bg">
+  <link rel="stylesheet" href="styles.css?v=20261021-search-rotation-translate">
 </head>
 <body>
   <div class="app-window">
@@ -138,9 +138,24 @@
             <span class="viewer-search-status" id="viewerSearchStatus">0/0</span>
             <button type="button" id="viewerSearchPrev" title="Предыдущее совпадение (Shift+Enter)">▲</button>
             <button type="button" id="viewerSearchNext" title="Следующее совпадение (Enter)">▼</button>
+            <button type="button" id="viewerSearchTranslate" class="viewer-search-trans-btn" title="Перевести найденное слово / артикул (🌐)">🌐 Перевести</button>
             <button type="button" id="viewerSearchClose" title="Закрыть поиск (Esc)">✕</button>
           </div>
           <div id="searchHighlightLayer" class="search-highlight-layer" hidden></div>
+          <div class="translation-popover" id="translationPopover" hidden>
+            <div class="translation-head">
+              <span>🌐 Инженерный перевод</span>
+              <button type="button" id="translationClose" class="translation-close" title="Закрыть">✕</button>
+            </div>
+            <div class="translation-body">
+              <div class="translation-original" id="translationOriginal"></div>
+              <div class="translation-arrow">↓</div>
+              <div class="translation-result" id="translationResult">Загрузка…</div>
+            </div>
+            <div class="translation-actions">
+              <button type="button" id="translationCopyBtn" class="translation-btn" title="Скопировать перевод">Скопировать</button>
+            </div>
+          </div>
           <img id="pdfPageImage" alt="" hidden>
           <canvas id="pdfPageCanvas" hidden></canvas>
           <video id="mediaVideoViewer" controls hidden></video>
@@ -219,6 +234,6 @@
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'lib/pdfjs/pdf.worker.min.js';
   </script>
-  <script src="app.js?v=20261014-dwg-live-poll-v3"></script>
+  <script src="app.js?v=20261021-search-rotation-translate"></script>
 </body>
 </html>
