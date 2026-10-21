@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   --tree-scale: 1;
   --bg: #f5f6f8;
   --panel: #f5f6f8;
@@ -2133,4 +2133,167 @@ textarea:focus {
 }
 .native-card-open-btn:hover {
   background: #1d4ed8;
+}
+
+
+/* ==========================================================================
+   Инженерный поиск артикулов и текста (Search Bar & Highlighting)
+   ========================================================================== */
+
+.viewer-search-bar {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(10px);
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
+  padding: 4px 10px;
+  user-select: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.viewer-search-bar[hidden] {
+  display: none !important;
+}
+
+.viewer-search-icon {
+  font-size: 13px;
+  color: #0969da;
+  opacity: 0.85;
+}
+
+.viewer-search-bar input[type="search"] {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  width: 210px;
+  color: #1f2328;
+  padding: 2px 0;
+}
+
+.viewer-search-bar input[type="search"]::placeholder {
+  color: #8c959f;
+  font-size: 12px;
+}
+
+.viewer-search-status {
+  font-size: 11px;
+  font-weight: 600;
+  color: #57606a;
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  padding: 1px 6px;
+  min-width: 38px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.viewer-search-bar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #57606a;
+  transition: all 0.12s ease;
+}
+
+.viewer-search-bar button:hover {
+  background: #eef2f6;
+  color: #0969da;
+}
+
+.viewer-search-bar button:active {
+  background: #d8e2ec;
+}
+
+#viewerSearchClose:hover {
+  color: #cf222e;
+}
+
+/* Слой подсветки совпадений над страницей */
+.search-highlight-layer {
+  display: block;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: center center;
+  pointer-events: none;
+  z-index: 15;
+}
+
+.search-highlight-layer[hidden] {
+  display: none !important;
+}
+
+.search-hit {
+  position: absolute;
+  background: rgba(255, 230, 0, 0.42);
+  border: 1.5px solid rgba(210, 150, 0, 0.95);
+  border-radius: 3px;
+  cursor: pointer;
+  pointer-events: auto;
+  box-sizing: border-box;
+  transition: background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.search-hit:hover {
+  background: rgba(255, 230, 0, 0.7);
+  box-shadow: 0 0 8px rgba(255, 190, 0, 0.9);
+}
+
+.search-hit.active-hit {
+  background: rgba(0, 163, 255, 0.55) !important;
+  border: 2px solid #0066ff !important;
+  box-shadow: 0 0 14px rgba(0, 140, 255, 0.95);
+  animation: hit-pulse 1.6s infinite ease-in-out;
+}
+
+@keyframes hit-pulse {
+  0% { box-shadow: 0 0 6px rgba(0, 140, 255, 0.7); transform: scale(1); }
+  50% { box-shadow: 0 0 16px rgba(0, 210, 255, 1); transform: scale(1.02); }
+  100% { box-shadow: 0 0 6px rgba(0, 140, 255, 0.7); transform: scale(1); }
+}
+
+/* Бейджи количества совпадений на миниатюрах */
+.pdf-thumb {
+  position: relative;
+}
+
+.thumb-hit-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: #0969da;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  z-index: 10;
 }

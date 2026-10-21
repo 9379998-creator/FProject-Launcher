@@ -1,4 +1,4 @@
-// Perf-маяк в DevTools Console (замеры фронта, видны на вкладке Console, F12).
+﻿// Perf-маяк в DevTools Console (замеры фронта, видны на вкладке Console, F12).
 function beaconPerf(label, ms, extra = "") {
   try {
     const text = `[perf] ${label} ${Math.round(ms)}ms ${extra}`.trim();
@@ -48,6 +48,14 @@ const state = {
   diffPollTimer: null,
   dwgPollTimer: null,
   dwgStatusAbortController: null,
+  search: {
+    isOpen: false,
+    query: "",
+    results: null,
+    allHitsFlat: [],
+    currentHitIdx: -1,
+    activeFile: "",
+  },
   activeDwgPath: "",
   viewMode: "standard",
   viewerDpi: Number(localStorage.getItem("launcher_viewer_dpi")) || 150,
@@ -142,6 +150,14 @@ const els = {
   settingsOpenWinSettingsBtn: document.getElementById("settingsOpenWinSettingsBtn"),
   settingsDwgHint: document.getElementById("settingsDwgHint"),
   settingsSaveBtn: document.getElementById("settingsSaveBtn"),
+  viewToggleSearch: document.getElementById("viewToggleSearch"),
+  viewerSearchBar: document.getElementById("viewerSearchBar"),
+  viewerSearchInput: document.getElementById("viewerSearchInput"),
+  viewerSearchStatus: document.getElementById("viewerSearchStatus"),
+  viewerSearchPrev: document.getElementById("viewerSearchPrev"),
+  viewerSearchNext: document.getElementById("viewerSearchNext"),
+  viewerSearchClose: document.getElementById("viewerSearchClose"),
+  searchHighlightLayer: document.getElementById("searchHighlightLayer"),
 
 };
 
@@ -3930,7 +3946,10 @@ function showPdfPage(page, options = {}) {
   els.viewerControls.hidden = false;
   updateActivePdfThumb();
   updateViewerDpiButton();
-  if (els.pdfPageImage.complete && els.pdfPageImage.naturalWidth) applyPageView();
+  if (els.pdfPageImage.complete && els.pdfPageImage.naturalWidth) {
+    applyPageView();
+    renderSearchHighlightsForActivePage();
+  }
   
   requestHighQualityPage(page, currentDpi);
   
@@ -3976,6 +3995,14 @@ function updateViewTransform() {
   
   const canvas = document.getElementById("pdfPageCanvas");
   if (canvas) canvas.style.transform = transform;
+
+  if (els.searchHighlightLayer) {
+    els.searchHighlightLayer.style.transform = transform;
+    if (els.pdfPageImage && els.pdfPageImage.naturalWidth) {
+      els.searchHighlightLayer.style.width = els.pdfPageImage.naturalWidth + "px";
+      els.searchHighlightLayer.style.height = els.pdfPageImage.naturalHeight + "px";
+    }
+  }
 
   els.pdfStage.classList.toggle("pan-mode", view.panMode);
   els.pdfStage.classList.toggle("dragging", view.dragging);
@@ -5426,6 +5453,18 @@ window.addEventListener("wheel", (event) => {
 }, { passive: false });
 
 window.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && (event.key === "f" || event.key === "F" || event.key === "а" || event.key === "А")) {
+    if (state.renderedPages && state.renderedPages.length > 0) {
+      event.preventDefault();
+      openViewerSearch();
+      return;
+    }
+  }
+  if (event.key === "F3" && state.search.isOpen) {
+    event.preventDefault();
+    navigateToSearchHit(event.shiftKey ? -1 : 1);
+    return;
+  }
   if (event.ctrlKey && (event.key === "+" || event.key === "=" || event.key === "-" || event.key === "_" || event.key === "0")) {
     event.preventDefault();
   }
@@ -5786,6 +5825,18 @@ function stepThumbnails(delta) {
 }
 
 window.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && (event.key === "f" || event.key === "F" || event.key === "а" || event.key === "А")) {
+    if (state.renderedPages && state.renderedPages.length > 0) {
+      event.preventDefault();
+      openViewerSearch();
+      return;
+    }
+  }
+  if (event.key === "F3" && state.search.isOpen) {
+    event.preventDefault();
+    navigateToSearchHit(event.shiftKey ? -1 : 1);
+    return;
+  }
   const activeTag = document.activeElement?.tagName;
   const isInput = activeTag === "INPUT" || activeTag === "TEXTAREA";
 
@@ -6608,3 +6659,300 @@ try {
   const vm = String((typeof document !== "undefined" && document.currentScript && document.currentScript.src) || "").match(/[?&]v=([^&]+)/);
   if (vm) document.title = `FProject Launcher · ${decodeURIComponent(vm[1])}`;
 } catch (e) {}
+
+
+// =============================================================================
+// Инженерный поиск артикулов и текста в PDF (Search Engine)
+// =============================================================================
+
+function openViewerSearch() {
+  if (!els.viewerSearchBar) return;
+  state.search.isOpen = true;
+  els.viewerSearchBar.hidden = false;
+  if (els.viewerSearchInput) {
+    els.viewerSearchInput.focus();
+    els.viewerSearchInput.select();
+  }
+  const curDoc = getActiveDocumentPath();
+  if (curDoc && curDoc !== state.search.activeFile) {
+    state.search.activeFile = curDoc;
+    if (els.viewerSearchInput?.value.trim()) {
+      executePdfSearch(els.viewerSearchInput.value.trim());
+    }
+  }
+}
+
+function closeViewerSearch() {
+  if (!els.viewerSearchBar) return;
+  state.search.isOpen = false;
+  els.viewerSearchBar.hidden = true;
+  clearSearchHighlights();
+  clearThumbHitBadges();
+}
+
+function toggleViewerSearch() {
+  if (state.search.isOpen) {
+    closeViewerSearch();
+  } else {
+    openViewerSearch();
+  }
+}
+
+function getActiveDocumentPath() {
+  const activePage = state.renderedPages?.find((p) => pageKey(p) === state.activePageKey) || state.renderedPages?.[0];
+  return (activePage && (activePage.previewFor?.path || activePage.documentPath || activePage.sourcePath)) || state.activeNativePath || "";
+}
+
+function clearThumbHitBadges() {
+  document.querySelectorAll(".thumb-hit-badge").forEach((el) => el.remove());
+}
+
+function clearSearchHighlights() {
+  if (els.searchHighlightLayer) {
+    els.searchHighlightLayer.innerHTML = "";
+    els.searchHighlightLayer.hidden = true;
+  }
+}
+
+let _searchDebounceTimer = null;
+
+async function executePdfSearch(query) {
+  const q = String(query || "").trim();
+  state.search.query = q;
+  const docPath = getActiveDocumentPath();
+  state.search.activeFile = docPath;
+
+  if (!q || !docPath) {
+    state.search.results = null;
+    state.search.allHitsFlat = [];
+    state.search.currentHitIdx = -1;
+    if (els.viewerSearchStatus) els.viewerSearchStatus.textContent = "0/0";
+    clearSearchHighlights();
+    clearThumbHitBadges();
+    return;
+  }
+
+  if (els.viewerSearchStatus) els.viewerSearchStatus.textContent = "…";
+
+  try {
+    const resp = await fetch("/api/pdf/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file: docPath, query: q }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "Ошибка поиска");
+
+    state.search.results = data;
+    const flat = [];
+    const pages = data.pages || {};
+    const sortedPageNums = Object.keys(pages).map(Number).sort((a, b) => a - b);
+
+    for (const pNum of sortedPageNums) {
+      const pHits = pages[String(pNum)]?.hits || [];
+      pHits.forEach((hit, idx) => {
+        flat.push({ ...hit, page: pNum, hitIndexOnPage: idx });
+      });
+    }
+
+    state.search.allHitsFlat = flat;
+
+    // Обновляем бейджи на миниатюрах
+    clearThumbHitBadges();
+    if (els.pdfThumbs) {
+      const thumbItems = Array.from(els.pdfThumbs.querySelectorAll(".pdf-thumb"));
+      thumbItems.forEach((thumbEl, idx) => {
+        const pNum = idx + 1;
+        const pageData = pages[String(pNum)];
+        if (pageData && pageData.count > 0) {
+          const badge = document.createElement("span");
+          badge.className = "thumb-hit-badge";
+          badge.textContent = String(pageData.count);
+          badge.title = `Найдено совпадений: ${pageData.count}`;
+          thumbEl.appendChild(badge);
+        }
+      });
+    }
+
+    if (flat.length === 0) {
+      if (els.viewerSearchStatus) els.viewerSearchStatus.textContent = "0/0";
+      clearSearchHighlights();
+      showToast(`По запросу «${q}» ничего не найдено`);
+      return;
+    }
+
+    // Определяем текущий номер страницы
+    const activePage = state.renderedPages?.find((p) => pageKey(p) === state.activePageKey) || state.renderedPages?.[0];
+    const curPNum = Number(activePage?.page) || 1;
+
+    // Ищем первое совпадение на текущей странице, либо переходим к первой странице с совпадениями
+    const matchOnCurPageIdx = flat.findIndex((h) => h.page === curPNum);
+    if (matchOnCurPageIdx >= 0) {
+      state.search.currentHitIdx = matchOnCurPageIdx;
+    } else {
+      state.search.currentHitIdx = 0;
+      const firstHit = flat[0];
+      const targetPage = state.renderedPages?.find((p) => Number(p.page) === firstHit.page);
+      if (targetPage) {
+        showPdfPage(targetPage);
+      }
+    }
+
+    updateSearchStatusDisplay();
+    renderSearchHighlightsForActivePage();
+    if (flat[state.search.currentHitIdx]) {
+      centerOnSearchHit(flat[state.search.currentHitIdx]);
+    }
+  } catch (err) {
+    console.error("Search error:", err);
+    if (els.viewerSearchStatus) els.viewerSearchStatus.textContent = "Ошибка";
+    showToast(`Ошибка поиска: ${err.message}`);
+  }
+}
+
+function updateSearchStatusDisplay() {
+  if (!els.viewerSearchStatus) return;
+  const total = state.search.allHitsFlat?.length || 0;
+  if (total === 0) {
+    els.viewerSearchStatus.textContent = "0/0";
+  } else {
+    els.viewerSearchStatus.textContent = `${state.search.currentHitIdx + 1}/${total}`;
+  }
+}
+
+function navigateToSearchHit(direction) {
+  const flat = state.search.allHitsFlat;
+  if (!flat || flat.length === 0) return;
+
+  state.search.currentHitIdx = (state.search.currentHitIdx + direction + flat.length) % flat.length;
+  updateSearchStatusDisplay();
+
+  const targetHit = flat[state.search.currentHitIdx];
+  const activePage = state.renderedPages?.find((p) => pageKey(p) === state.activePageKey) || state.renderedPages?.[0];
+  const curPNum = Number(activePage?.page) || 1;
+
+  if (targetHit.page !== curPNum) {
+    const targetPage = state.renderedPages?.find((p) => Number(p.page) === targetHit.page);
+    if (targetPage) {
+      showPdfPage(targetPage);
+      setTimeout(() => {
+        renderSearchHighlightsForActivePage();
+        centerOnSearchHit(targetHit);
+      }, 90);
+      return;
+    }
+  }
+
+  renderSearchHighlightsForActivePage();
+  centerOnSearchHit(targetHit);
+}
+
+function centerOnSearchHit(hit) {
+  if (!hit || !els.pdfPageImage || !els.pdfStage) return;
+  const stage = els.pdfStage.getBoundingClientRect();
+  if (stage.width <= 0 || stage.height <= 0) return;
+
+  const nw = els.pdfPageImage.naturalWidth || 1000;
+  const nh = els.pdfPageImage.naturalHeight || 1000;
+
+  if (state.view.scale < 1.25) {
+    state.view.scale = 1.6;
+    state.view.userZoomed = true;
+  }
+
+  const hitCenterX = (hit.left + hit.width / 2 - 50) / 100 * nw;
+  const hitCenterY = (hit.top + hit.height / 2 - 50) / 100 * nh;
+
+  state.view.panX = -hitCenterX * state.view.scale;
+  state.view.panY = -hitCenterY * state.view.scale;
+
+  updateViewTransform();
+}
+
+function renderSearchHighlightsForActivePage() {
+  if (!els.searchHighlightLayer) return;
+  if (!state.search.isOpen || !state.search.results) {
+    clearSearchHighlights();
+    return;
+  }
+
+  const activePage = state.renderedPages?.find((p) => pageKey(p) === state.activePageKey) || state.renderedPages?.[0];
+  const curPNum = Number(activePage?.page) || 1;
+  const pageHits = state.search.results.pages?.[String(curPNum)]?.hits || [];
+
+  if (pageHits.length === 0) {
+    clearSearchHighlights();
+    return;
+  }
+
+  els.searchHighlightLayer.hidden = false;
+  els.searchHighlightLayer.innerHTML = "";
+
+  const currentFlatHit = state.search.allHitsFlat[state.search.currentHitIdx];
+
+  pageHits.forEach((hit, idx) => {
+    const hitEl = document.createElement("div");
+    hitEl.className = "search-hit";
+    hitEl.style.left = `${hit.left}%`;
+    hitEl.style.top = `${hit.top}%`;
+    hitEl.style.width = `${hit.width}%`;
+    hitEl.style.height = `${hit.height}%`;
+
+    const isActive = currentFlatHit && currentFlatHit.page === curPNum && currentFlatHit.hitIndexOnPage === idx;
+    if (isActive) {
+      hitEl.classList.add("active-hit");
+    }
+
+    hitEl.title = `Артикул / совпадение #${idx + 1} (клик для перехода)`;
+    hitEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const flatIdx = state.search.allHitsFlat.findIndex(
+        (h) => h.page === curPNum && h.hitIndexOnPage === idx
+      );
+      if (flatIdx >= 0) {
+        state.search.currentHitIdx = flatIdx;
+        updateSearchStatusDisplay();
+        renderSearchHighlightsForActivePage();
+        centerOnSearchHit(hit);
+      }
+    });
+
+    els.searchHighlightLayer.appendChild(hitEl);
+  });
+
+  if (els.pdfPageImage && els.pdfPageImage.naturalWidth) {
+    els.searchHighlightLayer.style.width = `${els.pdfPageImage.naturalWidth}px`;
+    els.searchHighlightLayer.style.height = `${els.pdfPageImage.naturalHeight}px`;
+  }
+}
+
+// Слушатели событий поиска
+els.viewToggleSearch?.addEventListener("click", () => toggleViewerSearch());
+els.viewerSearchClose?.addEventListener("click", () => closeViewerSearch());
+els.viewerSearchNext?.addEventListener("click", () => navigateToSearchHit(1));
+els.viewerSearchPrev?.addEventListener("click", () => navigateToSearchHit(-1));
+
+els.viewerSearchInput?.addEventListener("input", () => {
+  clearTimeout(_searchDebounceTimer);
+  _searchDebounceTimer = setTimeout(() => {
+    executePdfSearch(els.viewerSearchInput.value);
+  }, 320);
+});
+
+els.viewerSearchInput?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    if (e.shiftKey) {
+      navigateToSearchHit(-1);
+    } else {
+      if (state.search.query !== els.viewerSearchInput.value.trim()) {
+        executePdfSearch(els.viewerSearchInput.value);
+      } else {
+        navigateToSearchHit(1);
+      }
+    }
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    closeViewerSearch();
+  }
+});

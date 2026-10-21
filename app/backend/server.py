@@ -2865,6 +2865,111 @@ def get_pdf_toc(path: Path) -> dict:
             }
 
 
+def search_pdf_document(path: Path, query: str) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(f"PDF не найден: {path}")
+    if not path.is_file() or path.suffix.casefold() != ".pdf":
+        raise ValueError(f"Это не PDF-файл: {path}")
+
+    query = query.strip()
+    if not query:
+        return {
+            "name": path.name,
+            "path": str(path),
+            "query": "",
+            "totalHits": 0,
+            "pagesCount": 0,
+            "totalPages": 0,
+            "pages": {},
+        }
+
+    with _FITZ_RENDER_LOCK:
+        try:
+            doc = get_fitz_doc(path)
+            total_pages = len(doc)
+            hits_by_page = {}
+            total_hits = 0
+
+            queries_to_try = [query]
+            if "." in query:
+                queries_to_try.append(query.replace(".", " "))
+                queries_to_try.append(query.replace(".", "-"))
+            elif " " in query:
+                queries_to_try.append(query.replace(" ", "."))
+                queries_to_try.append(query.replace(" ", "-"))
+            elif "-" in query:
+                queries_to_try.append(query.replace("-", "."))
+                queries_to_try.append(query.replace("-", " "))
+
+            seen_q = set()
+            clean_queries = []
+            for q in queries_to_try:
+                q_strip = q.strip()
+                if q_strip and q_strip.lower() not in seen_q:
+                    seen_q.add(q_strip.lower())
+                    clean_queries.append(q_strip)
+
+            for p_idx in range(total_pages):
+                page = doc[p_idx]
+                p_num = p_idx + 1
+                rect = page.rect
+                pw = rect.width
+                ph = rect.height
+                if pw <= 0 or ph <= 0:
+                    continue
+
+                page_rects = []
+                for q_variant in clean_queries:
+                    found = page.search_for(q_variant)
+                    if found:
+                        for r in found:
+                            if not any(abs(r.x0 - ex.x0) < 2 and abs(r.y0 - ex.y0) < 2 for ex in page_rects):
+                                page_rects.append(r)
+
+                if page_rects:
+                    page_hits = []
+                    for r in page_rects:
+                        page_hits.append({
+                            "page": p_num,
+                            "x0": round(r.x0, 2),
+                            "y0": round(r.y0, 2),
+                            "x1": round(r.x1, 2),
+                            "y1": round(r.y1, 2),
+                            "left": round((r.x0 / pw) * 100, 3),
+                            "top": round((r.y0 / ph) * 100, 3),
+                            "width": round(((r.x1 - r.x0) / pw) * 100, 3),
+                            "height": round(((r.y1 - r.y0) / ph) * 100, 3),
+                        })
+                    hits_by_page[str(p_num)] = {
+                        "page": p_num,
+                        "count": len(page_hits),
+                        "hits": page_hits,
+                    }
+                    total_hits += len(page_hits)
+
+            return {
+                "name": path.name,
+                "path": str(path),
+                "query": query,
+                "totalHits": total_hits,
+                "pagesCount": len(hits_by_page),
+                "totalPages": total_pages,
+                "pages": hits_by_page,
+            }
+        except Exception as e:
+            logger.error("Error searching in PDF %s: %s", path, e)
+            return {
+                "name": path.name,
+                "path": str(path),
+                "query": query,
+                "totalHits": 0,
+                "pagesCount": 0,
+                "totalPages": 0,
+                "pages": {},
+                "error": str(e),
+            }
+
+
 class LauncherHandler(BaseHTTPRequestHandler):
     server_version = "FEngineeringLauncherV3/0.1"
 
@@ -3438,6 +3543,19 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 payload_page = render_pdf_page(Path(raw_file), page=page, dpi=dpi)
                 self.send_json(HTTPStatus.OK, payload_page)
             except (ValueError, FileNotFoundError, RuntimeError, OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/pdf/search":
+            try:
+                body = self.read_json()
+                raw_file = str(body.get("file", "")).strip()
+                query = str(body.get("query", "")).strip()
+                if not raw_file:
+                    raise ValueError("Не выбран PDF-файл для поиска")
+                search_data = search_pdf_document(Path(raw_file), query)
+                self.send_json(HTTPStatus.OK, search_data)
+            except (ValueError, FileNotFoundError, RuntimeError, OSError, json.JSONDecodeError) as error:
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
 
