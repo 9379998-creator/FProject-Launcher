@@ -1418,7 +1418,7 @@ textarea:focus {
   position: absolute;
   left: 50%;
   bottom: 8px;
-  z-index: 5;
+  z-index: 35;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1483,11 +1483,25 @@ textarea:focus {
   background: var(--active-strong);
 }
 
+.view-tool-btn {
+  font-weight: 600;
+  min-width: 82px;
+  font-size: 11px;
+  letter-spacing: 0.2px;
+  transition: all 0.15s ease;
+}
+
+.view-tool-btn.active {
+  background: #007acc !important;
+  color: #fff !important;
+  border-color: #005a9e !important;
+}
+
 .page-position {
   position: absolute;
   top: 9px;
   left: 10px;
-  z-index: 4;
+  z-index: 35;
   padding: 4px 10px;
   border: 1px solid rgba(102, 127, 153, .72);
   border-radius: 999px;

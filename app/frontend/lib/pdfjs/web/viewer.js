@@ -3044,8 +3044,7 @@ const defaultOptions = {
     value: false,
     kind: OptionKind.VIEWER + OptionKind.PREFERENCE
   },
-  ignoreDestinationZoom: {
-    value: false,
+  ignoreDestinationZoom: { value: true,
     kind: OptionKind.VIEWER + OptionKind.PREFERENCE
   },
   imageResourcesPath: {
@@ -3425,7 +3424,7 @@ class PDFLinkService {
     eventBus,
     externalLinkTarget = null,
     externalLinkRel = null,
-    ignoreDestinationZoom = false
+    ignoreDestinationZoom = true
   } = {}) {
     this.eventBus = eventBus;
     this.externalLinkTarget = externalLinkTarget;
@@ -9404,7 +9403,7 @@ class PDFViewer {
     pageNumber,
     destArray = null,
     allowNegativeOffset = false,
-    ignoreDestinationZoom = false
+    ignoreDestinationZoom = true
   }) {
     if (!this.pdfDocument) {
       return;
@@ -12556,7 +12555,7 @@ class BasePreferences {
     "enableStampEditor": true,
     "externalLinkTarget": 0,
     "historyUpdateUrl": false,
-    "ignoreDestinationZoom": false,
+    "ignoreDestinationZoom": true,
     "forcePageColors": false,
     "pageColorsBackground": "Canvas",
     "pageColorsForeground": "CanvasText",

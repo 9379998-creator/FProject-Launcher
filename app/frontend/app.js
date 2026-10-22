@@ -118,6 +118,7 @@ const els = {
   viewerControls: document.getElementById("viewerControls"),
   qualityBadge: document.getElementById("qualityBadge"),
   pagePosition: document.getElementById("pagePosition"),
+  viewToggleTool: document.getElementById("viewToggleTool"),
   viewZoomOut: document.getElementById("viewZoomOut"),
   viewZoomIn: document.getElementById("viewZoomIn"),
   viewFit: document.getElementById("viewFit"),
@@ -3933,7 +3934,9 @@ function showPdfPage(page, options = {}) {
     if (canvas) canvas.hidden = true;
     els.viewerEmpty.hidden = true;
     els.pdfViewer.classList.remove("empty");
-    els.viewerControls.hidden = true;
+    els.viewerControls.hidden = false;
+    if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
+    updateViewerToolButton(false);
 
     setActiveNativePath(targetDocPath);
     revealPathInTree(targetDocPath, { updateSelection: true, skipScroll: skipTreeScroll });
@@ -3968,9 +3971,11 @@ function showPdfPage(page, options = {}) {
     els.pdfDocFrame.dataset.currentDoc = "";
     els.pdfDocFrame.dataset.targetPage = "";
   }
+  if (els.viewToggleDpi) els.viewToggleDpi.hidden = false;
+  updateViewerToolButton(state.view.panMode);
 
   const currentDpi = state.viewerDpi || 150;
-  const highPage = state.highQualityPages.get(${key}@);
+  const highPage = state.highQualityPages.get(`${key}@${currentDpi}`);
   const displayPage = highPage || page;
   setActiveNativePath(targetDocPath);
   revealPathInTree(targetDocPath, { updateSelection: true, skipScroll: skipTreeScroll });
@@ -3983,7 +3988,7 @@ function showPdfPage(page, options = {}) {
   if (displayPage.url && displayPage.url.includes("/dwg/")) {
     const pNum = Number(displayPage.page) || 1;
     const isReady = (displayPage.bytes > 0) && !displayPage.url.includes("header_thumb.png") && !displayPage.url.includes("placeholder");
-    els.pdfPageImage.dataset.dwgLoadedPage = isReady ? ${targetDocPath}| : "";
+    els.pdfPageImage.dataset.dwgLoadedPage = isReady ? `${targetDocPath}|${pNum}` : "";
     if (!isReady && !state.dwgPollTimer && targetDocPath) {
       startDwgStatusPolling(targetDocPath, page.totalPages || 0, state.renderEpoch);
     }
@@ -4057,6 +4062,17 @@ function updateViewTransform() {
 }
 
 function fitPdfPage() {
+  if (els.pdfDocViewer && !els.pdfDocViewer.hidden) {
+    const win = els.pdfDocFrame?.contentWindow;
+    if (win && win.PDFViewerApplication && win.PDFViewerApplication.pdfViewer) {
+      win.PDFViewerApplication.pdfViewer.currentScaleValue = "page-fit";
+      setTimeout(() => {
+        const cur = win.PDFViewerApplication.pdfViewer.currentScale;
+        if (cur) win.PDFViewerApplication.pdfViewer.currentScaleValue = String(cur);
+      }, 100);
+    }
+    return;
+  }
   if (state.excelWorkbook) {
     els.excelSheetFrame.contentWindow?.postMessage({ type: "launcher-sheet-fit" }, "*");
     return;
@@ -4099,6 +4115,17 @@ function fitPdfPage() {
 }
 
 function zoomPdf(factor, originX = null, originY = null) {
+  if (els.pdfDocViewer && !els.pdfDocViewer.hidden) {
+    const win = els.pdfDocFrame?.contentWindow;
+    if (win && win.PDFViewerApplication) {
+      if (factor > 1) {
+        win.PDFViewerApplication.zoomIn();
+      } else {
+        win.PDFViewerApplication.zoomOut();
+      }
+    }
+    return;
+  }
   const isStageViewing = state.viewMode === "full" || els.pdfViewer?.classList.contains("stage-active");
   if (!isStageViewing) {
     zoomThumbs(factor);
@@ -5170,12 +5197,26 @@ if (els.viewToggleDpi) {
 if (els.viewPrevPage) {
   els.viewPrevPage.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (els.pdfDocViewer && !els.pdfDocViewer.hidden) {
+      const win = els.pdfDocFrame?.contentWindow;
+      if (win && win.PDFViewerApplication && win.PDFViewerApplication.pdfViewer) {
+        win.PDFViewerApplication.pdfViewer.previousPage();
+        return;
+      }
+    }
     stepThumbnails(-1);
   });
 }
 if (els.viewNextPage) {
   els.viewNextPage.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (els.pdfDocViewer && !els.pdfDocViewer.hidden) {
+      const win = els.pdfDocFrame?.contentWindow;
+      if (win && win.PDFViewerApplication && win.PDFViewerApplication.pdfViewer) {
+        win.PDFViewerApplication.pdfViewer.nextPage();
+        return;
+      }
+    }
     stepThumbnails(1);
   });
 }
@@ -5207,6 +5248,13 @@ els.viewFit.addEventListener("click", () => {
 
 if (els.viewRotate) {
   els.viewRotate.addEventListener("click", () => {
+    if (els.pdfDocViewer && !els.pdfDocViewer.hidden) {
+      const win = els.pdfDocFrame?.contentWindow;
+      if (win && win.PDFViewerApplication) {
+        win.PDFViewerApplication.rotatePages(90);
+      }
+      return;
+    }
     if (state.excelWorkbook) {
       state.view.rotation = (state.view.rotation + 90) % 360;
       els.excelSheetFrame.contentWindow?.postMessage({ type: "launcher-sheet-rotate", value: state.view.rotation }, "*");
@@ -6755,6 +6803,10 @@ function initPdfDocFrameSync() {
           handlePdfViewerPageChanged(pageNum);
         });
 
+        app.eventBus.on("cursortoolchanged", (evt) => {
+          updateViewerToolButton(evt.tool === 1);
+        });
+
         if (els.pdfDocFrame.dataset.targetPage) {
           const target = parseInt(els.pdfDocFrame.dataset.targetPage, 10);
           if (target && app.page !== target) {
@@ -6779,6 +6831,41 @@ function initPdfDocFrameSync() {
       console.warn("PDF viewer frame sync setup:", e);
     }
   });
+}
+
+function updateViewerToolButton(isHand) {
+  if (!els.viewToggleTool) return;
+  if (isHand) {
+    els.viewToggleTool.textContent = "🖐️ Лапа";
+    els.viewToggleTool.title = "Активен режим: Лапа (перетаскивание листа). Клик — переключить на Стрелку (выделение текста)";
+    els.viewToggleTool.classList.add("active");
+  } else {
+    els.viewToggleTool.textContent = "↖️ Стрелка";
+    els.viewToggleTool.title = "Активен режим: Стрелка (выделение текста и копирование). Клик — переключить на Лапу (перетаскивание)";
+    els.viewToggleTool.classList.remove("active");
+  }
+}
+window.updateViewerToolButton = updateViewerToolButton;
+
+function toggleViewerTool() {
+  const isPdf = Boolean(els.pdfDocViewer && !els.pdfDocViewer.hidden);
+  if (isPdf) {
+    const win = els.pdfDocFrame?.contentWindow;
+    if (win && win.PDFViewerApplication && win.PDFViewerApplication.pdfCursorTools) {
+      const currentTool = win.PDFViewerApplication.pdfCursorTools.activeTool;
+      const nextTool = currentTool === 1 ? 0 : 1;
+      win.PDFViewerApplication.pdfCursorTools.switchTool(nextTool);
+      updateViewerToolButton(nextTool === 1);
+    }
+  } else {
+    state.view.panMode = !state.view.panMode;
+    updateViewTransform();
+    updateViewerToolButton(state.view.panMode);
+  }
+}
+
+if (els.viewToggleTool) {
+  els.viewToggleTool.addEventListener("click", toggleViewerTool);
 }
 
 window.handleGlobalEscape = handleGlobalEscape;

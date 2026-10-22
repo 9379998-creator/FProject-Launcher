@@ -1,4 +1,4 @@
-// Floating translation pill & popover for PDF.js text selection
+// Floating translation pill, cursor tool toggle, and scale-lock for Mozilla PDF.js
 (function() {
   let tooltip = null;
   let popover = null;
@@ -143,9 +143,117 @@
     });
   }
 
+  function initPdfJsEnhancements() {
+    const app = window.PDFViewerApplication;
+    if (!app) return;
+
+    let lockedScale = null;
+    let isEnforcingScale = false;
+
+    const setupApp = () => {
+      if (!app.eventBus || !app.pdfViewer) return;
+
+      // 1. Never let internal destination zoom override user's scale
+      if (app.pdfLinkService) {
+        app.pdfLinkService._ignoreDestinationZoom = true;
+      }
+
+      // 2. Default tool: ALWAYS SELECT (Стрелка) on load, so user is never stuck in Hand mode!
+      try {
+        app.pdfCursorTools?.switchTool(0); // CursorTool.SELECT
+      } catch (_) {}
+
+      // 3. Top toolbar toggle button for Arrow / Hand
+      const toolbar = document.getElementById("toolbarViewerMiddle") || document.getElementById("toolbarViewerLeft");
+      if (toolbar && !document.getElementById("launcherCursorToggle")) {
+        const toggleBtn = document.createElement("button");
+        toggleBtn.id = "launcherCursorToggle";
+        toggleBtn.className = "toolbarButton";
+        toggleBtn.title = "Инструмент: Стрелка (выделение текста) / Лапа (панорамирование)";
+        toggleBtn.style.cssText = "font-size:14px; min-width:32px; cursor:pointer; margin-left:6px;";
+        toggleBtn.textContent = "↖️";
+        toggleBtn.onclick = () => {
+          const cur = app.pdfCursorTools?.activeTool;
+          const next = cur === 1 ? 0 : 1;
+          app.pdfCursorTools?.switchTool(next);
+        };
+        toolbar.appendChild(toggleBtn);
+
+        app.eventBus.on("cursortoolchanged", (evt) => {
+          toggleBtn.textContent = evt.tool === 1 ? "🖐️" : "↖️";
+          try {
+            if (window.parent && typeof window.parent.updateViewerToolButton === "function") {
+              window.parent.updateViewerToolButton(evt.tool === 1);
+            }
+          } catch (_) {}
+        });
+      }
+
+      // 4. Freeze initial scale into a fixed numeric scale so page jumps NEVER recalculate zoom
+      const freezeCurrentScale = () => {
+        const current = app.pdfViewer.currentScale;
+        if (current && current > 0) {
+          lockedScale = current;
+          isEnforcingScale = true;
+          app.pdfViewer.currentScaleValue = String(current);
+          isEnforcingScale = false;
+        }
+      };
+
+      app.eventBus.on("pagesloaded", () => {
+        if (!lockedScale) {
+          freezeCurrentScale();
+        }
+      });
+
+      // 5. When user zooms in/out manually (buttons, dropdown, or Ctrl+wheel), remember new scale
+      app.eventBus.on("scalechanging", (evt) => {
+        if (evt && evt.scale && !isEnforcingScale) {
+          lockedScale = evt.scale;
+        }
+      });
+
+      // 6. Enforce lockedScale during search navigation and page jumping
+      const enforceLockedScale = () => {
+        if (lockedScale && Math.abs(app.pdfViewer.currentScale - lockedScale) > 0.001) {
+          isEnforcingScale = true;
+          app.pdfViewer.currentScale = lockedScale;
+          app.pdfViewer.currentScaleValue = String(lockedScale);
+          isEnforcingScale = false;
+        }
+      };
+
+      app.eventBus.on("pagechanging", enforceLockedScale);
+      app.eventBus.on("updatefindcontrolstate", enforceLockedScale);
+
+      app.eventBus.on("find", () => {
+        if (!lockedScale && app.pdfViewer.currentScale) {
+          lockedScale = app.pdfViewer.currentScale;
+        }
+        setTimeout(enforceLockedScale, 60);
+      });
+    };
+
+    if (app.initialized) {
+      setupApp();
+    } else {
+      window.document.addEventListener("webviewerloaded", () => {
+        if (app.initializedPromise) {
+          app.initializedPromise.then(setupApp);
+        } else {
+          setupApp();
+        }
+      }, { once: true });
+    }
+  }
+
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initUI);
+    document.addEventListener("DOMContentLoaded", () => {
+      initUI();
+      initPdfJsEnhancements();
+    });
   } else {
     initUI();
+    initPdfJsEnhancements();
   }
 })();
