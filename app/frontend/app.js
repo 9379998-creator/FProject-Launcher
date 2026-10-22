@@ -7120,21 +7120,14 @@ function initPdfDocFrameSync() {
 
 function updateViewerToolButton(mode) {
   if (!els.viewToggleTool) return;
-  let m = mode;
-  if (typeof mode === "boolean") {
-    m = mode ? 1 : 0;
-  }
-  if (m === 1 || m === "hand") {
+  const isHand = Boolean(mode === 1 || mode === true || mode === "hand");
+  if (isHand) {
     els.viewToggleTool.textContent = "🖐️ Лапа";
-    els.viewToggleTool.title = "Активен режим: Лапа (панорамирование листа). Клик — переключить на Стрелку (выделение текста)";
-    els.viewToggleTool.classList.add("active");
-  } else if (m === 2 || m === "zone") {
-    els.viewToggleTool.textContent = "📐 Зона";
-    els.viewToggleTool.title = "Активен режим: Зона (прямоугольное выделение колонки/таблицы). Клик — переключить на Лапу";
+    els.viewToggleTool.title = "Активен режим: Лапа (панорамирование листа). Клик — переключить на Стрелку (прямоугольное выделение зоны, как в AutoCAD)";
     els.viewToggleTool.classList.add("active");
   } else {
     els.viewToggleTool.textContent = "↖️ Стрелка";
-    els.viewToggleTool.title = "Активен режим: Стрелка (стандартное выделение текста). Клик — переключить на Зону";
+    els.viewToggleTool.title = "Активен режим: Стрелка (прямоугольное выделение зоны, как в AutoCAD). Клик — переключить на Лапу (панорамирование)";
     els.viewToggleTool.classList.remove("active");
   }
 }
@@ -7146,8 +7139,7 @@ function toggleViewerTool() {
     const win = els.pdfDocFrame?.contentWindow;
     if (win && typeof win.getViewerToolMode === "function" && typeof win.setViewerToolMode === "function") {
       const current = win.getViewerToolMode();
-      // Cycle: 0 (Стрелка) -> 2 (Зона) -> 1 (Лапа) -> 0 (Стрелка)
-      const next = current === 0 ? 2 : current === 2 ? 1 : 0;
+      const next = current === 1 ? 0 : 1;
       win.setViewerToolMode(next);
       updateViewerToolButton(next);
       return;
