@@ -56,6 +56,14 @@ html, body {
 
 /* Кнопки действий: Объекты, Загрузить, Обновить, Отобразить, Исключить, Назад */
 /* Абсолютно одинаковые по своей ширине */
+/* Скрытие верхней полосы лаунчера (.action-grid) в Окне №3 для максимизации рабочего пространства */
+.action-grid[hidden],
+.action-grid.hidden,
+.app-window.in-win3 .action-grid,
+.app-window:has(.full-view) .action-grid {
+  display: none !important;
+}
+
 .action-grid > button {
   width: 82px;
   min-width: 82px;

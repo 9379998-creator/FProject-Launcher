@@ -6,35 +6,31 @@
   function initUI() {
     if (tooltip) return;
 
-    // Inject high-contrast match styling, hide top toolbar, and style search findbar
+    // Inject high-contrast match styling and style search findbar
     const style = document.createElement("style");
     style.id = "launcherEnhancedStyles";
     style.textContent = `
-      /* 0. Hide the entire top toolbar to maximize drawing viewing area */
-      .toolbar,
-      #toolbarContainer {
-        display: none !important;
-        height: 0 !important;
-        min-height: 0 !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        border: none !important;
+      /* Prominent search button in PDF viewer toolbar */
+      #viewFind {
+        min-width: 76px !important;
+        width: auto !important;
+        padding: 0 8px !important;
+        gap: 4px !important;
+        background: rgba(9, 105, 218, 0.08) !important;
+        border: 1px solid rgba(9, 105, 218, 0.25) !important;
+        border-radius: 3px !important;
+        color: #0969da !important;
       }
-
-      /* PDF viewer container fills 100% of the viewport from the very top */
-      #viewerContainer {
-        top: 0 !important;
-        inset: 0 !important;
+      #viewFind > span {
+        display: inline-block !important;
+        text-indent: 0 !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        color: #0969da !important;
       }
-
-      /* Floating search findbar drops down cleanly at top when opened via Ctrl+F or [🔍 Поиск] */
-      .findbar {
-        top: 8px !important;
-        position: absolute !important;
-        z-index: 30000 !important;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25) !important;
-        border-radius: 6px !important;
-        border: 1px solid rgba(0, 0, 0, 0.15) !important;
+      #viewFind:hover {
+        background: rgba(9, 105, 218, 0.16) !important;
+        border-color: #0969da !important;
       }
 
       /* 1. Make textLayer fully visible so highlight colors are bright and clear */

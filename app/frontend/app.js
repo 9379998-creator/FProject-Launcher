@@ -88,6 +88,7 @@ const els = {
   treeState: document.getElementById("treeState"),
   objectList: document.getElementById("objectList"),
   objectStats: document.getElementById("objectStats"),
+  actionGrid: document.getElementById("actionGrid"),
   backToObjects: document.getElementById("backToObjects"),
   backToTree: document.getElementById("backToTree"),
   treeSearch: document.getElementById("treeSearch"),
@@ -196,10 +197,19 @@ function inWindow3() {
   if (state.viewMode === "full" || els.shell.classList.contains("full-view")) {
     return true;
   }
-  if (els.pdfViewer?.classList.contains("stage-active") && (state.excelWorkbooks?.length > 1 || state.wordDocs?.length > 1)) {
+  if (els.pdfDocViewer && !els.pdfDocViewer.hidden) {
+    return true;
+  }
+  if (els.pdfViewer?.classList.contains("stage-active")) {
     return true;
   }
   return false;
+}
+
+function syncActionGridVisibility() {
+  const isWin3 = inWindow3();
+  if (els.actionGrid) els.actionGrid.hidden = isWin3;
+  document.querySelector(".app-window")?.classList.toggle("in-win3", isWin3);
 }
 
 function exitWindow3() {
@@ -226,6 +236,7 @@ function setTreeBrowseMode(enabled) {
 }
 
 function updateObjectButtons() {
+  syncActionGridVisibility();
   const isWin3 = inWindow3();
   const tree = inTreeMode();
   const hasSelection = Boolean(state.selectedObjectId);
@@ -3956,6 +3967,7 @@ function showPdfPage(page, options = {}) {
     revealPathInTree(targetDocPath, { updateSelection: true, skipScroll: skipTreeScroll });
 
     if (els.pdfDocViewer) els.pdfDocViewer.hidden = false;
+    syncActionGridVisibility();
 
     const rawUrl = "/api/file/raw?path=" + encodeURIComponent(targetDocPath);
     const targetPageNum = Number(page.page) || 1;
