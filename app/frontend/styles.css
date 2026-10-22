@@ -349,13 +349,13 @@ button:disabled {
 }
 
 .state {
-  display: none !important;
+  display: none;
   min-height: 0;
   flex: 1;
 }
 
 .state.active {
-  display: flex;
+  display: flex !important;
   flex-direction: column;
 }
 
@@ -562,7 +562,7 @@ textarea:focus {
 }
 
 .tree-filter-summary {
-  display: none !important;
+  display: none;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
@@ -581,7 +581,7 @@ textarea:focus {
 }
 
 .tree-filter-summary.visible {
-  display: flex;
+  display: flex !important;
 }
 
 .tree-filter-summary strong {
@@ -2178,11 +2178,6 @@ textarea:focus {
   font-size: 11px;
   color: #6b7280;
 }
-/*
-  background: #d4d7dc;
-}
-
-*/
 
 /* Кнопка "Открыть" в панели просмотрщика и на карточке нативного файла */
 .viewer-open-btn {
