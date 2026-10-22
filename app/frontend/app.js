@@ -7048,6 +7048,29 @@ function initPdfDocFrameSync() {
           updateViewerToolButton(evt.tool === 1);
         });
 
+        // Плавное пошаговое масштабирование колесом мыши с Ctrl (как кнопки + и − на нижней панели)
+        let lastWheelZoomTime = 0;
+        win.addEventListener("wheel", (evt) => {
+          if (!evt.ctrlKey && !evt.metaKey) return;
+          evt.preventDefault();
+          evt.stopImmediatePropagation();
+          const now = performance.now();
+          if (now - lastWheelZoomTime < 80) return;
+          lastWheelZoomTime = now;
+          const previousScale = app.pdfViewer?.currentScale || 1;
+          const delta = evt.deltaY || evt.detail || 0;
+          if (delta < 0) {
+            app.zoomIn(1);
+          } else if (delta > 0) {
+            app.zoomOut(1);
+          } else {
+            return;
+          }
+          if (typeof app._centerAtPos === "function") {
+            app._centerAtPos(previousScale, evt.clientX, evt.clientY);
+          }
+        }, { capture: true, passive: false });
+
         if (els.pdfDocFrame.dataset.targetPage) {
           const target = parseInt(els.pdfDocFrame.dataset.targetPage, 10);
           if (target && app.page !== target) {

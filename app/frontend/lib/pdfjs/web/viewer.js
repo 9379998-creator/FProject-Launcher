@@ -1978,33 +1978,27 @@ function webViewerWheel(evt) {
     if (zoomDisabledTimeout || document.visibilityState === "hidden" || PDFViewerApplication.overlayManager.active) {
       return;
     }
+    const now = performance.now();
+    if (now - (PDFViewerApplication._lastWheelZoomTime || 0) < 80) {
+      return;
+    }
+    PDFViewerApplication._lastWheelZoomTime = now;
     const previousScale = pdfViewer.currentScale;
     if (isPinchToZoom && supportsPinchToZoom) {
       scaleFactor = PDFViewerApplication._accumulateFactor(previousScale, scaleFactor, "_wheelUnusedFactor");
       if (scaleFactor < 1) {
-        PDFViewerApplication.zoomOut(null, scaleFactor);
+        PDFViewerApplication.zoomOut(1);
       } else if (scaleFactor > 1) {
-        PDFViewerApplication.zoomIn(null, scaleFactor);
+        PDFViewerApplication.zoomIn(1);
       } else {
         return;
       }
     } else {
       const delta = (0, _ui_utils.normalizeWheelEventDirection)(evt);
-      let ticks = 0;
-      if (deltaMode === WheelEvent.DOM_DELTA_LINE || deltaMode === WheelEvent.DOM_DELTA_PAGE) {
-        if (Math.abs(delta) >= 1) {
-          ticks = Math.sign(delta);
-        } else {
-          ticks = PDFViewerApplication._accumulateTicks(delta, "_wheelUnusedTicks");
-        }
-      } else {
-        const PIXELS_PER_LINE_SCALE = 30;
-        ticks = PDFViewerApplication._accumulateTicks(delta / PIXELS_PER_LINE_SCALE, "_wheelUnusedTicks");
-      }
-      if (ticks < 0) {
-        PDFViewerApplication.zoomOut(-ticks);
-      } else if (ticks > 0) {
-        PDFViewerApplication.zoomIn(ticks);
+      if (delta < 0) {
+        PDFViewerApplication.zoomOut(1);
+      } else if (delta > 0) {
+        PDFViewerApplication.zoomIn(1);
       } else {
         return;
       }
