@@ -1,12 +1,34 @@
-// Floating translation pill, cursor tool toggle, search match navigation, and scale-lock for Mozilla PDF.js
+// Floating translation pill, cursor tool toggle, search match navigation, scale-lock,
+// column-aware DOM text sorting, and rectangular zone selection for Mozilla PDF.js
 (function() {
   let tooltip = null;
   let popover = null;
+  let zoneBox = null;
+  let viewerToolMode = 0; // 0: Select (Стрелка), 1: Hand (Лапа), 2: Zone (Зона)
+  let isZoneSelecting = false;
+  let zoneStart = { x: 0, y: 0, pageX: 0, pageY: 0 };
+  let zoneSelectedText = "";
+  let currentZoneSpans = [];
+
+  function clearZoneSelection() {
+    const hadSelection = Boolean(zoneSelectedText || (zoneBox && zoneBox.style.display !== "none"));
+    if (zoneBox) {
+      zoneBox.style.display = "none";
+      zoneBox.style.width = "0px";
+      zoneBox.style.height = "0px";
+    }
+    document.querySelectorAll(".textLayer span.zone-selected").forEach((el) => {
+      el.classList.remove("zone-selected");
+    });
+    currentZoneSpans = [];
+    zoneSelectedText = "";
+    return hadSelection;
+  }
 
   function initUI() {
     if (tooltip) return;
 
-    // Inject high-contrast match styling and style search findbar
+    // Inject high-contrast match styling, zone selection styling, and fix selection
     const style = document.createElement("style");
     style.id = "launcherEnhancedStyles";
     style.textContent = `
@@ -82,7 +104,36 @@
         user-select: none !important;
       }
 
-      /* 2. All search matches: bright sunshine yellow with contrast border */
+      /* Prevent full-page ghost backdrop from snapping multi-column selection across columns in Chrome */
+      .textLayer .endOfContent {
+        display: none !important;
+        pointer-events: none !important;
+        user-select: none !important;
+      }
+
+      /* 2. Rectangular zone selection styling */
+      .textLayer span.zone-selected {
+        background-color: rgba(0, 102, 255, 0.3) !important;
+        outline: 1px solid rgba(0, 102, 255, 0.6) !important;
+        border-radius: 2px !important;
+        color: transparent !important;
+      }
+      #launcherZoneBox {
+        position: absolute;
+        pointer-events: none;
+        border: 1.5px dashed #0969da;
+        background-color: rgba(9, 105, 218, 0.14);
+        z-index: 999999;
+        border-radius: 3px;
+        display: none;
+      }
+      body.zone-mode-active #viewerContainer,
+      body.zone-mode-active .textLayer,
+      body.zone-mode-active .textLayer span {
+        cursor: crosshair !important;
+      }
+
+      /* 3. All search matches: bright sunshine yellow with contrast border */
       .textLayer .highlight {
         background-color: #ffe600 !important;
         color: #000000 !important;
@@ -92,7 +143,7 @@
         cursor: pointer !important;
       }
 
-      /* 3. Active / Selected match: glowing electric safety orange with white outline and pulse */
+      /* 4. Active / Selected match: glowing electric safety orange with white outline and pulse */
       .textLayer .highlight.selected {
         background-color: #ff5722 !important;
         color: #ffffff !important;
@@ -115,7 +166,7 @@
         }
       }
 
-      /* 4. Text selection: natural translucent blue highlight.
+      /* 5. Text selection: natural translucent blue highlight.
          Text glyphs stay transparent so underlying vector canvas text displays directly with perfect sharp clarity,
          preventing ghost offset text, duplicate letters, or displaced lines! */
       .textLayer ::-moz-selection {
@@ -158,7 +209,7 @@
     tooltip.style.cssText = `
       position: fixed;
       display: none;
-      z-index: 999999;
+      z-index: 9999999;
       background: #0969da;
       color: #fff;
       border: none;
@@ -174,13 +225,18 @@
     tooltip.onmouseout = () => tooltip.style.background = "#0969da";
     document.body.appendChild(tooltip);
 
+    // Rectangular Zone Box
+    zoneBox = document.createElement("div");
+    zoneBox.id = "launcherZoneBox";
+    document.body.appendChild(zoneBox);
+
     // Translation Popover Card
     popover = document.createElement("div");
     popover.id = "launcherTransCard";
     popover.style.cssText = `
       position: fixed;
       display: none;
-      z-index: 1000000;
+      z-index: 10000000;
       bottom: 24px;
       right: 24px;
       width: 320px;
@@ -226,6 +282,16 @@
     let isMouseDown = false;
 
     const updateSelectionTooltip = () => {
+      if (zoneSelectedText) {
+        selectedText = zoneSelectedText;
+        if (zoneBox && zoneBox.style.display !== "none") {
+          const rect = zoneBox.getBoundingClientRect();
+          tooltip.style.top = Math.max(10, rect.top - 38) + "px";
+          tooltip.style.left = Math.max(10, rect.left + rect.width / 2 - 45) + "px";
+          tooltip.style.display = "block";
+        }
+        return;
+      }
       const sel = window.getSelection();
       const txt = sel ? sel.toString().trim() : "";
       if (!txt) {
@@ -248,19 +314,138 @@
       if (tooltip && e.target !== tooltip && !tooltip.contains(e.target)) {
         tooltip.style.display = "none";
       }
+
+      // Check if starting a rectangular zone selection (Alt key held OR tool mode is Zone)
+      if (e.button === 0 && (e.altKey || viewerToolMode === 2)) {
+        isZoneSelecting = true;
+        zoneStart = { x: e.clientX, y: e.clientY, pageX: e.pageX, pageY: e.pageY };
+        clearZoneSelection();
+        window.getSelection()?.removeAllRanges();
+
+        if (zoneBox) {
+          zoneBox.style.left = e.pageX + "px";
+          zoneBox.style.top = e.pageY + "px";
+          zoneBox.style.width = "0px";
+          zoneBox.style.height = "0px";
+          zoneBox.style.display = "block";
+        }
+        e.preventDefault();
+        return;
+      }
+
+      // Normal click: if there was an active zone box, clear it if clicking outside
+      if (e.button === 0 && zoneSelectedText && zoneBox && zoneBox.style.display !== "none") {
+        clearZoneSelection();
+      }
+
       isMouseDown = true;
     });
 
+    document.addEventListener("mousemove", (e) => {
+      if (!isZoneSelecting || !zoneBox) return;
+
+      const left = Math.min(zoneStart.pageX, e.pageX);
+      const top = Math.min(zoneStart.pageY, e.pageY);
+      const width = Math.abs(e.pageX - zoneStart.pageX);
+      const height = Math.abs(e.pageY - zoneStart.pageY);
+
+      zoneBox.style.left = left + "px";
+      zoneBox.style.top = top + "px";
+      zoneBox.style.width = width + "px";
+      zoneBox.style.height = height + "px";
+
+      if (width > 6 || height > 6) {
+        const boxRect = {
+          left: Math.min(zoneStart.x, e.clientX),
+          top: Math.min(zoneStart.y, e.clientY),
+          right: Math.max(zoneStart.x, e.clientX),
+          bottom: Math.max(zoneStart.y, e.clientY)
+        };
+
+        const matchedSpans = [];
+        const allSpans = document.querySelectorAll(".textLayer span:not(.markedContent):not(.endOfContent)");
+        for (let i = 0; i < allSpans.length; i++) {
+          const span = allSpans[i];
+          const r = span.getBoundingClientRect();
+          if (r.width === 0 && r.height === 0) continue;
+          const intersects = !(
+            r.right < boxRect.left ||
+            r.left > boxRect.right ||
+            r.bottom < boxRect.top ||
+            r.top > boxRect.bottom
+          );
+          if (intersects) {
+            span.classList.add("zone-selected");
+            matchedSpans.push(span);
+          } else {
+            span.classList.remove("zone-selected");
+          }
+        }
+        currentZoneSpans = matchedSpans;
+      }
+      e.preventDefault();
+    });
+
     document.addEventListener("mouseup", () => {
+      if (isZoneSelecting) {
+        isZoneSelecting = false;
+        const width = zoneBox ? parseInt(zoneBox.style.width, 10) || 0 : 0;
+        const height = zoneBox ? parseInt(zoneBox.style.height, 10) || 0 : 0;
+        if (width < 8 && height < 8) {
+          clearZoneSelection();
+          return;
+        }
+
+        if (currentZoneSpans.length > 0) {
+          // Sort zone spans line-by-line (top with 5px tolerance, then left)
+          const sorted = currentZoneSpans.slice().sort((a, b) => {
+            const rA = a.getBoundingClientRect();
+            const rB = b.getBoundingClientRect();
+            const diffY = rA.top - rB.top;
+            if (Math.abs(diffY) > 5) return diffY;
+            return rA.left - rB.left;
+          });
+
+          const lines = [];
+          let curLine = [];
+          let curTop = null;
+          for (let i = 0; i < sorted.length; i++) {
+            const span = sorted[i];
+            const r = span.getBoundingClientRect();
+            const txt = (span.textContent || "").trim();
+            if (!txt) continue;
+            if (curTop === null || Math.abs(r.top - curTop) < 6) {
+              curLine.push(txt);
+              if (curTop === null) curTop = r.top;
+            } else {
+              lines.push(curLine.join(" "));
+              curLine = [txt];
+              curTop = r.top;
+            }
+          }
+          if (curLine.length > 0) {
+            lines.push(curLine.join(" "));
+          }
+          zoneSelectedText = lines.filter(Boolean).join("\n");
+
+          if (zoneSelectedText && tooltip && zoneBox) {
+            selectedText = zoneSelectedText;
+            const boxRect = zoneBox.getBoundingClientRect();
+            tooltip.style.top = Math.max(10, boxRect.top - 38) + "px";
+            tooltip.style.left = Math.max(10, boxRect.left + boxRect.width / 2 - 45) + "px";
+            tooltip.style.display = "block";
+          }
+        }
+        return;
+      }
+
       isMouseDown = false;
       // Show translation pill ONLY after user finishes mouse drag selection
       setTimeout(updateSelectionTooltip, 30);
     });
 
     document.addEventListener("selectionchange", () => {
-      if (isMouseDown) {
-        // While user is actively dragging mouse across lines: keep tooltip hidden!
-        // This prevents the floating button from intercepting mouse drag or skipping lines!
+      if (isMouseDown || isZoneSelecting) {
         if (tooltip) tooltip.style.display = "none";
         return;
       }
@@ -271,17 +456,18 @@
       e.preventDefault();
       e.stopPropagation();
       tooltip.style.display = "none";
-      if (!selectedText) return;
+      const textToTranslate = zoneSelectedText || selectedText;
+      if (!textToTranslate) return;
 
       popover.style.display = "block";
-      document.getElementById("launcherTransOrig").textContent = selectedText;
+      document.getElementById("launcherTransOrig").textContent = textToTranslate;
       document.getElementById("launcherTransRes").textContent = "Переводим…";
 
       try {
         const resp = await fetch("/api/translate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: selectedText, target: "ru" }),
+          body: JSON.stringify({ text: textToTranslate, target: "ru" }),
         });
         const data = await resp.json();
         document.getElementById("launcherTransRes").textContent = data.translated || "—";
@@ -290,19 +476,20 @@
       }
     };
 
-        // Unified Right-Click Context Menu for PDF Viewer
+    // Unified Right-Click Context Menu for PDF Viewer
     document.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       event.stopPropagation();
       const sel = window.getSelection();
-      const selectedText = sel ? sel.toString().trim() : "";
+      const selText = sel ? sel.toString().trim() : "";
+      const textToUse = zoneSelectedText || selText;
       try {
         if (window.parent && window.parent !== window && typeof window.parent.showPdfViewerContextMenu === "function") {
           const frameRect = window.frameElement ? window.frameElement.getBoundingClientRect() : { left: 0, top: 0 };
           window.parent.showPdfViewerContextMenu(
             frameRect.left + event.clientX,
             frameRect.top + event.clientY,
-            { selectedText }
+            { selectedText: textToUse }
           );
         }
       } catch (_) {}
@@ -328,7 +515,7 @@
       if (!text) return;
       popover.style.display = "block";
       document.getElementById("launcherTransOrig").textContent = text;
-      document.getElementById("launcherTransRes").textContent = "\u041F\u0435\u0440\u0435\u0432\u043E\u0434\u0438\u043C\u2026";
+      document.getElementById("launcherTransRes").textContent = "Переводим…";
 
       fetch("/api/translate", {
         method: "POST",
@@ -337,10 +524,10 @@
       })
         .then((r) => r.json())
         .then((data) => {
-          document.getElementById("launcherTransRes").textContent = data.translated || "\u2014";
+          document.getElementById("launcherTransRes").textContent = data.translated || "—";
         })
         .catch((err) => {
-          document.getElementById("launcherTransRes").textContent = "\u041E\u0448\u0438\u0431\u043A\u0430: " + err.message;
+          document.getElementById("launcherTransRes").textContent = "Ошибка: " + err.message;
         });
     };
 
@@ -362,14 +549,19 @@
         return true;
       }
 
-      // 3. Сброс выделения текста при следующем нажатии
+      // 3. Сброс прямоугольного выделения зоны (если активно)
+      if (clearZoneSelection()) {
+        return true;
+      }
+
+      // 4. Сброс выделения текста при следующем нажатии
       const sel = window.getSelection();
       if (sel && !sel.isCollapsed && sel.toString().trim()) {
         sel.removeAllRanges();
         return true;
       }
 
-      // 4. Сброс поиска: закрытие бара, очистка поля и снятие подсветки совпадений
+      // 5. Сброс поиска: закрытие бара, очистка поля и снятие подсветки совпадений
       const app = window.PDFViewerApplication;
       if (app) {
         const isFindOpen = Boolean(app.findBar?.opened);
@@ -404,6 +596,43 @@
       return false;
     }
     window.handlePdfJsEscape = handlePdfJsEscape;
+    window.clearZoneSelection = clearZoneSelection;
+
+    // Tool mode management
+    window.getViewerToolMode = function() {
+      return viewerToolMode;
+    };
+
+    window.setViewerToolMode = function(mode) {
+      viewerToolMode = Number(mode) || 0;
+      const app = window.PDFViewerApplication;
+      if (viewerToolMode === 1) {
+        // Hand tool
+        clearZoneSelection();
+        document.body.classList.remove("zone-mode-active");
+        try {
+          app?.pdfCursorTools?.switchTool(1);
+        } catch (_) {}
+      } else if (viewerToolMode === 2) {
+        // Zone selection tool
+        document.body.classList.add("zone-mode-active");
+        try {
+          app?.pdfCursorTools?.switchTool(0);
+        } catch (_) {}
+      } else {
+        // Select tool
+        clearZoneSelection();
+        document.body.classList.remove("zone-mode-active");
+        try {
+          app?.pdfCursorTools?.switchTool(0);
+        } catch (_) {}
+      }
+      try {
+        if (window.parent && typeof window.parent.updateViewerToolButton === "function") {
+          window.parent.updateViewerToolButton(viewerToolMode);
+        }
+      } catch (_) {}
+    };
 
     window.addEventListener("keydown", (e) => {
       // 1. Escape: пошаговый сброс телодвижений в Окне 3
@@ -414,19 +643,170 @@
           return;
         }
       }
-      // 2. Ctrl+C: copy selected text and show toast
-      if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C" || e.key === "\u0441" || e.key === "\u0421")) {
-        const sel = window.getSelection();
-        const text = sel ? sel.toString().trim() : "";
+      // 2. Ctrl+C: copy selected text (standard or zone) and show toast
+      if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C" || e.key === "с" || e.key === "С")) {
+        let text = zoneSelectedText;
+        if (!text) {
+          const sel = window.getSelection();
+          text = sel ? sel.toString().trim() : "";
+        }
         if (text) {
           try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text);
+            }
+          } catch (_) {}
+          try {
             if (window.parent && window.parent !== window && typeof window.parent.copyTextToClipboard === "function") {
-              window.parent.copyTextToClipboard(text, "\u0422\u0435\u043A\u0441\u0442 \u0441\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430");
+              window.parent.copyTextToClipboard(text, "Текст скопирован в буфер обмена");
             }
           } catch (_) {}
         }
       }
     });
+  }
+
+  // Column-Aware TextLayer DOM Sorting
+  // Ensures spans in multi-column pages (e.g. 2, 3, or 4 columns) are arranged in natural column reading order.
+  // Standard Chromium selection follows DOM order; grouping spans by column guarantees that dragging down in
+  // Column 1 selects only Column 1, completely preventing bleeding across to Columns 2, 3, or 4!
+  function sortTextLayerByColumns(layerDiv) {
+    if (!layerDiv || layerDiv.dataset.launcherSorted) return;
+
+    const rawSpans = Array.from(layerDiv.children).filter(
+      (el) => el.tagName === "SPAN" && !el.classList.contains("markedContent") && !el.classList.contains("endOfContent")
+    );
+    if (rawSpans.length < 4) return;
+
+    const layerWidth = layerDiv.offsetWidth || layerDiv.clientWidth || 800;
+    const items = [];
+
+    for (let i = 0; i < rawSpans.length; i++) {
+      const el = rawSpans[i];
+      const left = el.offsetLeft;
+      const top = el.offsetTop;
+      const width = el.offsetWidth;
+      const height = el.offsetHeight || 12;
+      const text = (el.textContent || "").trim();
+      if (!text && width === 0) continue;
+
+      items.push({
+        el,
+        left,
+        top,
+        width,
+        height,
+        right: left + width,
+        bottom: top + height,
+        centerX: left + width / 2,
+        centerY: top + height / 2,
+        text,
+        origIdx: i
+      });
+    }
+
+    if (items.length < 4) return;
+
+    // Filter narrow spans (< 65% page width) to detect vertical gutters between columns
+    const contentItems = items.filter((it) => it.width < layerWidth * 0.65);
+    if (contentItems.length < 4) {
+      sortAndReappend(layerDiv, items, () => 0);
+      return;
+    }
+
+    const BIN_SIZE = 4;
+    const numBins = Math.max(10, Math.ceil(layerWidth / BIN_SIZE));
+    const hist = new Int16Array(numBins);
+
+    for (let i = 0; i < contentItems.length; i++) {
+      const it = contentItems[i];
+      const bStart = Math.max(0, Math.floor(it.left / BIN_SIZE));
+      const bEnd = Math.min(numBins - 1, Math.ceil(it.right / BIN_SIZE));
+      for (let b = bStart; b <= bEnd; b++) {
+        hist[b]++;
+      }
+    }
+
+    // A gutter is an empty interval (count == 0) at least 12px wide, excluding margins
+    const minGutterBins = Math.max(3, Math.floor(12 / BIN_SIZE));
+    const marginBinsStart = Math.floor(25 / BIN_SIZE);
+    const marginBinsEnd = Math.floor((layerWidth - 25) / BIN_SIZE);
+
+    const gutters = [];
+    let inGutter = false;
+    let gutterStart = 0;
+
+    for (let b = marginBinsStart; b <= marginBinsEnd; b++) {
+      if (hist[b] === 0) {
+        if (!inGutter) {
+          inGutter = true;
+          gutterStart = b;
+        }
+      } else {
+        if (inGutter) {
+          inGutter = false;
+          const gutterLen = b - gutterStart;
+          if (gutterLen >= minGutterBins) {
+            gutters.push({
+              startPx: gutterStart * BIN_SIZE,
+              endPx: b * BIN_SIZE,
+              midPx: ((gutterStart + b) / 2) * BIN_SIZE
+            });
+          }
+        }
+      }
+    }
+
+    function getColumnIndex(it) {
+      if (it.width >= layerWidth * 0.65) {
+        return -1; // Full-width element spanning across columns
+      }
+      for (let g = 0; g < gutters.length; g++) {
+        if (it.centerX < gutters[g].midPx) {
+          return g;
+        }
+      }
+      return gutters.length;
+    }
+
+    sortAndReappend(layerDiv, items, getColumnIndex);
+  }
+
+  function sortAndReappend(layerDiv, items, getColumnIndex) {
+    items.sort((a, b) => {
+      const colA = getColumnIndex(a);
+      const colB = getColumnIndex(b);
+
+      if (colA >= 0 && colB >= 0) {
+        if (colA !== colB) {
+          return colA - colB; // Column 0 before Column 1 before Column 2, etc.
+        }
+        // Within same column: sort top-to-bottom, line threshold 5px
+        const lineDiff = a.top - b.top;
+        if (Math.abs(lineDiff) > 5) {
+          return lineDiff;
+        }
+        return a.left - b.left;
+      }
+
+      // Headers / wide banners: sort by top
+      const lineDiff = a.top - b.top;
+      if (Math.abs(lineDiff) > 8) {
+        return lineDiff;
+      }
+      return a.left - b.left;
+    });
+
+    const fragment = document.createDocumentFragment();
+    for (let i = 0; i < items.length; i++) {
+      fragment.appendChild(items[i].el);
+    }
+    const endDiv = layerDiv.querySelector(".endOfContent");
+    layerDiv.appendChild(fragment);
+    if (endDiv) {
+      layerDiv.appendChild(endDiv);
+    }
+    layerDiv.dataset.launcherSorted = "true";
   }
 
   function initPdfJsEnhancements() {
@@ -502,7 +882,16 @@
         setTimeout(scrollToActiveMatch, 180);
       });
 
-      app.eventBus.on("textlayerrendered", () => {
+      app.eventBus.on("textlayerrendered", (evt) => {
+        try {
+          const layerDiv = evt?.source?.textLayerDiv || evt?.source?.div || document.querySelector(`.page[data-page-number="${evt?.pageNumber}"] .textLayer`);
+          if (layerDiv) {
+            sortTextLayerByColumns(layerDiv);
+          }
+        } catch (err) {
+          console.warn("[Launcher] sortTextLayerByColumns error:", err);
+        }
+
         if (app.findController?.selected?.pageIdx !== -1) {
           scrollToActiveMatch();
           setTimeout(scrollToActiveMatch, 80);
@@ -521,6 +910,11 @@
           app.findBar.highlightAll.checked = true;
         }
       });
+
+      // Check any already rendered text layers on setup
+      setTimeout(() => {
+        document.querySelectorAll(".textLayer").forEach(sortTextLayerByColumns);
+      }, 100);
     };
 
     if (app.initialized) {

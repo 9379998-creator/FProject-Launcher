@@ -7062,7 +7062,11 @@ function initPdfDocFrameSync() {
         });
 
         app.eventBus.on("cursortoolchanged", (evt) => {
-          updateViewerToolButton(evt.tool === 1);
+          if (win && typeof win.getViewerToolMode === "function") {
+            updateViewerToolButton(win.getViewerToolMode());
+          } else {
+            updateViewerToolButton(evt.tool === 1 ? 1 : 0);
+          }
         });
 
         // Плавное пошаговое масштабирование колесом мыши с Ctrl (как кнопки + и − на нижней панели)
@@ -7114,15 +7118,23 @@ function initPdfDocFrameSync() {
   });
 }
 
-function updateViewerToolButton(isHand) {
+function updateViewerToolButton(mode) {
   if (!els.viewToggleTool) return;
-  if (isHand) {
+  let m = mode;
+  if (typeof mode === "boolean") {
+    m = mode ? 1 : 0;
+  }
+  if (m === 1 || m === "hand") {
     els.viewToggleTool.textContent = "🖐️ Лапа";
-    els.viewToggleTool.title = "Активен режим: Лапа (перетаскивание листа). Клик — переключить на Стрелку (выделение текста)";
+    els.viewToggleTool.title = "Активен режим: Лапа (панорамирование листа). Клик — переключить на Стрелку (выделение текста)";
+    els.viewToggleTool.classList.add("active");
+  } else if (m === 2 || m === "zone") {
+    els.viewToggleTool.textContent = "📐 Зона";
+    els.viewToggleTool.title = "Активен режим: Зона (прямоугольное выделение колонки/таблицы). Клик — переключить на Лапу";
     els.viewToggleTool.classList.add("active");
   } else {
     els.viewToggleTool.textContent = "↖️ Стрелка";
-    els.viewToggleTool.title = "Активен режим: Стрелка (выделение текста и копирование). Клик — переключить на Лапу (перетаскивание)";
+    els.viewToggleTool.title = "Активен режим: Стрелка (стандартное выделение текста). Клик — переключить на Зону";
     els.viewToggleTool.classList.remove("active");
   }
 }
@@ -7132,16 +7144,24 @@ function toggleViewerTool() {
   const isPdf = Boolean(els.pdfDocViewer && !els.pdfDocViewer.hidden);
   if (isPdf) {
     const win = els.pdfDocFrame?.contentWindow;
+    if (win && typeof win.getViewerToolMode === "function" && typeof win.setViewerToolMode === "function") {
+      const current = win.getViewerToolMode();
+      // Cycle: 0 (Стрелка) -> 2 (Зона) -> 1 (Лапа) -> 0 (Стрелка)
+      const next = current === 0 ? 2 : current === 2 ? 1 : 0;
+      win.setViewerToolMode(next);
+      updateViewerToolButton(next);
+      return;
+    }
     if (win && win.PDFViewerApplication && win.PDFViewerApplication.pdfCursorTools) {
       const currentTool = win.PDFViewerApplication.pdfCursorTools.activeTool;
       const nextTool = currentTool === 1 ? 0 : 1;
       win.PDFViewerApplication.pdfCursorTools.switchTool(nextTool);
-      updateViewerToolButton(nextTool === 1);
+      updateViewerToolButton(nextTool);
     }
   } else {
     state.view.panMode = !state.view.panMode;
     updateViewTransform();
-    updateViewerToolButton(state.view.panMode);
+    updateViewerToolButton(state.view.panMode ? 1 : 0);
   }
 }
 
