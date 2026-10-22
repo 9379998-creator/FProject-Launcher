@@ -117,6 +117,7 @@ const els = {
   wordOpenNative: document.getElementById("wordOpenNative"),
   viewerEmpty: document.getElementById("viewerEmpty"),
   viewerControls: document.getElementById("viewerControls"),
+  viewBackBtn: document.getElementById("viewBackBtn"),
   qualityBadge: document.getElementById("qualityBadge"),
   pagePosition: document.getElementById("pagePosition"),
   viewToggleSearch: document.getElementById("viewToggleSearch"),
@@ -230,6 +231,8 @@ function exitWindow3() {
   }
   updateObjectButtons();
 }
+
+window.exitWindow3 = exitWindow3;
 
 function setTreeBrowseMode(enabled) {
   els.shell.classList.toggle("tree-browse", Boolean(enabled));
@@ -5931,10 +5934,24 @@ function handleGlobalEscape() {
     els.pdfTocDrawer.hidden = true;
     return;
   }
-  // 1. Из Окна 3 (полный экран или открытый документ из ленты) возвращаемся в Окно 1 + Окно 2
+  // 1. В Окне 3: Escape сбрасывает телодвижения (контекстное меню -> перевод -> выделение -> поиск)
   if (inWindow3()) {
-    exitWindow3();
-    return;
+    if (els.pdfDocViewer && !els.pdfDocViewer.hidden) {
+      const win = els.pdfDocFrame?.contentWindow;
+      if (win && typeof win.handlePdfJsEscape === "function") {
+        if (win.handlePdfJsEscape()) {
+          return true;
+        }
+      }
+    }
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && sel.toString().trim()) {
+      sel.removeAllRanges();
+      return true;
+    }
+    // В Окне 3 возврат выполняется через кнопку «Назад» на панели управления;
+    // Escape не выбрасывает случайно из документа.
+    return true;
   }
   // 2. В режиме дерева:
   if (inTreeMode()) {
@@ -7136,6 +7153,12 @@ if (els.viewToggleSearch) {
   els.viewToggleSearch.addEventListener("click", (e) => {
     e.stopPropagation();
     openPdfJsSearch();
+  });
+}
+
+if (els.viewBackBtn) {
+  els.viewBackBtn.addEventListener("click", () => {
+    exitWindow3();
   });
 }
 

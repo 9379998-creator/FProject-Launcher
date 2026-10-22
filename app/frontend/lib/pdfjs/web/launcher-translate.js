@@ -10,6 +10,34 @@
     const style = document.createElement("style");
     style.id = "launcherEnhancedStyles";
     style.textContent = `
+      /* Prominent back button in PDF viewer toolbar */
+      #toolbarBackBtn {
+        min-width: 74px !important;
+        width: auto !important;
+        padding: 0 8px !important;
+        margin-right: 6px !important;
+        background: #f1f5f9 !important;
+        border: 1px solid #94a3b8 !important;
+        border-radius: 3px !important;
+        color: #0f172a !important;
+        cursor: pointer !important;
+      }
+      #toolbarBackBtn > span {
+        display: inline-block !important;
+        text-indent: 0 !important;
+        font-size: 12px !important;
+        font-weight: 700 !important;
+        color: #0f172a !important;
+      }
+      #toolbarBackBtn:hover {
+        background: #0969da !important;
+        border-color: #0969da !important;
+        color: #ffffff !important;
+      }
+      #toolbarBackBtn:hover > span {
+        color: #ffffff !important;
+      }
+
       /* Prominent search button in PDF viewer toolbar */
       #viewFind {
         min-width: 76px !important;
@@ -108,6 +136,20 @@
       }
     `;
     document.head.appendChild(style);
+
+    // Toolbar Back Button
+    const backBtn = document.getElementById("toolbarBackBtn");
+    if (backBtn) {
+      backBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          if (window.parent && typeof window.parent.exitWindow3 === "function") {
+            window.parent.exitWindow3();
+          }
+        } catch (_) {}
+      };
+    }
 
     // Floating Translate Pill button
     tooltip = document.createElement("button");
@@ -302,44 +344,76 @@
         });
     };
 
-    window.addEventListener("keydown", (e) => {
-      // 1. Escape: dismiss parent context menu first!
-      if (e.key === "Escape") {
-        try {
-          if (window.parent && window.parent !== window && typeof window.parent.hideFileContextMenu === "function") {
-            if (window.parent.hideFileContextMenu()) {
-              e.preventDefault();
-              e.stopPropagation();
-              return;
-            }
-          }
-        } catch (_) {}
-        if (popover && popover.style.display !== "none") {
-          popover.style.display = "none";
-          return;
+    function handlePdfJsEscape() {
+      // 1. Сброс контекстного меню
+      try {
+        if (window.parent && window.parent !== window && typeof window.parent.hideFileContextMenu === "function") {
+          if (window.parent.hideFileContextMenu()) return true;
         }
-        if (tooltip && tooltip.style.display !== "none") {
-          tooltip.style.display = "none";
-          return;
-        }
-        try {
-          const app = window.PDFViewerApplication;
-          if (app && app.findBar?.opened) {
-            app.findBar.close();
-            return;
-          }
-          if (app && app.secondaryToolbar?.isOpen) {
-            app.secondaryToolbar.close();
-            return;
-          }
-        } catch (_) {}
-        try {
-          if (window.parent && window.parent !== window && typeof window.parent.handleGlobalEscape === "function") {
-            window.parent.handleGlobalEscape();
-          }
-        } catch (_) {}
+      } catch (_) {}
+
+      // 2. Сброс перевода (окно перевода или всплывающая плашка)
+      if (popover && popover.style.display !== "none") {
+        popover.style.display = "none";
+        return true;
+      }
+      if (tooltip && tooltip.style.display !== "none") {
+        tooltip.style.display = "none";
+        return true;
       }
 
+      // 3. Сброс выделения текста при следующем нажатии
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed && sel.toString().trim()) {
+        sel.removeAllRanges();
+        return true;
+      }
+
+      // 4. Сброс поиска: закрытие бара, очистка поля и снятие подсветки совпадений
+      const app = window.PDFViewerApplication;
+      if (app) {
+        const isFindOpen = Boolean(app.findBar?.opened);
+        const hasSearchQuery = Boolean(app.findBar?.findField?.value);
+        const hasHighlights = Boolean(document.querySelector(".textLayer .highlight"));
+        if (isFindOpen || hasSearchQuery || hasHighlights) {
+          if (app.findBar?.findField) {
+            app.findBar.findField.value = "";
+          }
+          if (app.findBar?.opened) {
+            app.findBar.close();
+          }
+          try {
+            app.findController?.executeCommand("find", { query: "", highlightAll: false, phraseSearch: true, findPrevious: false });
+            app.eventBus?.dispatch("find", { type: "", query: "", phraseSearch: true, highlightAll: false });
+          } catch (_) {}
+          document.querySelectorAll(".textLayer .highlight").forEach((el) => {
+            el.classList.remove("highlight", "selected", "begin", "end", "middle");
+          });
+          if (app.findBar && typeof app.findBar.updateResultsCount === "function") {
+            app.findBar.updateResultsCount({ current: 0, total: 0 });
+          }
+          return true;
+        }
+
+        if (app.secondaryToolbar?.isOpen) {
+          app.secondaryToolbar.close();
+          return true;
+        }
+      }
+
+      return false;
+    }
+    window.handlePdfJsEscape = handlePdfJsEscape;
+
+    window.addEventListener("keydown", (e) => {
+      // 1. Escape: пошаговый сброс телодвижений в Окне 3
+      if (e.key === "Escape") {
+        if (handlePdfJsEscape()) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+      }
       // 2. Ctrl+C: copy selected text and show toast
       if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C" || e.key === "\u0441" || e.key === "\u0421")) {
         const sel = window.getSelection();
