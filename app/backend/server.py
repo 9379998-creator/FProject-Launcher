@@ -2873,67 +2873,312 @@ def get_pdf_toc(path: Path) -> dict:
 
 
 ENGINEERING_GLOSSARY = {
+    # 1. Створки (Vent / Sash)
+    "vleugel": "створка (оконная / дверная / фасадная)",
+    "ouvrant": "створка (оконная / дверная / фасадная)",
+    "vent": "створка (оконная / дверная / фасадная)",
+    "fluegel": "створка (оконная / дверная / фасадная)",
+    "flügel": "створка (оконная / дверная / фасадная)",
+    "sash": "створка (оконная)",
+    "casement": "створка распашная",
+    "anta": "створка",
+    "skrzydlo": "створка",
+    "skrzydło": "створка",
+    "hoja": "створка",
+    "vantail": "створка",
+
+    # 2. Рамы и коробки (Frame)
+    "buitenkader": "рама / коробка (неподвижная)",
+    "dormant": "рама / коробка (неподвижная)",
+    "outer frame": "рама / коробка (неподвижная)",
+    "blendrahmen": "рама / коробка (неподвижная)",
+    "kader": "рама / коробка",
+    "frame": "рама / коробка",
+    "rahmen": "рама / коробка",
+    "telaio": "рама / коробка",
+    "telaio fisso": "глухая рама",
+    "rama": "рама / коробка",
+    "marco": "рама / коробка",
+    "ościeżnica": "коробка (дверная / оконная)",
+    "oscieznica": "коробка (дверная / оконная)",
+
+    # 3. Стойки и ригели (Mullion / Transom)
     "mullion": "стойка (фасадная)",
     "transom": "ригель (фасадный)",
+    "stijl": "стойка / импост",
+    "regel": "ригель",
+    "t-profiel": "импост / Т-профиль",
+    "tussenstijl": "импост",
+    "meneau": "стойка / импост",
+    "traverse": "ригель / поперечина",
+    "pfosten": "стойка (фасадная)",
+    "riegel": "ригель (фасадный)",
+    "kämpfer": "импост",
+    "kaempfer": "импост",
+    "montante": "стойка",
+    "traverso": "ригель",
+    "slup": "стойка",
+    "słup": "стойка",
+    "rygiel": "ригель",
+    "travesaño": "ригель / поперечина",
+
+    # 4. Прижимные планки (Pressure plate)
     "pressure plate": "прижимная планка",
+    "aandrukprofiel": "прижимная планка",
+    "serreur": "прижимная планка",
+    "andruckleiste": "прижимная планка",
+    "andruckprofil": "прижимная планка",
+    "pressore": "прижимная планка",
+    "listwa dociskowa": "прижимная планка",
+    "presor": "прижимная планка",
+
+    # 5. Декоративные крышки / капоты (Cover cap)
     "cover cap": "декоративная крышка (капот)",
+    "afdekkap": "декоративная крышка (капот)",
+    "capot": "декоративная крышка (капот)",
+    "abdeckkappe": "декоративная крышка (капот)",
+    "deckleiste": "декоративная крышка",
+    "copertina": "декоративная крышка (капот)",
+    "listwa maskujaca": "декоративная крышка (капот)",
+    "listwa maskująca": "декоративная крышка (капот)",
+    "tapeta": "декоративная крышка",
+
+    # 6. Штапики (Glazing bead)
+    "glazing bead": "штапик (под стеклопакет)",
+    "glazing bar": "штапик",
+    "glaslat": "штапик",
+    "parclose": "штапик",
+    "glasleiste": "штапик",
+    "fermavetro": "штапик",
+    "listwa szklarza": "штапик",
+    "listwa przyszybowa": "штапик",
+    "junquillo": "штапик",
+
+    # 7. Термомосты и термоизоляторы (Thermal break)
     "thermal break": "термомост (термовставка)",
     "thermal isolator": "термоизолятор",
+    "isolatiestrip": "термомост (полиамидная термовставка)",
+    "isolator": "термоизолятор",
+    "rupture thermique": "терморазрыв (термомост)",
+    "barrette": "термовставка (полиамидная)",
+    "isoliersteg": "термомост (термовставка)",
+    "dämmsteg": "термомост (термовставка)",
+    "taglio termico": "терморазрыв (термомост)",
+    "przekladka termiczna": "термомост",
+    "przekładka termiczna": "термомост",
+    "rotura de puente térmico": "терморазрыв (термомост)",
+
+    # 8. Уплотнители (Gasket)
     "gasket": "уплотнитель (EPDM)",
+    "dichting": "уплотнитель",
+    "middendichting": "центральный уплотнитель",
+    "aanslagdichting": "притворный уплотнитель",
+    "beglazingsdichting": "уплотнитель остекления",
+    "joint": "уплотнитель",
+    "joint central": "центральный уплотнитель",
+    "joint de frappe": "притворный уплотнитель",
+    "joint de vitrage": "уплотнитель остекления",
+    "dichtung": "уплотнитель (EPDM)",
+    "mitteldichtung": "центральный уплотнитель",
+    "anschlagdichtung": "притворный уплотнитель",
+    "verglasungsdichtung": "уплотнитель остекления",
+    "guarnizione": "уплотнитель",
+    "guarnizione centrale": "центральный уплотнитель",
+    "uszczelka": "уплотнитель",
+    "uszczelka centralna": "центральный уплотнитель",
+    "junta": "уплотнитель",
+
+    # 9. Защита от взлома (Burglar resistance)
+    "antywlamaniowosc podstawowa": "базовая защита от взлома (взломостойкость)",
+    "antywłamaniowość podstawowa": "базовая защита от взлома (взломостойкость)",
+    "antiscasso base": "базовая защита от взлома",
+    "einbruchhemmung grundstufe": "базовая защита от взлома",
+    "antywlamaniowosc": "взломостойкость / защита от взлома",
+    "antywłamaniowość": "взломостойкость / защита от взлома",
+    "antiscasso": "защита от взлома",
+    "einbruchhemmung": "защита от взлома",
+    "inbraakwerendheid": "защита от взлома",
+    "burglar resistance": "защита от взлома (взломостойкость)",
+    "podstawowa": "базовая",
+    "base": "базовая",
+    "grundsicherheit": "базовая безопасность",
+
+    # 10. Фурнитура и крепеж (Hardware & Accessories)
     "bracket": "кронштейн опорный/несущий",
     "anchor": "анкер / дюбель",
-    "insulation": "утеплитель / минвата",
-    "mineral wool": "минеральная вата",
-    "composite panel": "композитная панель",
-    "expansion joint": "температурный / деформационный шов",
-    "sealant": "герметик",
-    "facade": "фасад",
-    "curtain wall": "навесной светопрозрачный фасад (НСПФ / СПК)",
-    "ventilated facade": "навесной вентилируемый фасад (НВФ)",
-    "glazing": "остекление / стеклопакет",
-    "double glazing": "двухкамерный стеклопакет",
-    "spandrel": "стемалит / глухая зона межэтажного пояса",
-    "flashing": "отлив / нащельник / оцинкованный фартук",
-    "weep hole": "дренажное отверстие",
     "fastener": "крепеж / метизы",
     "rivet": "заклепка",
     "self-tapping screw": "саморез",
+    "insulation": "утеплитель / минвата",
+    "mineral wool": "минеральная вата",
+    "composite panel": "композитная панель",
+    "expansion joint": "деформационный шов",
+    "sealant": "герметик",
+    "weep hole": "дренажное отверстие",
+    "drainage": "дренаж / водоотвод",
+    "afwatering": "дренаж / водоотвод",
+    "entwässerung": "дренаж / водоотвод",
+    "entwaesserung": "дренаж / водоотвод",
+    "drenaggio": "дренаж / водоотвод",
+    "odwodnienie": "дренаж / водоотвод",
+    "hinge": "петля (оконная / дверная)",
+    "scharnier": "петля",
+    "paumelle": "петля",
+    "band": "петля",
+    "cerniera": "петля",
+    "zawias": "петля",
+    "handle": "ручка (оконная / дверная)",
+    "kruk": "ручка",
+    "poignée": "ручка",
+    "griff": "ручка",
+    "maniglia": "ручка",
+    "klamka": "ручка",
+    "corner cleat": "угловой сухарь (закладная)",
+    "hoekverbinding": "угловой сухарь",
+    "équerre": "угловой соединитель (сухарь)",
+    "eckwinkel": "угловой сухарь",
+    "squadretta": "угловой сухарь",
+
+    # 11. Фасады и остекление
+    "facade": "фасад",
+    "curtain wall": "навесной светопрозрачный фасад (НСПФ / СПК)",
+    "unitized facade": "элементный (модульный) фасад",
+    "ventilated facade": "навесной вентилируемый фасад (НВФ)",
+    "glazing": "остекление / стеклопакет",
+    "double glazing": "двухкамерный стеклопакет",
+    "triple glazing": "трехкамерный стеклопакет",
+    "spandrel": "стемалит / глухая зона межэтажного пояса",
+    "flashing": "отлив / нащельник / фартук",
 }
+
+_TRANSLATION_CACHE: dict = {}
 
 def translate_text(text: str, target_lang: str = "ru") -> dict:
     text_clean = text.strip()
     if not text_clean:
         return {"original": "", "translated": "", "source": "none"}
-    
-    lower_t = text_clean.lower()
-    if lower_t in ENGINEERING_GLOSSARY:
-        return {
+
+    cache_key = (text_clean, target_lang)
+    if cache_key in _TRANSLATION_CACHE:
+        return _TRANSLATION_CACHE[cache_key]
+
+    import urllib.request, json, urllib.parse, re
+
+    low = text_clean.lower()
+    norm = re.sub(r"\s+", " ", low)
+
+    # 1. Точное совпадение во встроенном инженерном глоссарии
+    if norm in ENGINEERING_GLOSSARY:
+        res = {
             "original": text_clean,
-            "translated": ENGINEERING_GLOSSARY[lower_t],
+            "translated": ENGINEERING_GLOSSARY[norm],
             "source": "glossary"
         }
-    
-    import urllib.request, json, urllib.parse
+        _TRANSLATION_CACHE[cache_key] = res
+        return res
+
+    # 2. Жадный поиск составных терминов (каталоги Reynaers, Schüco с 4 языками в одном блоке)
+    keys = sorted(ENGINEERING_GLOSSARY.keys(), key=lambda k: len(k), reverse=True)
+    matched = []
+    work_str = " " + norm + " "
+    for k in keys:
+        pattern = r"(?<![a-zA-Z0-9_\u0080-\uFFFF])" + re.escape(k) + r"(?![a-zA-Z0-9_\u0080-\uFFFF])"
+        if re.search(pattern, work_str):
+            matched.append((k, ENGINEERING_GLOSSARY[k]))
+            work_str = re.sub(pattern, " ", work_str)
+
+    unmatched_words = [w for w in work_str.split() if w and not re.match(r"^[0-9\.,/\-+xX]+$", w)]
+    if matched and len(unmatched_words) == 0:
+        meanings = [m[1] for m in matched]
+        unique_meanings = list(dict.fromkeys(meanings))
+        if len(unique_meanings) == 1:
+            translated = unique_meanings[0]
+        else:
+            translated = "\n".join([f"• {m[0].upper()} — {m[1]}" for m in matched])
+        res = {
+            "original": text_clean,
+            "translated": translated,
+            "source": "glossary"
+        }
+        _TRANSLATION_CACHE[cache_key] = res
+        return res
+
+    # 3. Онлайн-каскад перевода без блокировок (HTTP 429)
+    # Провайдер 1: Google Clients5 Dictionary (Chrome extension endpoint — стабильный, быстрый, без 429)
+    try:
+        url = f"https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl={target_lang}&q=" + urllib.parse.quote(text_clean)
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+        })
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            if data and isinstance(data, list) and len(data) > 0:
+                if isinstance(data[0], list) and len(data[0]) > 0:
+                    translated = data[0][0]
+                    detected_sl = data[0][1] if len(data[0]) > 1 else "auto"
+                    res = {
+                        "original": text_clean,
+                        "translated": translated,
+                        "detectedSource": detected_sl,
+                        "source": "google"
+                    }
+                    _TRANSLATION_CACHE[cache_key] = res
+                    return res
+    except Exception as e:
+        logger.debug("Translation clients5 failed: %s", e)
+
+    # Провайдер 2: MyMemory API (резервный надежный шлюз)
+    try:
+        url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(text_clean)}&langpair=autodetect|{target_lang}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json"
+        })
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            trans = data.get("responseData", {}).get("translatedText")
+            if trans and "MYMEMORY WARNING" not in trans:
+                res = {
+                    "original": text_clean,
+                    "translated": trans,
+                    "detectedSource": "auto",
+                    "source": "mymemory"
+                }
+                _TRANSLATION_CACHE[cache_key] = res
+                return res
+    except Exception as e:
+        logger.debug("Translation mymemory failed: %s", e)
+
+    # Провайдер 3: Google GTX с браузерными заголовками
     try:
         url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target_lang}&dt=t&q=" + urllib.parse.quote(text_clean)
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=5) as r:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": "https://translate.google.com/",
+            "Accept": "*/*"
+        })
+        with urllib.request.urlopen(req, timeout=6) as r:
             data = json.loads(r.read().decode("utf-8"))
             translated = "".join([part[0] for part in data[0] if part and part[0]])
             detected_sl = data[2] if len(data) > 2 else "auto"
-            return {
+            res = {
                 "original": text_clean,
                 "translated": translated,
                 "detectedSource": detected_sl,
-                "source": "google"
+                "source": "google-gtx"
             }
+            _TRANSLATION_CACHE[cache_key] = res
+            return res
     except Exception as e:
-        logger.warning("Translation error: %s", e)
-        return {
-            "original": text_clean,
-            "translated": f"Не удалось перевести: {e}",
-            "source": "error"
-        }
+        logger.warning("Translation gtx failed: %s", e)
+
+    # Если все сервисы недоступны
+    return {
+        "original": text_clean,
+        "translated": "Не удалось подключиться к службам перевода. Проверьте подключение к интернету.",
+        "source": "error"
+    }
 
 def search_pdf_document(path: Path, query: str) -> dict:
     if not path.exists():

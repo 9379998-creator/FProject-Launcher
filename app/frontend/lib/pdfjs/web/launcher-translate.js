@@ -349,9 +349,9 @@
         <button id="launcherTransCardClose" style="border:none; background:transparent; cursor:pointer; font-size:13px; color:#6b7280; padding:2px 4px;">✕</button>
       </div>
       <div style="margin-top:8px;">
-        <div id="launcherTransOrig" style="font-size:13px; color:#4b5563; word-break:break-word; background:#f9fafb; padding:6px 8px; border-radius:6px; border:1px solid #e5e7eb; max-height:110px; overflow-y:auto;"></div>
+        <div id="launcherTransOrig" style="font-size:13px; color:#4b5563; word-break:break-word; white-space:pre-wrap; background:#f9fafb; padding:6px 8px; border-radius:6px; border:1px solid #e5e7eb; max-height:110px; overflow-y:auto;"></div>
         <div style="text-align:center; color:#9ca3af; font-size:12px; margin:4px 0;">↓</div>
-        <div id="launcherTransRes" style="font-size:14px; font-weight:600; color:#0969da; word-break:break-word; background:#eff6ff; padding:8px 10px; border-radius:6px; border-left:3px solid #0091ff; max-height:130px; overflow-y:auto;"></div>
+        <div id="launcherTransRes" style="font-size:14px; font-weight:600; color:#0969da; word-break:break-word; white-space:pre-wrap; line-height:1.45; background:#eff6ff; padding:8px 10px; border-radius:6px; border-left:3px solid #0091ff; max-height:130px; overflow-y:auto;"></div>
       </div>
       <div style="display:flex; justify-content:flex-end; gap:6px; margin-top:8px;">
         <button id="launcherTransCopy" style="background:#0969da; color:#fff; border:none; border-radius:6px; font-size:12px; font-weight:600; padding:4px 12px; cursor:pointer;">Скопировать</button>
