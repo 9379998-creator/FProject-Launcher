@@ -1,10 +1,10 @@
 // Floating translation pill, cursor tool toggle, search match navigation, scale-lock,
-// and AutoCAD-style word-level rectangular zone selection for Mozilla PDF.js
+// and AutoCAD-style word-level rectangular zone selection with dual-mode support for Mozilla PDF.js
 (function() {
   let tooltip = null;
   let popover = null;
   let zoneBox = null;
-  let viewerToolMode = 0; // 0: Select / AutoCAD Zone (Стрелка), 1: Hand (Лапа)
+  let viewerToolMode = 0; // 0: AutoCAD Zone (Рамка), 1: Hand (Лапа), 2: Linear Text (Текст)
   let isMouseDown = false;
   let isDragging = false;
   let zoneStart = { clientX: 0, clientY: 0, target: null };
@@ -30,7 +30,7 @@
   // In complex PDF catalogs (e.g. Reynaers, Schuco, architectural schedules), multiple columns
   // or table cells are frequently emitted in the PDF content stream as a single wide text chunk.
   // Breaking them down into individual word elements gives each word its own independent 2D bounding box,
-  // preventing rectangular selections from bleeding across columns or drawing long horizontal bars!
+  // preventing rectangular selections from bleeding across columns.
   function tokenizeTextLayerWords(layerDiv) {
     if (!layerDiv || layerDiv.dataset.launcherTokenized) return;
 
@@ -107,6 +107,33 @@
     zoneSelectedText = lines.filter(Boolean).join("\n");
   }
 
+  const updateSelectionTooltip = () => {
+    if (viewerToolMode === 0 && zoneSelectedText && zoneBox && zoneBox.style.display !== "none") {
+      const rect = zoneBox.getBoundingClientRect();
+      tooltip.style.top = Math.max(10, rect.top - 38) + "px";
+      tooltip.style.left = Math.max(10, rect.left + rect.width / 2 - 45) + "px";
+      tooltip.style.display = "block";
+      return;
+    }
+
+    const sel = window.getSelection();
+    const txt = sel ? sel.toString().trim() : "";
+    if (!txt) {
+      if (tooltip) tooltip.style.display = "none";
+      return;
+    }
+    zoneSelectedText = txt;
+    try {
+      const range = sel.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      if (rect && rect.width > 0 && rect.height > 0) {
+        tooltip.style.top = Math.max(10, rect.top - 38) + "px";
+        tooltip.style.left = Math.max(10, rect.left + rect.width / 2 - 45) + "px";
+        tooltip.style.display = "block";
+      }
+    } catch (_) {}
+  };
+
   function initUI() {
     if (tooltip) return;
 
@@ -142,19 +169,22 @@
         color: #ffffff !important;
       }
 
-      /* 1. TextLayer display and CAD crosshair cursor in Arrow mode */
+      /* 1. TextLayer display */
       .textLayer {
         opacity: 1 !important;
-        user-select: none !important;
-        -webkit-user-select: none !important;
       }
       .textLayer :is(span:not(.highlight), br, .launcher-word) {
         color: transparent !important;
       }
-      .textLayer :is(span, .launcher-word) {
-        user-select: none !important;
-        -webkit-user-select: none !important;
-        cursor: crosshair !important;
+
+      /* Critical fix: word tokens must be inline and static to flow naturally inside parent span */
+      .textLayer .launcher-word {
+        position: static !important;
+        display: inline !important;
+        color: transparent !important;
+        white-space: pre !important;
+        transform: none !important;
+        cursor: inherit !important;
       }
 
       /* Prevent markedContent and endOfContent from disrupting selection */
@@ -165,7 +195,43 @@
         user-select: none !important;
       }
 
-      /* 2. AutoCAD rectangular zone selection styling with word-level precision */
+      /* Mode 0: AutoCAD Zone Mode (crosshair, no native selection) */
+      body:not(.text-mode-active):not(.hand-mode-active) .textLayer,
+      body.zone-mode-active .textLayer {
+        user-select: none !important;
+        -webkit-user-select: none !important;
+      }
+      body:not(.text-mode-active):not(.hand-mode-active) .textLayer :is(span, .launcher-word),
+      body.zone-mode-active .textLayer :is(span, .launcher-word) {
+        user-select: none !important;
+        -webkit-user-select: none !important;
+        cursor: crosshair !important;
+      }
+
+      /* Mode 2: Linear Text Mode (I-beam cursor, native selection) */
+      body.text-mode-active .textLayer {
+        user-select: text !important;
+        -webkit-user-select: text !important;
+      }
+      body.text-mode-active .textLayer :is(span, .launcher-word) {
+        user-select: text !important;
+        -webkit-user-select: text !important;
+        cursor: text !important;
+      }
+      body.text-mode-active .textLayer ::selection {
+        background: rgba(0, 102, 255, 0.35) !important;
+        color: transparent !important;
+      }
+
+      /* Mode 1: Hand Mode */
+      body.hand-mode-active #viewerContainer,
+      body.hand-mode-active .page,
+      body.hand-mode-active .textLayer,
+      body.hand-mode-active :is(span, .launcher-word) {
+        cursor: grab !important;
+      }
+
+      /* AutoCAD rectangular zone selection styling with word-level precision */
       #launcherZoneBox {
         position: absolute;
         pointer-events: none;
@@ -180,14 +246,6 @@
         outline: 1px solid rgba(0, 102, 255, 0.6) !important;
         border-radius: 2px !important;
         color: transparent !important;
-      }
-
-      /* Hand mode cursor */
-      body.hand-mode-active #viewerContainer,
-      body.hand-mode-active .page,
-      body.hand-mode-active .textLayer,
-      body.hand-mode-active :is(span, .launcher-word) {
-        cursor: grab !important;
       }
 
       /* 3. All search matches: bright sunshine yellow with contrast border */
@@ -315,7 +373,7 @@
       }
     };
 
-    // AutoCAD-style Rectangular Selection Handlers
+    // Selection Handlers (Mode 0: AutoCAD Zone, Mode 2: Text I-beam)
     document.addEventListener("mousedown", (e) => {
       // Don't intercept toolbar controls, findbar, or popovers
       const interactive = e.target.closest("button, input, select, textarea, #toolbarViewer, #findbar, #launcherTransPill, #launcherTransCard");
@@ -326,10 +384,13 @@
         tooltip.style.display = "none";
       }
 
-      // If in Hand mode (mode === 1): let PDF.js do native panning
-      if (viewerToolMode === 1) return;
+      // If in Hand mode (mode === 1) or Text mode (mode === 2): don't draw rectangular box
+      if (viewerToolMode === 1 || viewerToolMode === 2) {
+        isMouseDown = true;
+        return;
+      }
 
-      // Arrow mode (mode === 0): AutoCAD-style rectangular zone selection
+      // Zone mode (mode === 0): AutoCAD-style rectangular zone selection
       if (e.button === 0) {
         clearZoneSelection();
         window.getSelection()?.removeAllRanges();
@@ -349,7 +410,7 @@
 
     document.addEventListener("mousemove", (e) => {
       if (!isMouseDown) return;
-      if (viewerToolMode === 1) return;
+      if (viewerToolMode === 1 || viewerToolMode === 2) return;
 
       const dx = e.clientX - zoneStart.clientX;
       const dy = e.clientY - zoneStart.clientY;
@@ -389,9 +450,7 @@
         bottom: boxTop + boxHeight
       };
 
-      // Word-level precision: check each word token independently.
-      // This guarantees that if a PDF contains multiple columns glued in one line,
-      // only the words inside the box are selected, completely stopping column bleed!
+      // Word-level precision check with 5px vertical tolerance and 2px horizontal tolerance
       const matchedTokens = [];
       const allTokens = document.querySelectorAll(
         ".textLayer .launcher-word, .textLayer span:not(.markedContent):not(.endOfContent):not(:has(.launcher-word))"
@@ -402,12 +461,11 @@
         const r = tokenEl.getBoundingClientRect();
         if (r.width === 0 && r.height === 0) continue;
 
-        // Bounding check with 3px vertical tolerance
         const intersects = !(
-          r.right < boxRect.left ||
-          r.left > boxRect.right ||
-          r.bottom < boxRect.top - 3 ||
-          r.top > boxRect.bottom + 3
+          r.right < boxRect.left - 2 ||
+          r.left > boxRect.right + 2 ||
+          r.bottom < boxRect.top - 5 ||
+          r.top > boxRect.bottom + 5
         );
 
         if (intersects) {
@@ -425,6 +483,12 @@
     document.addEventListener("mouseup", (e) => {
       if (!isMouseDown) return;
       isMouseDown = false;
+
+      // In Text mode (mode === 2): show tooltip over native selection
+      if (viewerToolMode === 2) {
+        setTimeout(updateSelectionTooltip, 30);
+        return;
+      }
 
       if (viewerToolMode === 1) return;
 
@@ -518,7 +582,9 @@
     document.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const textToUse = zoneSelectedText || "";
+      const sel = window.getSelection();
+      const selText = sel ? sel.toString().trim() : "";
+      const textToUse = zoneSelectedText || selText || "";
       try {
         if (window.parent && window.parent !== window && typeof window.parent.showPdfViewerContextMenu === "function") {
           const frameRect = window.frameElement ? window.frameElement.getBoundingClientRect() : { left: 0, top: 0 };
@@ -634,14 +700,16 @@
     window.handlePdfJsEscape = handlePdfJsEscape;
     window.clearZoneSelection = clearZoneSelection;
 
-    // Tool mode management (0: Arrow / AutoCAD Zone, 1: Hand / Pan)
+    // Tool mode management (0: AutoCAD Zone, 1: Hand Pan, 2: Linear Text)
     window.getViewerToolMode = function() {
       return viewerToolMode;
     };
 
     window.setViewerToolMode = function(mode) {
-      viewerToolMode = Number(mode) === 1 ? 1 : 0;
+      viewerToolMode = Number(mode);
       const app = window.PDFViewerApplication;
+      document.body.classList.remove("hand-mode-active", "text-mode-active", "zone-mode-active");
+
       if (viewerToolMode === 1) {
         // Hand mode
         clearZoneSelection();
@@ -649,10 +717,18 @@
         try {
           app?.pdfCursorTools?.switchTool(1);
         } catch (_) {}
-      } else {
-        // Arrow mode (AutoCAD zone select)
+      } else if (viewerToolMode === 2) {
+        // Linear text selection mode (blinking I-beam cursor)
         clearZoneSelection();
-        document.body.classList.remove("hand-mode-active");
+        document.body.classList.add("text-mode-active");
+        try {
+          app?.pdfCursorTools?.switchTool(0);
+        } catch (_) {}
+      } else {
+        // AutoCAD rectangular zone mode (crosshair cursor)
+        viewerToolMode = 0;
+        clearZoneSelection();
+        document.body.classList.add("zone-mode-active");
         try {
           app?.pdfCursorTools?.switchTool(0);
         } catch (_) {}
@@ -673,9 +749,11 @@
           return;
         }
       }
-      // 2. Ctrl+C: copy selected zone text and show toast
+      // 2. Ctrl+C: copy selected zone text or native text and show toast
       if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C" || e.key === "с" || e.key === "С")) {
-        const text = zoneSelectedText;
+        const sel = window.getSelection();
+        const selText = sel ? sel.toString().trim() : "";
+        const text = zoneSelectedText || selText;
         if (text) {
           try {
             if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -706,7 +784,7 @@
         app.pdfLinkService._ignoreDestinationZoom = true;
       }
 
-      // 2. Default tool: ALWAYS SELECT (Стрелка) on load, so user is never stuck in Hand mode!
+      // 2. Default tool: ALWAYS SELECT (Рамка) on load
       try {
         app.pdfCursorTools?.switchTool(0); // CursorTool.SELECT
       } catch (_) {}

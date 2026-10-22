@@ -7119,14 +7119,18 @@ function initPdfDocFrameSync() {
 
 function updateViewerToolButton(mode) {
   if (!els.viewToggleTool) return;
-  const isHand = Boolean(mode === 1 || mode === true || mode === "hand");
-  if (isHand) {
+  const m = Number(mode);
+  if (m === 1 || mode === "hand") {
     els.viewToggleTool.textContent = "🖐️ Лапа";
-    els.viewToggleTool.title = "Активен режим: Лапа (панорамирование листа). Клик — переключить на Стрелку (прямоугольное выделение зоны, как в AutoCAD)";
+    els.viewToggleTool.title = "Активен режим: Лапа (панорамирование). Клик — переключить на Рамку (AutoCAD)";
+    els.viewToggleTool.classList.add("active");
+  } else if (m === 2 || mode === "text") {
+    els.viewToggleTool.textContent = "I Текст";
+    els.viewToggleTool.title = "Активен режим: Текст (обычный построчный курсор). Клик — переключить на Лапу (панорамирование)";
     els.viewToggleTool.classList.add("active");
   } else {
-    els.viewToggleTool.textContent = "↖️ Стрелка";
-    els.viewToggleTool.title = "Активен режим: Стрелка (прямоугольное выделение зоны, как в AutoCAD). Клик — переключить на Лапу (панорамирование)";
+    els.viewToggleTool.textContent = "↖️ Рамка";
+    els.viewToggleTool.title = "Активен режим: Рамка (AutoCAD). Клик — переключить на Текст (обычный курсор)";
     els.viewToggleTool.classList.remove("active");
   }
 }
@@ -7138,16 +7142,11 @@ function toggleViewerTool() {
     const win = els.pdfDocFrame?.contentWindow;
     if (win && typeof win.getViewerToolMode === "function" && typeof win.setViewerToolMode === "function") {
       const current = win.getViewerToolMode();
-      const next = current === 1 ? 0 : 1;
+      // Cycle: 0 (Рамка) -> 2 (Текст) -> 1 (Лапа) -> 0 (Рамка)
+      const next = current === 0 ? 2 : current === 2 ? 1 : 0;
       win.setViewerToolMode(next);
       updateViewerToolButton(next);
       return;
-    }
-    if (win && win.PDFViewerApplication && win.PDFViewerApplication.pdfCursorTools) {
-      const currentTool = win.PDFViewerApplication.pdfCursorTools.activeTool;
-      const nextTool = currentTool === 1 ? 0 : 1;
-      win.PDFViewerApplication.pdfCursorTools.switchTool(nextTool);
-      updateViewerToolButton(nextTool);
     }
   } else {
     state.view.panMode = !state.view.panMode;
