@@ -1483,6 +1483,22 @@ textarea:focus {
   background: var(--active-strong);
 }
 
+.view-search-btn {
+  font-weight: 600;
+  min-width: 78px;
+  font-size: 11px;
+  letter-spacing: 0.2px;
+  color: #0969da;
+  background: #ffffff;
+  border: 1px solid #0969da;
+  transition: all 0.15s ease;
+}
+
+.view-search-btn:hover {
+  background: #0969da;
+  color: #ffffff;
+}
+
 .view-tool-btn {
   font-weight: 600;
   min-width: 82px;

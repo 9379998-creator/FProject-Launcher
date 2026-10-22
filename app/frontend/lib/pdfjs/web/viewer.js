@@ -4961,6 +4961,9 @@ class PDFFindBar {
     this.toggleButton = options.toggleButton;
     this.findField = options.findField;
     this.highlightAll = options.highlightAllCheckbox;
+    if (this.highlightAll) {
+      this.highlightAll.checked = true;
+    }
     this.caseSensitive = options.caseSensitiveCheckbox;
     this.matchDiacritics = options.matchDiacriticsCheckbox;
     this.entireWord = options.entireWordCheckbox;
@@ -5018,7 +5021,7 @@ class PDFFindBar {
       query: this.findField.value,
       caseSensitive: this.caseSensitive.checked,
       entireWord: this.entireWord.checked,
-      highlightAll: this.highlightAll.checked,
+      highlightAll: this.highlightAll ? this.highlightAll.checked : true,
       findPrevious: findPrev,
       matchDiacritics: this.matchDiacritics.checked
     });
@@ -5078,6 +5081,9 @@ class PDFFindBar {
     if (!this.opened) {
       this.opened = true;
       (0, _ui_utils.toggleExpandedBtn)(this.toggleButton, true, this.bar);
+    }
+    if (this.highlightAll) {
+      this.highlightAll.checked = true;
     }
     this.findField.select();
     this.findField.focus();
@@ -5442,6 +5448,10 @@ class PDFFindController {
       left: selectedLeft + MATCH_SCROLL_OFFSET_LEFT
     };
     (0, _ui_utils.scrollIntoView)(element, spot, true);
+    try {
+      const activeEl = element.querySelector?.(".highlight.selected") || element;
+      activeEl.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    } catch (_) {}
   }
   #reset() {
     this._highlightMatches = false;

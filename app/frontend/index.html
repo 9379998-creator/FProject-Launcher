@@ -152,6 +152,7 @@
             <iframe class="excel-sheet-frame word-doc-frame" id="wordDocFrame" title="Документ Word" loading="lazy"></iframe>
           </section>
           <div class="viewer-controls" id="viewerControls" hidden>
+            <button id="viewToggleSearch" type="button" class="view-search-btn" title="Поиск текста и артикулов по альбому (Ctrl+F)">🔍 Поиск</button>
             <button id="viewToggleTool" type="button" class="view-tool-btn" title="Инструмент: Стрелка (выделение текста) / Лапа (панорамирование)">↖️ Стрелка</button>
             <button id="viewZoomOut" type="button" title="Уменьшить">−</button>
             <button id="viewZoomIn" type="button" title="Увеличить">+</button>
@@ -213,6 +214,6 @@
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'lib/pdfjs/pdf.worker.min.js';
   </script>
-  <script src="app.js?v=20261021-search-rotation-translate"></script>
+  <script src="app.js?v=20261022-search-fix"></script>
 </body>
 </html>

@@ -118,6 +118,7 @@ const els = {
   viewerControls: document.getElementById("viewerControls"),
   qualityBadge: document.getElementById("qualityBadge"),
   pagePosition: document.getElementById("pagePosition"),
+  viewToggleSearch: document.getElementById("viewToggleSearch"),
   viewToggleTool: document.getElementById("viewToggleTool"),
   viewZoomOut: document.getElementById("viewZoomOut"),
   viewZoomIn: document.getElementById("viewZoomIn"),
@@ -6753,7 +6754,12 @@ function openPdfJsSearch() {
   win.focus();
   try {
     if (win.PDFViewerApplication && win.PDFViewerApplication.findBar) {
-      win.PDFViewerApplication.findBar.open();
+      if (!win.PDFViewerApplication.findBar.opened) {
+        win.PDFViewerApplication.findBar.open();
+      }
+      if (win.PDFViewerApplication.findBar.highlightAll) {
+        win.PDFViewerApplication.findBar.highlightAll.checked = true;
+      }
       const findInput = win.document?.getElementById("findInput");
       if (findInput) {
         findInput.focus();
@@ -6866,6 +6872,13 @@ function toggleViewerTool() {
 
 if (els.viewToggleTool) {
   els.viewToggleTool.addEventListener("click", toggleViewerTool);
+}
+
+if (els.viewToggleSearch) {
+  els.viewToggleSearch.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openPdfJsSearch();
+  });
 }
 
 window.handleGlobalEscape = handleGlobalEscape;

@@ -97,7 +97,7 @@ See https://github.com/adobe-type-tools/cmap-resources
           </div>
 
           <div id="findbarOptionsOneContainer">
-            <input type="checkbox" id="findHighlightAll" class="toolbarField" tabindex="94">
+            <input type="checkbox" id="findHighlightAll" class="toolbarField" tabindex="94" checked>
             <label for="findHighlightAll" class="toolbarLabel" data-l10n-id="find_highlight">Highlight All</label>
             <input type="checkbox" id="findMatchCase" class="toolbarField" tabindex="95">
             <label for="findMatchCase" class="toolbarLabel" data-l10n-id="find_match_case_label">Match Case</label>
@@ -253,8 +253,8 @@ See https://github.com/adobe-type-tools/cmap-resources
                   <span data-l10n-id="toggle_sidebar_label">Toggle Sidebar</span>
                 </button>
                 <div class="toolbarButtonSpacer"></div>
-                <button id="viewFind" class="toolbarButton" title="Find in Document" tabindex="12" data-l10n-id="findbar" aria-expanded="false" aria-controls="findbar">
-                  <span data-l10n-id="findbar_label">Find</span>
+                <button id="viewFind" class="toolbarButton" title="Поиск текста и артикулов (Ctrl+F)" tabindex="12" data-l10n-id="findbar" aria-expanded="false" aria-controls="findbar">
+                  <span data-l10n-id="findbar_label">🔍 Поиск</span>
                 </button>
                 <div class="splitToolbarButton hiddenSmallView">
                   <button class="toolbarButton" title="Previous Page" id="previous" tabindex="13" data-l10n-id="previous">
@@ -482,6 +482,6 @@ See https://github.com/adobe-type-tools/cmap-resources
     <div id="printContainer"></div>
 
     <input type="file" id="fileInput" class="hidden">
-    <script src="launcher-translate.js"></script>
+    <script src="launcher-translate.js?v=20261022-search-fix"></script>
   </body>
 </html>

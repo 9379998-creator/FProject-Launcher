@@ -1,10 +1,99 @@
-// Floating translation pill, cursor tool toggle, and scale-lock for Mozilla PDF.js
+// Floating translation pill, cursor tool toggle, search match navigation, and scale-lock for Mozilla PDF.js
 (function() {
   let tooltip = null;
   let popover = null;
 
   function initUI() {
     if (tooltip) return;
+
+    // Inject high-contrast match styling & toolbar enhancements
+    const style = document.createElement("style");
+    style.id = "launcherEnhancedStyles";
+    style.textContent = `
+      /* 1. Make textLayer fully visible so highlight colors are bright and clear */
+      .textLayer {
+        opacity: 1 !important;
+      }
+      .textLayer :is(span:not(.highlight), br) {
+        color: transparent !important;
+      }
+
+      /* 2. All search matches: bright sunshine yellow with contrast border */
+      .textLayer .highlight {
+        background-color: #ffe600 !important;
+        color: #000000 !important;
+        opacity: 0.85 !important;
+        border-radius: 3px !important;
+        box-shadow: 0 0 0 1px #d97706, 0 1px 3px rgba(0, 0, 0, 0.25) !important;
+        cursor: pointer !important;
+      }
+
+      /* 3. Active / Selected match: glowing electric safety orange with white outline and pulse */
+      .textLayer .highlight.selected {
+        background-color: #ff5722 !important;
+        color: #ffffff !important;
+        opacity: 0.98 !important;
+        border-radius: 4px !important;
+        outline: 2px solid #ffffff !important;
+        box-shadow: 0 0 0 3px #bf360c, 0 0 16px rgba(255, 87, 34, 0.9) !important;
+        z-index: 100 !important;
+        animation: launcherMatchPulse 1.2s ease-in-out infinite alternate !important;
+      }
+
+      @keyframes launcherMatchPulse {
+        0% {
+          box-shadow: 0 0 0 2px #d84315, 0 0 8px rgba(255, 87, 34, 0.7);
+          transform: scale(1);
+        }
+        100% {
+          box-shadow: 0 0 0 4px #bf360c, 0 0 18px rgba(255, 109, 0, 1);
+          transform: scale(1.06);
+        }
+      }
+
+      /* 4. Text selection */
+      .textLayer ::selection {
+        background: #0091ff !important;
+        color: #ffffff !important;
+      }
+
+      /* 5. Obvious search button in PDF.js top toolbar */
+      #viewFind {
+        width: auto !important;
+        min-width: 78px !important;
+        padding: 0 8px !important;
+        background: #0969da !important;
+        color: #ffffff !important;
+        border: 1px solid #0055b3 !important;
+        border-radius: 4px !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 4px !important;
+        margin: 3px 4px !important;
+        cursor: pointer !important;
+        box-shadow: 0 1px 4px rgba(9, 105, 218, 0.3) !important;
+      }
+      #viewFind:hover {
+        background: #0055b3 !important;
+      }
+      #viewFind::before {
+        display: none !important;
+      }
+      #viewFind > span {
+        position: static !important;
+        width: auto !important;
+        height: auto !important;
+        clip: auto !important;
+        overflow: visible !important;
+        color: #ffffff !important;
+        display: inline !important;
+        font-weight: 600 !important;
+      }
+    `;
+    document.head.appendChild(style);
 
     // Floating Translate Pill button
     tooltip = document.createElement("button");
@@ -148,7 +237,6 @@
     if (!app) return;
 
     let lockedScale = null;
-    let isEnforcingScale = false;
 
     const setupApp = () => {
       if (!app.eventBus || !app.pdfViewer) return;
@@ -189,48 +277,90 @@
         });
       }
 
-      // 4. Freeze initial scale into a fixed numeric scale so page jumps NEVER recalculate zoom
-      const freezeCurrentScale = () => {
+      // 4. Update viewFind button text inside PDF.js toolbar
+      const viewFindBtn = document.getElementById("viewFind");
+      if (viewFindBtn) {
+        const span = viewFindBtn.querySelector("span");
+        if (span) {
+          span.textContent = "🔍 Поиск";
+        } else {
+          viewFindBtn.textContent = "🔍 Поиск";
+        }
+        viewFindBtn.title = "Поиск текста и артикулов по альбому (Ctrl+F)";
+      }
+
+      // 5. Ensure findBar defaults to Highlight All
+      if (app.findBar) {
+        if (app.findBar.highlightAll) {
+          app.findBar.highlightAll.checked = true;
+        }
+      }
+
+      // 6. Freeze scale into a fixed numeric scale so page transitions NEVER auto-recalculate
+      const freezeScale = () => {
         const current = app.pdfViewer.currentScale;
         if (current && current > 0) {
           lockedScale = current;
-          isEnforcingScale = true;
           app.pdfViewer.currentScaleValue = String(current);
-          isEnforcingScale = false;
         }
       };
 
       app.eventBus.on("pagesloaded", () => {
         if (!lockedScale) {
-          freezeCurrentScale();
+          freezeScale();
+        }
+      });
+      app.eventBus.on("pagesinit", () => {
+        if (!lockedScale) {
+          freezeScale();
         }
       });
 
-      // 5. When user zooms in/out manually (buttons, dropdown, or Ctrl+wheel), remember new scale
+      // When user zooms manually (buttons, dropdown, or Ctrl+wheel), remember new scale
       app.eventBus.on("scalechanging", (evt) => {
-        if (evt && evt.scale && !isEnforcingScale) {
+        if (evt && evt.scale) {
           lockedScale = evt.scale;
         }
       });
 
-      // 6. Enforce lockedScale during search navigation and page jumping
-      const enforceLockedScale = () => {
-        if (lockedScale && Math.abs(app.pdfViewer.currentScale - lockedScale) > 0.001) {
-          isEnforcingScale = true;
-          app.pdfViewer.currentScale = lockedScale;
-          app.pdfViewer.currentScaleValue = String(lockedScale);
-          isEnforcingScale = false;
-        }
+      // 7. Auto-scroll and smooth center on the active match
+      const scrollToActiveMatch = () => {
+        requestAnimationFrame(() => {
+          const activeMatch = document.querySelector(".textLayer .highlight.selected");
+          if (activeMatch) {
+            activeMatch.scrollIntoView({
+              behavior: "smooth",
+              block: "center",
+              inline: "center"
+            });
+          }
+        });
       };
 
-      app.eventBus.on("pagechanging", enforceLockedScale);
-      app.eventBus.on("updatefindcontrolstate", enforceLockedScale);
+      app.eventBus.on("updatefindcontrolstate", () => {
+        scrollToActiveMatch();
+        setTimeout(scrollToActiveMatch, 60);
+        setTimeout(scrollToActiveMatch, 180);
+      });
 
-      app.eventBus.on("find", () => {
-        if (!lockedScale && app.pdfViewer.currentScale) {
-          lockedScale = app.pdfViewer.currentScale;
+      app.eventBus.on("textlayerrendered", () => {
+        if (app.findController?.selected?.pageIdx !== -1) {
+          scrollToActiveMatch();
+          setTimeout(scrollToActiveMatch, 80);
         }
-        setTimeout(enforceLockedScale, 60);
+      });
+
+      app.eventBus.on("updatetextlayermatches", () => {
+        scrollToActiveMatch();
+      });
+
+      app.eventBus.on("find", (evt) => {
+        if (evt) {
+          evt.highlightAll = true;
+        }
+        if (app.findBar?.highlightAll) {
+          app.findBar.highlightAll.checked = true;
+        }
       });
     };
 
