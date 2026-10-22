@@ -843,7 +843,11 @@ def render_dwg_model(path: Path, dpi: int = DEFAULT_PDF_DPI, force: bool = False
 def set_windows_clipboard(text: str) -> bool:
     if os.name != "nt":
         return False
-    normalized_text = os.path.normpath(text)
+    text_str = str(text)
+    if ("\n" not in text_str and "\r" not in text_str) and (os.path.exists(text_str) or re.match(r'^[a-zA-Z]:[/\\]', text_str)):
+        normalized_text = os.path.normpath(text_str)
+    else:
+        normalized_text = text_str
     try:
         import ctypes
         from ctypes import wintypes

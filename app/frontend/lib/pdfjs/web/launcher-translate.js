@@ -197,24 +197,72 @@
       }
     };
 
-    // Allow native Windows context menu (Копировать, etc.) on selected text
+        // Unified Right-Click Context Menu for PDF Viewer
     document.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       const sel = window.getSelection();
-      if (sel && sel.toString().trim()) {
-        // Native Windows / browser context menu for selected text (Copy, etc.)
-        return;
-      }
+      const selectedText = sel ? sel.toString().trim() : "";
       try {
         if (window.parent && window.parent !== window && typeof window.parent.showPdfViewerContextMenu === "function") {
-          event.preventDefault();
           const frameRect = window.frameElement ? window.frameElement.getBoundingClientRect() : { left: 0, top: 0 };
-          window.parent.showPdfViewerContextMenu(frameRect.left + event.clientX, frameRect.top + event.clientY);
+          window.parent.showPdfViewerContextMenu(
+            frameRect.left + event.clientX,
+            frameRect.top + event.clientY,
+            { selectedText }
+          );
         }
       } catch (_) {}
     });
 
+    // Dismiss parent's context menu on any mouse click or scroll inside the PDF viewer
+    const dismissParentContextMenu = (e) => {
+      if (e && e.button === 2) return;
+      try {
+        if (window.parent && window.parent !== window && typeof window.parent.hideFileContextMenu === "function") {
+          window.parent.hideFileContextMenu();
+        }
+      } catch (_) {}
+    };
+
+    document.addEventListener("pointerdown", dismissParentContextMenu, true);
+    document.addEventListener("mousedown", dismissParentContextMenu, true);
+    document.addEventListener("click", dismissParentContextMenu, true);
+    window.addEventListener("scroll", dismissParentContextMenu, true);
+    window.addEventListener("blur", dismissParentContextMenu);
+
+    window.launcherTranslateText = function(text) {
+      if (!text) return;
+      popover.style.display = "block";
+      document.getElementById("launcherTransOrig").textContent = text;
+      document.getElementById("launcherTransRes").textContent = "\u041F\u0435\u0440\u0435\u0432\u043E\u0434\u0438\u043C\u2026";
+
+      fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, target: "ru" }),
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          document.getElementById("launcherTransRes").textContent = data.translated || "\u2014";
+        })
+        .catch((err) => {
+          document.getElementById("launcherTransRes").textContent = "\u041E\u0448\u0438\u0431\u043A\u0430: " + err.message;
+        });
+    };
+
     window.addEventListener("keydown", (e) => {
+      // 1. Escape: dismiss parent context menu first!
       if (e.key === "Escape") {
+        try {
+          if (window.parent && window.parent !== window && typeof window.parent.hideFileContextMenu === "function") {
+            if (window.parent.hideFileContextMenu()) {
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+          }
+        } catch (_) {}
         if (popover && popover.style.display !== "none") {
           popover.style.display = "none";
           return;
@@ -239,6 +287,19 @@
             window.parent.handleGlobalEscape();
           }
         } catch (_) {}
+      }
+
+      // 2. Ctrl+C: copy selected text and show toast
+      if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C" || e.key === "\u0441" || e.key === "\u0421")) {
+        const sel = window.getSelection();
+        const text = sel ? sel.toString().trim() : "";
+        if (text) {
+          try {
+            if (window.parent && window.parent !== window && typeof window.parent.copyTextToClipboard === "function") {
+              window.parent.copyTextToClipboard(text, "\u0422\u0435\u043A\u0441\u0442 \u0441\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430");
+            }
+          } catch (_) {}
+        }
       }
     });
   }

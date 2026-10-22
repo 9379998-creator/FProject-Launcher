@@ -1817,6 +1817,54 @@ function showToast(message) {
   }, 2200);
 }
 
+async function copyTextToClipboard(rawText, successToast = "Текст скопирован") {
+  if (!rawText) return false;
+  const text = String(rawText);
+  let success = false;
+  try {
+    const resp = await fetch("/api/clipboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.ok) success = true;
+    }
+  } catch (err) {}
+  if (!success && navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      success = true;
+    } catch (e) {}
+  }
+  if (!success) {
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.top = "0";
+      textarea.style.left = "0";
+      textarea.style.width = "2em";
+      textarea.style.height = "2em";
+      textarea.style.padding = "0";
+      textarea.style.border = "none";
+      textarea.style.background = "transparent";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      textarea.setSelectionRange(0, text.length);
+      success = document.execCommand("copy");
+      document.body.removeChild(textarea);
+    } catch (e) {}
+  }
+  if (success && successToast) {
+    showToast(successToast);
+  }
+  return success;
+}
+window.copyTextToClipboard = copyTextToClipboard;
+
 async function copyPathToClipboard(rawPath) {
   if (!rawPath) return;
   // Убеждаемся, что системный путь Windows использует обратные слэши
@@ -5620,7 +5668,8 @@ if (els.pdfViewer) {
   els.pdfViewer.addEventListener("contextmenu", (event) => {
     // Если есть выделенный текст, разрешаем стандартное меню Windows (включая копирование)
     const sel = window.getSelection();
-    if (sel && sel.toString().trim()) {
+    const selectedText = (sel && sel.toString().trim()) || "";
+    if (false) {
       return;
     }
     if (event.target.closest("button, input, a, .excel-tabs, .excel-tabs-bar, .viewer-controls")) return;
@@ -5631,6 +5680,7 @@ if (els.pdfViewer) {
     const targetPath = (info && info.path) || state.activeNativePath || state.revealedPath || "";
     if (!targetPath) return;
     showFileContextMenu(event.clientX, event.clientY, {
+      selectedText,
       path: targetPath,
       isDir: false,
       ext: extOfPath(targetPath),
@@ -5638,12 +5688,13 @@ if (els.pdfViewer) {
   });
 }
 
-function showPdfViewerContextMenu(clientX, clientY) {
+function showPdfViewerContextMenu(clientX, clientY, extra = {}) {
   hideFileContextMenu();
   const info = getActiveSourceInfo();
   const targetPath = (info && info.path) || state.activeNativePath || state.revealedPath || "";
   if (!targetPath) return;
   showFileContextMenu(clientX, clientY, {
+    selectedText: (extra && extra.selectedText) || "",
     path: targetPath,
     isDir: false,
     ext: extOfPath(targetPath),
@@ -5864,6 +5915,9 @@ els.pdfStage.addEventListener("pointerup", endPdfDrag);
 els.pdfStage.addEventListener("pointercancel", endPdfDrag);
 
 function handleGlobalEscape() {
+  if (hideFileContextMenu()) {
+    return;
+  }
   if (els.settingsModal && !els.settingsModal.hidden) {
     closeSettingsModal();
     return;
@@ -6388,33 +6442,103 @@ function renderSettingsAppRows(cfg) {
   }
 }
 
-// Контекстное меню файла/папки (правая кнопка мыши).
-// Пункты: Скопировать путь, Открыть в проводнике, Открыть в программе.
+// РљРѕРЅС‚РµРєСЃС‚РЅРѕРµ РјРµРЅСЋ С„Р°Р№Р»Р°/РїР°РїРєРё/С‚РµРєСЃС‚Р° (РїСЂР°РІР°СЏ РєРЅРѕРїРєР° РјС‹С€Рё).
+// РџСѓРЅРєС‚С‹: РЎРєРѕРїРёСЂРѕРІР°С‚СЊ, РџРµСЂРµРІРµСЃС‚Рё, РќР°Р№С‚Рё РІ РґРѕРєСѓРјРµРЅС‚Рµ, РЎРєРѕРїРёСЂРѕРІР°С‚СЊ РїСѓС‚СЊ, РћС‚РєСЂС‹С‚СЊ РІ РїСЂРѕРіСЂР°РјРјРµ, РћС‚РєСЂС‹С‚СЊ РІ РїСЂРѕРІРѕРґРЅРёРєРµ.
 function hideFileContextMenu() {
-  if (els.contextMenu) els.contextMenu.hidden = true;
+  if (els.contextMenu && !els.contextMenu.hidden) {
+    els.contextMenu.hidden = true;
+    return true;
+  }
+  return false;
+}
+window.hideFileContextMenu = hideFileContextMenu;
+
+function triggerTranslateText(text) {
+  if (!text) return;
+  try {
+    const win = els.pdfDocFrame?.contentWindow;
+    if (win && typeof win.launcherTranslateText === "function") {
+      win.launcherTranslateText(text);
+      return;
+    }
+  } catch (_) {}
+  showToast("\u041F\u0435\u0440\u0435\u0432\u043E\u0434: " + text.slice(0, 35) + "\u2026");
+}
+
+function triggerSearchText(text) {
+  if (!text) return;
+  openPdfJsSearch(text);
 }
 
 function showFileContextMenu(clientX, clientY, target) {
   const menu = els.contextMenu;
-  if (!menu || !target?.path) return;
+  if (!menu || !target) return;
+
+  const selectedText = (target.selectedText || window.getSelection()?.toString() || "").trim();
   const items = [];
-  if (!target.isDir) {
+
+  // 1. РџСѓРЅРєС‚ "РЎРєРѕРїРёСЂРѕРІР°С‚СЊ" (РІС‹РґРµР»РµРЅРЅС‹Р№ С‚РµРєСЃС‚)
+  if (selectedText) {
     items.push({
-      label: "Открыть в программе по умолчанию",
-      run: () => openFileByPath(target.path, "native"),
+      icon: "\uD83D\uDCCB",
+      label: "\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C",
+      hint: "Ctrl+C",
+      run: () => copyTextToClipboard(selectedText, "\u0422\u0435\u043A\u0441\u0442 \u0441\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430"),
+    });
+    items.push({
+      icon: "\uD83C\uDF10",
+      label: "\u041F\u0435\u0440\u0435\u0432\u0435\u0441\u0442\u0438",
+      hint: "",
+      run: () => triggerTranslateText(selectedText),
+    });
+    items.push({
+      icon: "\uD83D\uDD0D",
+      label: "\u041D\u0430\u0439\u0442\u0438 \u0432 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0435",
+      hint: "",
+      run: () => triggerSearchText(selectedText),
+    });
+    items.push({ sep: true });
+  } else {
+    items.push({
+      icon: "\uD83D\uDCCB",
+      label: "\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C",
+      hint: "Ctrl+C",
+      disabled: true,
+      run: () => {},
     });
     items.push({ sep: true });
   }
-  items.push({
-    label: "Открыть в проводнике",
-    run: () => openFileByPath(target.path, "explorer"),
-  });
-  items.push({ sep: true });
-  items.push({
-    label: "Скопировать путь",
-    hint: "",
-    run: () => copyPathToClipboard(target.path),
-  });
+
+  // 2. РџСѓРЅРєС‚ "РЎРєРѕРїРёСЂРѕРІР°С‚СЊ РїСѓС‚СЊ"
+  if (target.path) {
+    items.push({
+      icon: "\uD83D\uDCC2",
+      label: "\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u043F\u0443\u0442\u044C",
+      hint: "",
+      run: () => copyPathToClipboard(target.path),
+    });
+    items.push({ sep: true });
+  }
+
+  // 3. РџСѓРЅРєС‚ "РћС‚РєСЂС‹С‚СЊ РІ РїСЂРѕРіСЂР°РјРјРµ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ"
+  if (target.path && !target.isDir) {
+    items.push({
+      icon: "\u2197\uFE0F",
+      label: "\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u0432 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u0435 \u043F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E",
+      hint: "",
+      run: () => openFileByPath(target.path, "native"),
+    });
+  }
+
+  // 4. РџСѓРЅРєС‚ "РћС‚РєСЂС‹С‚СЊ РІ РїСЂРѕРІРѕРґРЅРёРєРµ"
+  if (target.path) {
+    items.push({
+      icon: "\uD83D\uDCC1",
+      label: "\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u0432 \u043F\u0440\u043E\u0432\u043E\u0434\u043D\u0438\u043A\u0435",
+      hint: "",
+      run: () => openFileByPath(target.path, "explorer"),
+    });
+  }
 
   menu.replaceChildren();
   for (const it of items) {
@@ -6428,37 +6552,105 @@ function showFileContextMenu(clientX, clientY, target) {
     b.type = "button";
     b.className = "context-menu-item";
     b.title = it.label;
-    const check = document.createElement("span");
-    check.className = "context-menu-check";
-    check.textContent = it.hint || "";
+    if (it.disabled) {
+      b.disabled = true;
+    }
+
+    const left = document.createElement("div");
+    left.className = "context-menu-item-left";
+
+    const icon = document.createElement("span");
+    icon.className = "context-menu-icon";
+    icon.textContent = it.icon || "";
+
     const lab = document.createElement("span");
+    lab.className = "context-menu-label";
     lab.textContent = it.label;
-    b.append(check, lab);
+
+    left.append(icon, lab);
+    b.append(left);
+
+    if (it.hint) {
+      const hint = document.createElement("span");
+      hint.className = "context-menu-shortcut";
+      hint.textContent = it.hint;
+      b.append(hint);
+    }
+
     b.addEventListener("click", (event) => {
       event.stopPropagation();
       hideFileContextMenu();
-      it.run();
+      if (!it.disabled && typeof it.run === "function") {
+        it.run();
+      }
     });
     menu.append(b);
   }
+
   menu.style.left = clientX + "px";
   menu.style.top = clientY + "px";
   menu.hidden = false;
-  const w = menu.offsetWidth;
-  const h = menu.offsetHeight;
-  menu.style.left = Math.max(4, Math.min(clientX, window.innerWidth - w - 4)) + "px";
-  menu.style.top = Math.max(4, Math.min(clientY, window.innerHeight - h - 4)) + "px";
+  const w = menu.offsetWidth || 240;
+  const h = menu.offsetHeight || 160;
+  menu.style.left = Math.max(8, Math.min(clientX, window.innerWidth - w - 8)) + "px";
+  menu.style.top = Math.max(8, Math.min(clientY, window.innerHeight - h - 8)) + "px";
 }
 
-document.addEventListener("click", () => hideFileContextMenu());
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && els.contextMenu && !els.contextMenu.hidden) {
-    event.preventDefault();
-    event.stopPropagation();
-    hideFileContextMenu();
+// Р“Р»РѕР±Р°Р»СЊРЅС‹Рµ СЃР»СѓС€Р°С‚РµР»Рё РѕС‚РјРµРЅС‹ РєРѕРЅС‚РµРєСЃС‚РЅРѕРіРѕ РјРµРЅСЋ:
+// 1) РљР»РёРє РјС‹С€СЊСЋ РІ Р»СЋР±РѕРµ СЃРІРѕР±РѕРґРЅРѕРµ РїРѕР»Рµ/РїСЂРѕСЃС‚СЂР°РЅСЃС‚РІРѕ
+const handleDismissContextMenu = (event) => {
+  if (!els.contextMenu || els.contextMenu.hidden) return;
+  if (event && els.contextMenu.contains(event.target)) return;
+  hideFileContextMenu();
+};
+document.addEventListener("pointerdown", handleDismissContextMenu, true);
+document.addEventListener("mousedown", handleDismissContextMenu, true);
+document.addEventListener("click", handleDismissContextMenu, true);
+window.addEventListener("scroll", handleDismissContextMenu, true);
+window.addEventListener("resize", () => hideFileContextMenu());
+window.addEventListener("blur", () => hideFileContextMenu());
+
+// 2) РћС‚РјРµРЅР° РєРѕРЅС‚РµРєСЃС‚РЅРѕРіРѕ РјРµРЅСЋ РїРѕ РєР»Р°РІРёС€Рµ Esc (РІ С„Р°Р·Рµ Р·Р°С…РІР°С‚Р°, РґРѕ РѕСЃС‚Р°Р»СЊРЅС‹С… РѕР±СЂР°Р±РѕС‚С‡РёРєРѕРІ)
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    if (hideFileContextMenu()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
   }
 }, true);
-window.addEventListener("resize", () => hideFileContextMenu());
+
+function hookIframeContextMenuDismiss(iframe) {
+  if (!iframe) return;
+  const attach = () => {
+    try {
+      const doc = iframe.contentDocument;
+      if (!doc || doc.__ctxDismissHooked) return;
+      doc.__ctxDismissHooked = true;
+      const dismiss = (e) => {
+        if (e && e.button === 2) return;
+        hideFileContextMenu();
+      };
+      doc.addEventListener("pointerdown", dismiss, true);
+      doc.addEventListener("mousedown", dismiss, true);
+      doc.addEventListener("click", dismiss, true);
+      doc.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          if (hideFileContextMenu()) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }
+      }, true);
+      iframe.contentWindow?.addEventListener("scroll", dismiss, true);
+      iframe.contentWindow?.addEventListener("blur", dismiss);
+    } catch (_) {}
+  };
+  attach();
+  iframe.addEventListener("load", attach);
+}
+
 
 function setDwgHint(message) {
   const hint = document.getElementById("settingsDwgHint");
@@ -6926,3 +7118,6 @@ if (els.viewToggleSearch) {
 
 window.handleGlobalEscape = handleGlobalEscape;
 initPdfDocFrameSync();
+hookIframeContextMenuDismiss(els.pdfDocFrame);
+hookIframeContextMenuDismiss(els.excelSheetFrame);
+hookIframeContextMenuDismiss(els.wordDocFrame);
