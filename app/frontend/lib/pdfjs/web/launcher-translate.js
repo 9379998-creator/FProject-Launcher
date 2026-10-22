@@ -680,14 +680,13 @@
             const rx1 = boxRect.right - pRect.left;
             const ry1 = boxRect.bottom - pRect.top;
 
-            const pt0 = pageView.getPagePoint(rx0, ry0);
-            const pt1 = pageView.getPagePoint(rx1, ry1);
-            pdfCrop = [
-              Math.min(pt0[0], pt1[0]),
-              Math.min(pt0[1], pt1[1]),
-              Math.max(pt0[0], pt1[0]),
-              Math.max(pt0[1], pt1[1])
-            ];
+            // Direct mapping to unscaled PDF points from page top-left (PyMuPDF convention)
+            const scale = (pageView.viewport && pageView.viewport.scale) || (pRect.width / (pageView.width || pRect.width)) || 1.0;
+            const x0 = Math.min(rx0, rx1) / scale;
+            const y0 = Math.min(ry0, ry1) / scale;
+            const x1 = Math.max(rx0, rx1) / scale;
+            const y1 = Math.max(ry0, ry1) / scale;
+            pdfCrop = [x0, y0, x1, y1];
           }
         }
 

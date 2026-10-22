@@ -10,6 +10,7 @@ import re
 import logging
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
+from collections import defaultdict
 
 import fitz  # PyMuPDF
 import ezdxf
@@ -29,7 +30,7 @@ def is_dashed_pattern(dashes: Optional[str]) -> bool:
     return bool(d and not d.startswith("[]"))
 
 
-def sample_bezier(p1: fitz.Point, p2: fitz.Point, p3: fitz.Point, p4: fitz.Point, steps: int = 6) -> List[Tuple[float, float]]:
+def sample_bezier(p1: fitz.Point, p2: fitz.Point, p3: fitz.Point, p4: fitz.Point, steps: int = 8) -> List[Tuple[float, float]]:
     """Sample a cubic Bezier curve into discrete line vertices."""
     pts = []
     for s in range(steps + 1):
@@ -37,7 +38,7 @@ def sample_bezier(p1: fitz.Point, p2: fitz.Point, p3: fitz.Point, p4: fitz.Point
         mt = 1.0 - t
         x = mt**3 * p1.x + 3.0 * mt**2 * t * p2.x + 3.0 * mt * t**2 * p3.x + t**3 * p4.x
         y = mt**3 * p1.y + 3.0 * mt**2 * t * p2.y + 3.0 * mt * t**2 * p3.y + t**3 * p4.y
-        pts.append((x, y))
+        pts.append((round(x, 4), round(y, 4)))
     return pts
 
 
@@ -71,7 +72,7 @@ def polygon_perimeter(pts: List[Tuple[float, float]]) -> float:
 class PDFCadExtractor:
     """
     Intelligent architectural facade extractor:
-    Decomposes vector PDF drawings into true CAD elements on separate layers.
+    Decomposes vector PDF drawings into true CAD elements on separate engineering layers.
     """
 
     def __init__(self, pdf_path: str | Path):
@@ -89,7 +90,7 @@ class PDFCadExtractor:
         """
         Extract vector detail from the given PDF page into a layered DXF file.
         
-        :param page_number: 1-based page number (e.g. 131)
+        :param page_number: 1-based page number (e.g. 293)
         :param crop_box: [x0, y0, x1, y1] in PDF point coordinates
         :param output_path: path to save .dxf file
         :param options: additional extraction options
@@ -97,7 +98,8 @@ class PDFCadExtractor:
         opts = options or {}
         join_polylines = opts.get("join_polylines", True)
         dxf_version = opts.get("dxf_version", "R2013")
-        chain_tol = opts.get("tolerance", 0.25)  # ~0.08 mm tolerance in PDF points
+        chain_tol = opts.get("tolerance", 0.5)  # ~0.18 mm tolerance in PDF points
+        crop_pad = opts.get("crop_padding", 14.0)  # ~5.0 mm adaptive padding to prevent edge cuts
 
         doc = fitz.open(self.pdf_path)
         page_idx = max(0, min(page_number - 1, len(doc) - 1))
@@ -110,6 +112,12 @@ class PDFCadExtractor:
             cy0 = min(crop_box[1], crop_box[3])
             cx1 = max(crop_box[0], crop_box[2])
             cy1 = max(crop_box[1], crop_box[3])
+
+            # Apply adaptive padding to prevent chopping boundary walls or arrowhead tips
+            cx0 = max(0.0, cx0 - crop_pad)
+            cy0 = max(0.0, cy0 - crop_pad)
+            cx1 = min(page_rect.width, cx1 + crop_pad)
+            cy1 = min(page_rect.height, cy1 + crop_pad)
             filter_rect = fitz.Rect(cx0, cy0, cx1, cy1)
         else:
             filter_rect = page_rect
@@ -132,13 +140,14 @@ class PDFCadExtractor:
                     if m_scale:
                         denom = float(m_scale.group(1))
                         if denom > 0:
-                            scale_factor_detected = denom  # e.g. 1:2 means we must multiply by 2 to get 1:1 in mm
+                            scale_factor_detected = denom
         except Exception as e:
             logger.warning("Error fetching text words: %s", e)
 
         # 2. Extract segments, fills, and dimension arrowheads
         raw_segments = []
         arrowheads = []  # Dimension arrow polygons
+        arrow_apex_pts = []  # For dimension line identification
 
         for d in drawings:
             fill = d.get("fill")
@@ -147,23 +156,32 @@ class PDFCadExtractor:
             dashes = d.get("dashes")
             is_dashed = is_dashed_pattern(dashes)
             items = d.get("items", [])
+            r = d["rect"]
 
-            # Check if this drawing is a small filled arrowhead (triangle)
-            if fill is not None and len(items) == 3 and d["rect"].width < 14 and d["rect"].height < 14:
+            # Check if this drawing is a dimension arrowhead (triangle)
+            if fill is not None and len(items) == 3 and 1.0 <= r.width <= 14.0 and 1.0 <= r.height <= 14.0:
                 arrow_pts = []
                 for it in items:
                     if it[0] == "l":
-                        arrow_pts.append((it[1].x, it[1].y))
+                        arrow_pts.append((round(it[1].x, 3), round(it[1].y, 3)))
                 if len(arrow_pts) >= 3:
-                    arrowheads.append((arrow_pts, d["rect"]))
+                    arrowheads.append((arrow_pts, r))
+                    arrow_apex_pts.append(arrow_pts[0])
                 continue
+
+            # Filter out gradient micro-slices (tessellated shading in PDF catalogs)
+            if fill is not None:
+                if r.width < 0.4 or r.height < 0.4:
+                    continue
+                if color is None and (r.width < 1.0 or r.height < 1.0):
+                    continue
 
             # Process segment items
             for it in items:
                 if it[0] == "l":
-                    p1 = (it[1].x, it[1].y)
-                    p2 = (it[2].x, it[2].y)
-                    if pt_dist(p1, p2) > 0.001:
+                    p1 = (round(it[1].x, 3), round(it[1].y, 3))
+                    p2 = (round(it[2].x, 3), round(it[2].y, 3))
+                    if pt_dist(p1, p2) > 0.01:
                         raw_segments.append({
                             "points": [p1, p2],
                             "color": color,
@@ -172,8 +190,8 @@ class PDFCadExtractor:
                             "dashed": is_dashed,
                         })
                 elif it[0] == "c":
-                    # Sample Bezier curves into smooth arc lines
-                    pts = sample_bezier(it[1], it[2], it[3], it[4], steps=6)
+                    # Sample Bezier curve into smooth arc lines
+                    pts = sample_bezier(it[1], it[2], it[3], it[4], steps=8)
                     raw_segments.append({
                         "points": pts,
                         "color": color,
@@ -182,8 +200,14 @@ class PDFCadExtractor:
                         "dashed": is_dashed,
                     })
                 elif it[0] == "re":
-                    r = it[1]
-                    pts = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1), (r.x0, r.y0)]
+                    r_box = it[1]
+                    pts = [
+                        (round(r_box.x0, 3), round(r_box.y0, 3)),
+                        (round(r_box.x1, 3), round(r_box.y0, 3)),
+                        (round(r_box.x1, 3), round(r_box.y1, 3)),
+                        (round(r_box.x0, 3), round(r_box.y1, 3)),
+                        (round(r_box.x0, 3), round(r_box.y0, 3)),
+                    ]
                     raw_segments.append({
                         "points": pts,
                         "color": color,
@@ -193,17 +217,14 @@ class PDFCadExtractor:
                         "closed": True,
                     })
 
-        # 3. Assemble segments into continuous polylines (Chaining)
+        # 3. High-performance Polyline Chaining
         assembled_chains = []
         if join_polylines and raw_segments:
             unused = list(raw_segments)
             while unused:
                 cur_seg = unused.pop(0)
                 cur_pts = list(cur_seg["points"])
-                cur_fill = cur_seg["fill"]
-                cur_width = cur_seg["width"]
                 cur_dashed = cur_seg["dashed"]
-                cur_color = cur_seg["color"]
 
                 extended = True
                 while extended:
@@ -248,9 +269,6 @@ class PDFCadExtractor:
                 assembled_chains.append({
                     "points": cur_pts,
                     "closed": is_closed,
-                    "color": cur_color,
-                    "fill": cur_fill,
-                    "width": cur_width,
                     "dashed": cur_dashed,
                 })
         else:
@@ -295,11 +313,35 @@ class PDFCadExtractor:
             except Exception:
                 pass
 
-        # 6. Classify and write polylines to layers
-        entities_count = 0
+        # 6. Pre-calculate CAD arrow positions for dimension line matching
+        arrow_cad_pts = []
+        for arrow_pts, r in arrowheads:
+            cad_arrow = [to_cad(p) for p in arrow_pts]
+            if len(cad_arrow) >= 3:
+                try:
+                    msp.add_lwpolyline(
+                        cad_arrow,
+                        close=True,
+                        dxfattribs={"layer": "07_РАЗМЕРЫ"}
+                    )
+                    arrow_cad_pts.append(cad_arrow[0])
+                except Exception:
+                    pass
+
+        # Determine spatial boundaries of profile shells to detect thermal break zone
+        all_pts_x = [p[0] for ch in assembled_chains for p in ch["points"]]
+        min_shell_x = min(all_pts_x) if all_pts_x else filter_rect.x0
+        max_shell_x = max(all_pts_x) if all_pts_x else filter_rect.x1
+        tb_min_x = min_shell_x + (max_shell_x - min_shell_x) * 0.40
+        tb_max_x = min_shell_x + (max_shell_x - min_shell_x) * 0.85
+
+        entities_count = len(arrowheads)
         closed_loops_count = 0
         layer_stats: Dict[str, int] = {}
+        if arrowheads:
+            layer_stats["07_РАЗМЕРЫ"] = len(arrowheads)
 
+        # 7. Classify and write polylines to layers
         for ch in assembled_chains:
             pts = ch["points"]
             if len(pts) < 2:
@@ -308,33 +350,39 @@ class PDFCadExtractor:
             cad_pts = [to_cad(p) for p in pts]
             is_closed = ch.get("closed", False)
             is_dashed = ch.get("dashed", False)
-            fill = ch.get("fill")
+            if is_closed:
+                closed_loops_count += 1
 
-            # Determine Layer
-            layer_name = "01_АЛЮМИНИЙ_РАМА"
+            # Classification
             if is_dashed:
                 layer_name = "08_ОСИ"
-            elif is_closed:
-                closed_loops_count += 1
-                area = polygon_area(cad_pts)
-                perim = polygon_perimeter(cad_pts)
-                compactness = (perim**2) / (4 * math.pi * area) if area > 0.001 else 999.0
+            else:
+                # Check for dimension lines (collinear with or near arrowheads)
+                is_dim_line = False
+                if len(cad_pts) == 2:
+                    pA, pB = cad_pts[0], cad_pts[1]
+                    for apt in arrow_cad_pts:
+                        if (abs(pA[0] - apt[0]) < 1.0 and abs(pB[0] - apt[0]) < 1.0) or \
+                           (abs(pA[1] - apt[1]) < 1.0 and abs(pB[1] - apt[1]) < 1.0):
+                            is_dim_line = True
+                            break
 
-                # Classification heuristic:
-                # - Very small dark shapes or high compactness -> Gasket
-                # - Intermediate elongated shapes with fills -> Thermal break
-                # - Medium compact shapes snapped near glass -> Glazing bead
-                # - Large hollow chambers -> Aluminum profile
-                if fill is not None and area < 40.0:
-                    layer_name = "04_УПЛОТНИТЕЛИ"
-                elif area < 80.0 and compactness > 4.5:
-                    layer_name = "04_УПЛОТНИТЕЛИ"
-                elif fill is not None and 30.0 <= area <= 600.0 and compactness > 3.0:
-                    layer_name = "03_ТЕРМОМОСТ"
-                elif area < 300.0 and compactness < 3.2:
-                    layer_name = "02_АЛЮМИНИЙ_ШТАПИК"
+                if is_dim_line:
+                    layer_name = "07_РАЗМЕРЫ"
                 else:
-                    layer_name = "01_АЛЮМИНИЙ_РАМА"
+                    # Check for thermal break cross-hatch or polyamide bridge
+                    avg_x = sum(p[0] for p in pts) / len(pts)
+                    is_cross_hatch = False
+                    if len(cad_pts) == 2:
+                        dx = abs(cad_pts[1][0] - cad_pts[0][0])
+                        dy = abs(cad_pts[1][1] - cad_pts[0][1])
+                        if dx > 0.5 and dy > 0.5 and abs(dx - dy) < 0.25:
+                            is_cross_hatch = True
+
+                    if is_cross_hatch or (tb_min_x <= avg_x <= tb_max_x and len(pts) < 15):
+                        layer_name = "03_ТЕРМОМОСТ"
+                    else:
+                        layer_name = "01_АЛЮМИНИЙ_РАМА"
 
             # Add to DXF
             try:
@@ -348,21 +396,6 @@ class PDFCadExtractor:
             except Exception as e:
                 logger.debug("Error adding polyline: %s", e)
 
-        # 7. Add arrowheads to 07_РАЗМЕРЫ
-        for arrow_pts, r in arrowheads:
-            cad_arrow = [to_cad(p) for p in arrow_pts]
-            if len(cad_arrow) >= 3:
-                try:
-                    msp.add_lwpolyline(
-                        cad_arrow,
-                        close=True,
-                        dxfattribs={"layer": "07_РАЗМЕРЫ"}
-                    )
-                    entities_count += 1
-                    layer_stats["07_РАЗМЕРЫ"] = layer_stats.get("07_РАЗМЕРЫ", 0) + 1
-                except Exception:
-                    pass
-
         # 8. Add Text and Annotations to 09_ТЕКСТ or 07_РАЗМЕРЫ
         for w in text_words:
             text_str = str(w[4]).strip()
@@ -374,7 +407,7 @@ class PDFCadExtractor:
             cad_x, cad_y = to_cad((x_mid, y_base))
             height_mm = max(2.0, round((w[3] - w[1]) * total_scale, 2))
 
-            # Is this text a dimension number (e.g. 68, 25, 30.47)?
+            # Is this text a dimension number (e.g. 89.5, 77.5, 77, 15)?
             is_dim_num = bool(re.match(r"^(\d{1,4}(\.\d{1,3})?|\d{1,2}/\d{1,2})$", text_str))
             target_layer = "07_РАЗМЕРЫ" if is_dim_num else "09_ТЕКСТ"
 
@@ -400,7 +433,14 @@ class PDFCadExtractor:
             output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        dxf_doc.saveas(str(output_path))
+        try:
+            dxf_doc.saveas(str(output_path))
+        except PermissionError:
+            # File is locked (e.g. currently open in AutoCAD) -> save with suffix
+            alt_path = output_path.with_stem(f"{output_path.stem}_upd")
+            dxf_doc.saveas(str(alt_path))
+            logger.info("Target file locked by CAD program, saved to %s", alt_path)
+            output_path = alt_path
         logger.info("Saved CAD export to %s (%d entities)", output_path, entities_count)
 
         scale_desc = f"1:{int(scale_factor_detected)}" if scale_factor_detected > 1.0 else "1:1"
@@ -412,7 +452,7 @@ class PDFCadExtractor:
             "page": page_number,
             "entitiesCount": entities_count,
             "closedLoopsCount": closed_loops_count,
-            "layers": layer_stats,
+            "layers": dict(layer_stats),
             "scale": total_scale,
             "scaleFactor": scale_factor_detected,
             "scaleUnit": "mm",
