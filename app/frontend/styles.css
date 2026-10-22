@@ -1492,35 +1492,11 @@ textarea:focus {
 }
 
 .view-back-btn {
-  font-weight: 700;
+  font-weight: 600;
   min-width: 82px;
   font-size: 11px;
   letter-spacing: 0.2px;
-  color: #0969da;
-  background: #ffffff;
-  border: 1px solid #0969da;
   transition: all 0.15s ease;
-}
-
-.view-back-btn:hover {
-  background: #0969da;
-  color: #ffffff;
-}
-
-.view-search-btn {
-  font-weight: 600;
-  min-width: 78px;
-  font-size: 11px;
-  letter-spacing: 0.2px;
-  color: #0969da;
-  background: #ffffff;
-  border: 1px solid #0969da;
-  transition: all 0.15s ease;
-}
-
-.view-search-btn:hover {
-  background: #0969da;
-  color: #ffffff;
 }
 
 .view-tool-btn {

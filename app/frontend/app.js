@@ -120,7 +120,6 @@ const els = {
   viewBackBtn: document.getElementById("viewBackBtn"),
   qualityBadge: document.getElementById("qualityBadge"),
   pagePosition: document.getElementById("pagePosition"),
-  viewToggleSearch: document.getElementById("viewToggleSearch"),
   viewToggleTool: document.getElementById("viewToggleTool"),
   viewZoomOut: document.getElementById("viewZoomOut"),
   viewZoomIn: document.getElementById("viewZoomIn"),
@@ -7161,12 +7160,6 @@ if (els.viewToggleTool) {
   els.viewToggleTool.addEventListener("click", toggleViewerTool);
 }
 
-if (els.viewToggleSearch) {
-  els.viewToggleSearch.addEventListener("click", (e) => {
-    e.stopPropagation();
-    openPdfJsSearch();
-  });
-}
 
 if (els.viewBackBtn) {
   els.viewBackBtn.addEventListener("click", () => {
