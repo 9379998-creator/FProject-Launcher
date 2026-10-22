@@ -211,6 +211,7 @@ function exitWindow3() {
   }
   if (els.excelViewer) els.excelViewer.hidden = true;
   if (els.wordViewer) els.wordViewer.hidden = true;
+  if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
   els.pdfViewer?.classList.remove("empty");
   if (state.wordDocs?.length > 1) {
     renderWordDocumentRail();
@@ -2648,6 +2649,7 @@ function clearWordViewer() {
   state.wordDocIndex = 0;
   state.wordScale = 1;
   if (els.wordViewer) els.wordViewer.hidden = true;
+  if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
   if (els.wordDocTitle) { els.wordDocTitle.textContent = ""; els.wordDocTitle.title = ""; }
   if (els.wordMeta) els.wordMeta.replaceChildren();
   if (els.wordDocFrame) els.wordDocFrame.removeAttribute("src");
@@ -2726,6 +2728,7 @@ function resetPdfPreview() {
   state.wordDocIndex = 0;
   if (els.txtViewer) els.txtViewer.hidden = true;
   if (els.wordViewer) els.wordViewer.hidden = true;
+  if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
   if (els.mediaVideoViewer) {
     try { els.mediaVideoViewer.pause(); } catch (_) {}
     els.mediaVideoViewer.hidden = true;
@@ -2968,6 +2971,7 @@ async function activateExcelWorkbook(index) {
   });
   els.excelViewer.hidden = false;
   if (els.wordViewer) els.wordViewer.hidden = true;
+  if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
   els.viewerControls.hidden = false;
   setActiveNativePath(workbook.path);
   revealPathInTree(workbook.path);
@@ -2989,6 +2993,7 @@ async function showExcelWorkbooks(workbooks, options = {}) {
     setStageActive(false);
     if (els.excelViewer) els.excelViewer.hidden = true;
     if (els.wordViewer) els.wordViewer.hidden = true;
+  if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
   }
 }
 
@@ -3140,6 +3145,7 @@ async function showWordDocuments(documents, options = {}) {
     setStageActive(false);
     if (els.excelViewer) els.excelViewer.hidden = true;
     if (els.wordViewer) els.wordViewer.hidden = true;
+  if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
   }
 }
 
@@ -3432,6 +3438,11 @@ function updateActivePdfThumb() {
 }
 
 function updatePagePosition(page, currentDpiInfo = null) {
+  if (els.pagePosition) {
+    els.pagePosition.hidden = true;
+    els.pagePosition.style.display = "none";
+  }
+  return;
   // Счётчик «Стр. N из M» слева вверху сцены: всегда видно лист, DPI и точные пиксели
   if (!els.pagePosition) return;
   const num = Number(page?.page) || 0;
@@ -3762,6 +3773,7 @@ function showPdfPage(page, options = {}) {
   if (els.txtViewer) els.txtViewer.hidden = true;
   state.activeTxtPath = "";
   if (els.wordViewer) els.wordViewer.hidden = true;
+  if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
   if (els.mediaVideoViewer && page?.previewType !== "VIDEO") {
     try { els.mediaVideoViewer.pause(); } catch (_) {}
     els.mediaVideoViewer.hidden = true;
@@ -3927,6 +3939,7 @@ function showPdfPage(page, options = {}) {
     }
     if (els.txtViewer) els.txtViewer.hidden = true;
     if (els.wordViewer) els.wordViewer.hidden = true;
+  if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
     if (els.pdfPageImage) {
       els.pdfPageImage.hidden = true;
       els.pdfPageImage.removeAttribute("src");
@@ -5593,6 +5606,11 @@ if (els.excelBookTitle) {
 // Единый канонический обработчик ПКМ в окне №3 (просмотрщик)
 if (els.pdfViewer) {
   els.pdfViewer.addEventListener("contextmenu", (event) => {
+    // Если есть выделенный текст, разрешаем стандартное меню Windows (включая копирование)
+    const sel = window.getSelection();
+    if (sel && sel.toString().trim()) {
+      return;
+    }
     if (event.target.closest("button, input, a, .excel-tabs, .excel-tabs-bar, .viewer-controls")) return;
     event.preventDefault();
     event.stopPropagation();
@@ -5607,6 +5625,19 @@ if (els.pdfViewer) {
     });
   });
 }
+
+function showPdfViewerContextMenu(clientX, clientY) {
+  hideFileContextMenu();
+  const info = getActiveSourceInfo();
+  const targetPath = (info && info.path) || state.activeNativePath || state.revealedPath || "";
+  if (!targetPath) return;
+  showFileContextMenu(clientX, clientY, {
+    path: targetPath,
+    isDir: false,
+    ext: extOfPath(targetPath),
+  });
+}
+window.showPdfViewerContextMenu = showPdfViewerContextMenu;
 
 if (els.excelViewer) {
   els.excelViewer.addEventListener("contextmenu", (event) => {

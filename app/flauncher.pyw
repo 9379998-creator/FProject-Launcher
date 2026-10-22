@@ -656,6 +656,7 @@ def main():
         width=1400,
         height=900,
         min_size=(1024, 700),
+        text_select=True,
     )
 
     # D3: official pywebview frontend-ready signal.

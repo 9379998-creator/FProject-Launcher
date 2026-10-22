@@ -6,10 +6,37 @@
   function initUI() {
     if (tooltip) return;
 
-    // Inject high-contrast match styling & toolbar enhancements
+    // Inject high-contrast match styling, hide top toolbar, and style search findbar
     const style = document.createElement("style");
     style.id = "launcherEnhancedStyles";
     style.textContent = `
+      /* 0. Hide the entire top toolbar to maximize drawing viewing area */
+      .toolbar,
+      #toolbarContainer {
+        display: none !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: none !important;
+      }
+
+      /* PDF viewer container fills 100% of the viewport from the very top */
+      #viewerContainer {
+        top: 0 !important;
+        inset: 0 !important;
+      }
+
+      /* Floating search findbar drops down cleanly at top when opened via Ctrl+F or [🔍 Поиск] */
+      .findbar {
+        top: 8px !important;
+        position: absolute !important;
+        z-index: 30000 !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25) !important;
+        border-radius: 6px !important;
+        border: 1px solid rgba(0, 0, 0, 0.15) !important;
+      }
+
       /* 1. Make textLayer fully visible so highlight colors are bright and clear */
       .textLayer {
         opacity: 1 !important;
@@ -55,42 +82,6 @@
       .textLayer ::selection {
         background: #0091ff !important;
         color: #ffffff !important;
-      }
-
-      /* 5. Obvious search button in PDF.js top toolbar */
-      #viewFind {
-        width: auto !important;
-        min-width: 78px !important;
-        padding: 0 8px !important;
-        background: #0969da !important;
-        color: #ffffff !important;
-        border: 1px solid #0055b3 !important;
-        border-radius: 4px !important;
-        font-size: 12px !important;
-        font-weight: 600 !important;
-        display: inline-flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        gap: 4px !important;
-        margin: 3px 4px !important;
-        cursor: pointer !important;
-        box-shadow: 0 1px 4px rgba(9, 105, 218, 0.3) !important;
-      }
-      #viewFind:hover {
-        background: #0055b3 !important;
-      }
-      #viewFind::before {
-        display: none !important;
-      }
-      #viewFind > span {
-        position: static !important;
-        width: auto !important;
-        height: auto !important;
-        clip: auto !important;
-        overflow: visible !important;
-        color: #ffffff !important;
-        display: inline !important;
-        font-weight: 600 !important;
       }
     `;
     document.head.appendChild(style);
@@ -210,6 +201,22 @@
       }
     };
 
+    // Allow native Windows context menu (Копировать, etc.) on selected text
+    document.addEventListener("contextmenu", (event) => {
+      const sel = window.getSelection();
+      if (sel && sel.toString().trim()) {
+        // Native Windows / browser context menu for selected text (Copy, etc.)
+        return;
+      }
+      try {
+        if (window.parent && window.parent !== window && typeof window.parent.showPdfViewerContextMenu === "function") {
+          event.preventDefault();
+          const frameRect = window.frameElement ? window.frameElement.getBoundingClientRect() : { left: 0, top: 0 };
+          window.parent.showPdfViewerContextMenu(frameRect.left + event.clientX, frameRect.top + event.clientY);
+        }
+      } catch (_) {}
+    });
+
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         if (popover && popover.style.display !== "none") {
@@ -222,10 +229,18 @@
         }
         try {
           const app = window.PDFViewerApplication;
-          if (app && !app.findBar?.opened && !app.secondaryToolbar?.isOpen) {
-            if (window.parent && window.parent !== window && typeof window.parent.handleGlobalEscape === "function") {
-              window.parent.handleGlobalEscape();
-            }
+          if (app && app.findBar?.opened) {
+            app.findBar.close();
+            return;
+          }
+          if (app && app.secondaryToolbar?.isOpen) {
+            app.secondaryToolbar.close();
+            return;
+          }
+        } catch (_) {}
+        try {
+          if (window.parent && window.parent !== window && typeof window.parent.handleGlobalEscape === "function") {
+            window.parent.handleGlobalEscape();
           }
         } catch (_) {}
       }
@@ -251,52 +266,14 @@
         app.pdfCursorTools?.switchTool(0); // CursorTool.SELECT
       } catch (_) {}
 
-      // 3. Top toolbar toggle button for Arrow / Hand
-      const toolbar = document.getElementById("toolbarViewerMiddle") || document.getElementById("toolbarViewerLeft");
-      if (toolbar && !document.getElementById("launcherCursorToggle")) {
-        const toggleBtn = document.createElement("button");
-        toggleBtn.id = "launcherCursorToggle";
-        toggleBtn.className = "toolbarButton";
-        toggleBtn.title = "Инструмент: Стрелка (выделение текста) / Лапа (панорамирование)";
-        toggleBtn.style.cssText = "font-size:14px; min-width:32px; cursor:pointer; margin-left:6px;";
-        toggleBtn.textContent = "↖️";
-        toggleBtn.onclick = () => {
-          const cur = app.pdfCursorTools?.activeTool;
-          const next = cur === 1 ? 0 : 1;
-          app.pdfCursorTools?.switchTool(next);
-        };
-        toolbar.appendChild(toggleBtn);
-
-        app.eventBus.on("cursortoolchanged", (evt) => {
-          toggleBtn.textContent = evt.tool === 1 ? "🖐️" : "↖️";
-          try {
-            if (window.parent && typeof window.parent.updateViewerToolButton === "function") {
-              window.parent.updateViewerToolButton(evt.tool === 1);
-            }
-          } catch (_) {}
-        });
-      }
-
-      // 4. Update viewFind button text inside PDF.js toolbar
-      const viewFindBtn = document.getElementById("viewFind");
-      if (viewFindBtn) {
-        const span = viewFindBtn.querySelector("span");
-        if (span) {
-          span.textContent = "🔍 Поиск";
-        } else {
-          viewFindBtn.textContent = "🔍 Поиск";
-        }
-        viewFindBtn.title = "Поиск текста и артикулов по альбому (Ctrl+F)";
-      }
-
-      // 5. Ensure findBar defaults to Highlight All
+      // 3. Ensure findBar defaults to Highlight All
       if (app.findBar) {
         if (app.findBar.highlightAll) {
           app.findBar.highlightAll.checked = true;
         }
       }
 
-      // 6. Freeze scale into a fixed numeric scale so page transitions NEVER auto-recalculate
+      // 4. Freeze scale into a fixed numeric scale so page transitions NEVER auto-recalculate
       const freezeScale = () => {
         const current = app.pdfViewer.currentScale;
         if (current && current > 0) {
@@ -323,7 +300,7 @@
         }
       });
 
-      // 7. Auto-scroll and smooth center on the active match
+      // 5. Auto-scroll and smooth center on the active match
       const scrollToActiveMatch = () => {
         requestAnimationFrame(() => {
           const activeMatch = document.querySelector(".textLayer .highlight.selected");

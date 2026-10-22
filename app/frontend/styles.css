@@ -1514,6 +1514,10 @@ textarea:focus {
 }
 
 .page-position {
+  display: none !important;
+}
+
+.page-position-legacy {
   position: absolute;
   top: 9px;
   left: 10px;
