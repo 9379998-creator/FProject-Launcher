@@ -1,5 +1,5 @@
 // Floating translation pill, cursor tool toggle, search match navigation, scale-lock,
-// and AutoCAD-style rectangular zone selection for Mozilla PDF.js
+// and AutoCAD-style word-level rectangular zone selection for Mozilla PDF.js
 (function() {
   let tooltip = null;
   let popover = null;
@@ -18,12 +18,51 @@
       zoneBox.style.width = "0px";
       zoneBox.style.height = "0px";
     }
-    document.querySelectorAll(".textLayer span.zone-selected").forEach((el) => {
+    document.querySelectorAll(".textLayer :is(span, .launcher-word).zone-selected").forEach((el) => {
       el.classList.remove("zone-selected");
     });
     currentZoneSpans = [];
     zoneSelectedText = "";
     return hadSelection;
+  }
+
+  // Tokenize compound multi-word spans into individual word elements.
+  // In complex PDF catalogs (e.g. Reynaers, Schuco, architectural schedules), multiple columns
+  // or table cells are frequently emitted in the PDF content stream as a single wide text chunk.
+  // Breaking them down into individual word elements gives each word its own independent 2D bounding box,
+  // preventing rectangular selections from bleeding across columns or drawing long horizontal bars!
+  function tokenizeTextLayerWords(layerDiv) {
+    if (!layerDiv || layerDiv.dataset.launcherTokenized) return;
+
+    const spans = Array.from(layerDiv.querySelectorAll("span:not(.markedContent):not(.endOfContent)"));
+    for (let i = 0; i < spans.length; i++) {
+      const span = spans[i];
+      if (span.children.length > 0 || span.classList.contains("launcher-word")) continue;
+
+      const text = span.textContent;
+      if (!text || !text.includes(" ")) continue;
+
+      const tokens = text.split(/(\s+)/);
+      if (tokens.length <= 1) continue;
+
+      const frag = document.createDocumentFragment();
+      for (let t = 0; t < tokens.length; t++) {
+        const token = tokens[t];
+        if (!token) continue;
+        if (/^\s+$/.test(token)) {
+          frag.appendChild(document.createTextNode(token));
+        } else {
+          const wSpan = document.createElement("span");
+          wSpan.className = "launcher-word";
+          wSpan.textContent = token;
+          frag.appendChild(wSpan);
+        }
+      }
+      span.textContent = "";
+      span.appendChild(frag);
+    }
+
+    layerDiv.dataset.launcherTokenized = "true";
   }
 
   function extractZoneText() {
@@ -32,12 +71,12 @@
       return;
     }
 
-    // Sort spans: top (with 5px line tolerance), then left
+    // Sort tokens: top (with 7px line tolerance), then left
     const sorted = currentZoneSpans.slice().sort((a, b) => {
       const rA = a.getBoundingClientRect();
       const rB = b.getBoundingClientRect();
       const diffY = rA.top - rB.top;
-      if (Math.abs(diffY) > 5) return diffY;
+      if (Math.abs(diffY) > 7) return diffY;
       return rA.left - rB.left;
     });
 
@@ -46,12 +85,12 @@
     let curTop = null;
 
     for (let i = 0; i < sorted.length; i++) {
-      const span = sorted[i];
-      const r = span.getBoundingClientRect();
-      const txt = (span.textContent || "").trim();
+      const el = sorted[i];
+      const r = el.getBoundingClientRect();
+      const txt = (el.textContent || "").trim();
       if (!txt) continue;
 
-      if (curTop === null || Math.abs(r.top - curTop) < 6) {
+      if (curTop === null || Math.abs(r.top - curTop) < 8) {
         curLine.push(txt);
         if (curTop === null) curTop = r.top;
       } else {
@@ -103,39 +142,16 @@
         color: #ffffff !important;
       }
 
-      /* Prominent search button in PDF viewer toolbar */
-      #viewFind {
-        min-width: 76px !important;
-        width: auto !important;
-        padding: 0 8px !important;
-        gap: 4px !important;
-        background: rgba(9, 105, 218, 0.08) !important;
-        border: 1px solid rgba(9, 105, 218, 0.25) !important;
-        border-radius: 3px !important;
-        color: #0969da !important;
-      }
-      #viewFind > span {
-        display: inline-block !important;
-        text-indent: 0 !important;
-        font-size: 12px !important;
-        font-weight: 600 !important;
-        color: #0969da !important;
-      }
-      #viewFind:hover {
-        background: rgba(9, 105, 218, 0.16) !important;
-        border-color: #0969da !important;
-      }
-
       /* 1. TextLayer display and CAD crosshair cursor in Arrow mode */
       .textLayer {
         opacity: 1 !important;
         user-select: none !important;
         -webkit-user-select: none !important;
       }
-      .textLayer :is(span:not(.highlight), br) {
+      .textLayer :is(span:not(.highlight), br, .launcher-word) {
         color: transparent !important;
       }
-      .textLayer span {
+      .textLayer :is(span, .launcher-word) {
         user-select: none !important;
         -webkit-user-select: none !important;
         cursor: crosshair !important;
@@ -149,7 +165,7 @@
         user-select: none !important;
       }
 
-      /* 2. AutoCAD rectangular zone selection styling */
+      /* 2. AutoCAD rectangular zone selection styling with word-level precision */
       #launcherZoneBox {
         position: absolute;
         pointer-events: none;
@@ -159,7 +175,7 @@
         border-radius: 2px;
         display: none;
       }
-      .textLayer span.zone-selected {
+      .textLayer :is(span, .launcher-word).zone-selected {
         background-color: rgba(0, 102, 255, 0.35) !important;
         outline: 1px solid rgba(0, 102, 255, 0.6) !important;
         border-radius: 2px !important;
@@ -170,7 +186,7 @@
       body.hand-mode-active #viewerContainer,
       body.hand-mode-active .page,
       body.hand-mode-active .textLayer,
-      body.hand-mode-active .textLayer span {
+      body.hand-mode-active :is(span, .launcher-word) {
         cursor: grab !important;
       }
 
@@ -260,7 +276,7 @@
       z-index: 10000000;
       bottom: 24px;
       right: 24px;
-      width: 320px;
+      width: 330px;
       background: rgba(255, 255, 255, 0.98);
       backdrop-filter: blur(12px);
       border: 1px solid #0091ff;
@@ -275,11 +291,11 @@
         <button id="launcherTransCardClose" style="border:none; background:transparent; cursor:pointer; font-size:13px; color:#6b7280; padding:2px 4px;">✕</button>
       </div>
       <div style="margin-top:8px;">
-        <div id="launcherTransOrig" style="font-size:13px; color:#4b5563; word-break:break-word; background:#f9fafb; padding:6px 8px; border-radius:6px; border:1px solid #e5e7eb;"></div>
+        <div id="launcherTransOrig" style="font-size:13px; color:#4b5563; word-break:break-word; background:#f9fafb; padding:6px 8px; border-radius:6px; border:1px solid #e5e7eb; max-height:110px; overflow-y:auto;"></div>
         <div style="text-align:center; color:#9ca3af; font-size:12px; margin:4px 0;">↓</div>
-        <div id="launcherTransRes" style="font-size:14px; font-weight:600; color:#0969da; word-break:break-word; background:#eff6ff; padding:8px 10px; border-radius:6px; border-left:3px solid #0091ff;"></div>
+        <div id="launcherTransRes" style="font-size:14px; font-weight:600; color:#0969da; word-break:break-word; background:#eff6ff; padding:8px 10px; border-radius:6px; border-left:3px solid #0091ff; max-height:130px; overflow-y:auto;"></div>
       </div>
-      <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+      <div style="display:flex; justify-content:flex-end; gap:6px; margin-top:8px;">
         <button id="launcherTransCopy" style="background:#0969da; color:#fff; border:none; border-radius:6px; font-size:12px; font-weight:600; padding:4px 12px; cursor:pointer;">Скопировать</button>
       </div>
     `;
@@ -351,6 +367,9 @@
         zoneBox.style.position = "fixed";
         document.body.appendChild(zoneBox);
         zoneBox.style.display = "block";
+
+        // Ensure visible text layers have word tokens ready
+        document.querySelectorAll(".textLayer").forEach(tokenizeTextLayerWords);
       }
 
       const boxLeft = Math.min(zoneStart.clientX, e.clientX);
@@ -370,29 +389,35 @@
         bottom: boxTop + boxHeight
       };
 
-      // Real-time intersection of spans with the AutoCAD rectangle
-      const matchedSpans = [];
-      const allSpans = document.querySelectorAll(".textLayer span:not(.markedContent):not(.endOfContent)");
-      for (let i = 0; i < allSpans.length; i++) {
-        const span = allSpans[i];
-        const r = span.getBoundingClientRect();
+      // Word-level precision: check each word token independently.
+      // This guarantees that if a PDF contains multiple columns glued in one line,
+      // only the words inside the box are selected, completely stopping column bleed!
+      const matchedTokens = [];
+      const allTokens = document.querySelectorAll(
+        ".textLayer .launcher-word, .textLayer span:not(.markedContent):not(.endOfContent):not(:has(.launcher-word))"
+      );
+
+      for (let i = 0; i < allTokens.length; i++) {
+        const tokenEl = allTokens[i];
+        const r = tokenEl.getBoundingClientRect();
         if (r.width === 0 && r.height === 0) continue;
 
+        // Bounding check with 3px vertical tolerance
         const intersects = !(
           r.right < boxRect.left ||
           r.left > boxRect.right ||
-          r.bottom < boxRect.top ||
-          r.top > boxRect.bottom
+          r.bottom < boxRect.top - 3 ||
+          r.top > boxRect.bottom + 3
         );
 
         if (intersects) {
-          span.classList.add("zone-selected");
-          matchedSpans.push(span);
+          tokenEl.classList.add("zone-selected");
+          matchedTokens.push(tokenEl);
         } else {
-          span.classList.remove("zone-selected");
+          tokenEl.classList.remove("zone-selected");
         }
       }
-      currentZoneSpans = matchedSpans;
+      currentZoneSpans = matchedTokens;
 
       e.preventDefault();
     });
@@ -410,7 +435,10 @@
 
       isDragging = false;
 
-      if (!currentZoneSpans || currentZoneSpans.length === 0) {
+      const boxWidth = zoneBox ? parseInt(zoneBox.style.width, 10) || 0 : 0;
+      const boxHeight = zoneBox ? parseInt(zoneBox.style.height, 10) || 0 : 0;
+
+      if (boxWidth < 8 && boxHeight < 8) {
         clearZoneSelection();
         return;
       }
@@ -423,8 +451,6 @@
         const pageRect = pageEl.getBoundingClientRect();
         const boxLeft = Math.min(zoneStart.clientX, e.clientX);
         const boxTop = Math.min(zoneStart.clientY, e.clientY);
-        const boxWidth = Math.abs(e.clientX - zoneStart.clientX);
-        const boxHeight = Math.abs(e.clientY - zoneStart.clientY);
 
         zoneBox.style.position = "absolute";
         zoneBox.style.left = (boxLeft - pageRect.left) + "px";
@@ -450,7 +476,7 @@
     document.addEventListener("dblclick", (e) => {
       if (viewerToolMode === 1) return;
       const target = e.target;
-      if (target && target.tagName === "SPAN" && target.closest(".textLayer")) {
+      if (target && (target.classList.contains("launcher-word") || (target.tagName === "SPAN" && target.closest(".textLayer")))) {
         clearZoneSelection();
         target.classList.add("zone-selected");
         currentZoneSpans = [target];
@@ -705,6 +731,7 @@
         if (!lockedScale) {
           freezeScale();
         }
+        document.querySelectorAll(".textLayer").forEach(tokenizeTextLayerWords);
       });
       app.eventBus.on("pagesinit", () => {
         if (!lockedScale) {
@@ -739,7 +766,16 @@
         setTimeout(scrollToActiveMatch, 180);
       });
 
-      app.eventBus.on("textlayerrendered", () => {
+      app.eventBus.on("textlayerrendered", (evt) => {
+        try {
+          const layerDiv = evt?.source?.textLayerDiv || evt?.source?.div || document.querySelector(`.page[data-page-number="${evt?.pageNumber}"] .textLayer`);
+          if (layerDiv) {
+            tokenizeTextLayerWords(layerDiv);
+          }
+        } catch (err) {
+          console.warn("[Launcher] tokenizeTextLayerWords error:", err);
+        }
+
         if (app.findController?.selected?.pageIdx !== -1) {
           scrollToActiveMatch();
           setTimeout(scrollToActiveMatch, 80);
