@@ -33,12 +33,25 @@
         border-color: #0969da !important;
       }
 
-      /* 1. Make textLayer fully visible so highlight colors are bright and clear */
+      /* 1. Make textLayer fully visible and selectable */
       .textLayer {
         opacity: 1 !important;
+        user-select: text !important;
+        -webkit-user-select: text !important;
       }
       .textLayer :is(span:not(.highlight), br) {
         color: transparent !important;
+      }
+      .textLayer span {
+        user-select: text !important;
+        -webkit-user-select: text !important;
+      }
+
+      /* Prevent markedContent tags from disrupting Chromium multi-line text selection */
+      .textLayer span.markedContent {
+        display: none !important;
+        pointer-events: none !important;
+        user-select: none !important;
       }
 
       /* 2. All search matches: bright sunshine yellow with contrast border */
@@ -74,10 +87,24 @@
         }
       }
 
-      /* 4. Text selection */
+      /* 4. Text selection: natural translucent blue highlight.
+         Text glyphs stay transparent so underlying vector canvas text displays directly with perfect sharp clarity,
+         preventing ghost offset text, duplicate letters, or displaced lines! */
+      .textLayer ::-moz-selection {
+        background: rgba(0, 102, 255, 0.35) !important;
+        color: transparent !important;
+      }
       .textLayer ::selection {
-        background: #0091ff !important;
-        color: #ffffff !important;
+        background: rgba(0, 102, 255, 0.35) !important;
+        color: transparent !important;
+      }
+      .textLayer .highlight::-moz-selection {
+        background: rgba(0, 102, 255, 0.5) !important;
+        color: #000000 !important;
+      }
+      .textLayer .highlight::selection {
+        background: rgba(0, 102, 255, 0.5) !important;
+        color: #000000 !important;
       }
     `;
     document.head.appendChild(style);
@@ -154,12 +181,13 @@
     };
 
     let selectedText = "";
+    let isMouseDown = false;
 
-    document.addEventListener("selectionchange", () => {
+    const updateSelectionTooltip = () => {
       const sel = window.getSelection();
       const txt = sel ? sel.toString().trim() : "";
       if (!txt) {
-        tooltip.style.display = "none";
+        if (tooltip) tooltip.style.display = "none";
         return;
       }
       selectedText = txt;
@@ -172,6 +200,29 @@
           tooltip.style.display = "block";
         }
       } catch (e) {}
+    };
+
+    document.addEventListener("mousedown", (e) => {
+      if (tooltip && e.target !== tooltip && !tooltip.contains(e.target)) {
+        tooltip.style.display = "none";
+      }
+      isMouseDown = true;
+    });
+
+    document.addEventListener("mouseup", () => {
+      isMouseDown = false;
+      // Show translation pill ONLY after user finishes mouse drag selection
+      setTimeout(updateSelectionTooltip, 30);
+    });
+
+    document.addEventListener("selectionchange", () => {
+      if (isMouseDown) {
+        // While user is actively dragging mouse across lines: keep tooltip hidden!
+        // This prevents the floating button from intercepting mouse drag or skipping lines!
+        if (tooltip) tooltip.style.display = "none";
+        return;
+      }
+      updateSelectionTooltip();
     });
 
     tooltip.onclick = async (e) => {
