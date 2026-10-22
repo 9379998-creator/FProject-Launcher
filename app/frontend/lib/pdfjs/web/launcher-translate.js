@@ -3,7 +3,9 @@
 (function() {
   let tooltip = null;
   let popover = null;
+  let cadCard = null;
   let zoneBox = null;
+  let lastExportedCadPath = "";
   let viewerToolMode = 0; // 0: AutoCAD Zone (Рамка), 1: Hand (Лапа), 2: Linear Text (Текст)
   let isMouseDown = false;
   let isDragging = false;
@@ -107,12 +109,35 @@
     zoneSelectedText = lines.filter(Boolean).join("\n");
   }
 
+  function getCurrentPdfPath() {
+    try {
+      if (window.frameElement && window.frameElement.dataset && window.frameElement.dataset.currentDoc) {
+        return window.frameElement.dataset.currentDoc;
+      }
+    } catch (_) {}
+    try {
+      if (window.parent && window.parent.state && window.parent.state.view && window.parent.state.view.activeDocPath) {
+        return window.parent.state.view.activeDocPath;
+      }
+    } catch (_) {}
+    try {
+      const fileParam = new URLSearchParams(window.location.search).get("file");
+      if (fileParam) {
+        const match = fileParam.match(/path=([^&]+)/);
+        if (match && match[1]) {
+          return decodeURIComponent(match[1]);
+        }
+      }
+    } catch (_) {}
+    return "";
+  }
+
   const updateSelectionTooltip = () => {
-    if (viewerToolMode === 0 && zoneSelectedText && zoneBox && zoneBox.style.display !== "none") {
+    if (viewerToolMode === 0 && zoneBox && zoneBox.style.display !== "none") {
       const rect = zoneBox.getBoundingClientRect();
-      tooltip.style.top = Math.max(10, rect.top - 38) + "px";
-      tooltip.style.left = Math.max(10, rect.left + rect.width / 2 - 45) + "px";
-      tooltip.style.display = "block";
+      tooltip.style.top = Math.max(10, rect.top - 44) + "px";
+      tooltip.style.left = Math.max(10, rect.left + rect.width / 2 - 85) + "px";
+      tooltip.style.display = "flex";
       return;
     }
 
@@ -127,9 +152,9 @@
       const range = sel.getRangeAt(0);
       const rect = range.getBoundingClientRect();
       if (rect && rect.width > 0 && rect.height > 0) {
-        tooltip.style.top = Math.max(10, rect.top - 38) + "px";
-        tooltip.style.left = Math.max(10, rect.left + rect.width / 2 - 45) + "px";
-        tooltip.style.display = "block";
+        tooltip.style.top = Math.max(10, rect.top - 44) + "px";
+        tooltip.style.left = Math.max(10, rect.left + rect.width / 2 - 85) + "px";
+        tooltip.style.display = "flex";
       }
     } catch (_) {}
   };
@@ -297,28 +322,101 @@
       };
     }
 
-    // Floating Translate Pill button
-    tooltip = document.createElement("button");
-    tooltip.id = "launcherTransPill";
-    tooltip.textContent = "🌐 Перевести";
+    // Floating Action Pill (Translate + CAD Export)
+    tooltip = document.createElement("div");
+    tooltip.id = "launcherActionPill";
     tooltip.style.cssText = `
       position: fixed;
       display: none;
       z-index: 9999999;
-      background: #0969da;
-      color: #fff;
-      border: none;
-      border-radius: 6px;
-      padding: 6px 12px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.25);
-      transition: transform 0.1s ease;
+      background: rgba(15, 23, 42, 0.94);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 8px;
+      padding: 4px 6px;
+      gap: 6px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+      align-items: center;
     `;
-    tooltip.onmouseover = () => tooltip.style.background = "#0055b3";
-    tooltip.onmouseout = () => tooltip.style.background = "#0969da";
+    tooltip.innerHTML = `
+      <button id="launcherPillTransBtn" style="background:#0969da; color:#fff; border:none; border-radius:5px; padding:6px 11px; font-size:12px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:4px;">🌐 Перевести</button>
+      <button id="launcherPillCadBtn" style="background:#10b981; color:#fff; border:none; border-radius:5px; padding:6px 11px; font-size:12px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:4px;">📐 В DWG</button>
+    `;
     document.body.appendChild(tooltip);
+
+    const btnTrans = tooltip.querySelector("#launcherPillTransBtn");
+    const btnCad = tooltip.querySelector("#launcherPillCadBtn");
+
+    if (btnTrans) {
+      btnTrans.onmouseover = () => btnTrans.style.background = "#0055b3";
+      btnTrans.onmouseout = () => btnTrans.style.background = "#0969da";
+    }
+    if (btnCad) {
+      btnCad.onmouseover = () => btnCad.style.background = "#059669";
+      btnCad.onmouseout = () => btnCad.style.background = "#10b981";
+    }
+
+    // CAD Export Result Card
+    cadCard = document.createElement("div");
+    cadCard.id = "launcherCadCard";
+    cadCard.style.cssText = `
+      position: fixed;
+      display: none;
+      z-index: 10000000;
+      bottom: 24px;
+      right: 24px;
+      width: 360px;
+      background: rgba(255, 255, 255, 0.98);
+      backdrop-filter: blur(12px);
+      border: 1px solid #10b981;
+      border-radius: 10px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.25);
+      padding: 12px 14px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    `;
+    cadCard.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e5e7eb; padding-bottom:6px; font-size:12px; font-weight:700; color:#1f2328;">
+        <span>📐 Чертеж DWG/DXF сформирован</span>
+        <button id="launcherCadCardClose" style="border:none; background:transparent; cursor:pointer; font-size:13px; color:#6b7280; padding:2px 4px;">✕</button>
+      </div>
+      <div style="margin-top:8px;">
+        <div id="launcherCadFileName" style="font-size:13px; font-weight:700; color:#0f172a; word-break:break-all; background:#f8fafc; padding:6px 8px; border-radius:6px; border:1px solid #e2e8f0;"></div>
+        <div id="launcherCadStats" style="font-size:12px; font-weight:600; color:#10b981; margin-top:6px;"></div>
+        <div id="launcherCadLayers" style="font-size:11px; color:#64748b; margin-top:3px; word-break:break-word;"></div>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:6px; margin-top:12px;">
+        <button id="launcherCadOpenFolder" style="background:#f1f5f9; color:#0f172a; border:1px solid #cbd5e1; border-radius:6px; font-size:12px; font-weight:600; padding:5px 10px; cursor:pointer;">📁 Папка</button>
+        <button id="launcherCadOpenCad" style="background:#10b981; color:#fff; border:none; border-radius:6px; font-size:12px; font-weight:600; padding:5px 14px; cursor:pointer;">🚀 Открыть в AutoCAD</button>
+      </div>
+    `;
+    document.body.appendChild(cadCard);
+
+    const cadCloseBtn = cadCard.querySelector("#launcherCadCardClose");
+    if (cadCloseBtn) {
+      cadCloseBtn.onclick = () => { cadCard.style.display = "none"; };
+    }
+    const cadOpenBtn = cadCard.querySelector("#launcherCadOpenCad");
+    if (cadOpenBtn) {
+      cadOpenBtn.onclick = () => {
+        if (!lastExportedCadPath) return;
+        fetch("/api/cad/open", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: lastExportedCadPath })
+        });
+      };
+    }
+    const cadFolderBtn = cadCard.querySelector("#launcherCadOpenFolder");
+    if (cadFolderBtn) {
+      cadFolderBtn.onclick = () => {
+        if (!lastExportedCadPath) return;
+        fetch("/api/cad/show-folder", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: lastExportedCadPath })
+        });
+      };
+    }
 
     // Rectangular Zone Box
     zoneBox = document.createElement("div");
@@ -376,7 +474,7 @@
     // Selection Handlers (Mode 0: AutoCAD Zone, Mode 2: Text I-beam)
     document.addEventListener("mousedown", (e) => {
       // Don't intercept toolbar controls, findbar, or popovers
-      const interactive = e.target.closest("button, input, select, textarea, #toolbarViewer, #findbar, #launcherTransPill, #launcherTransCard");
+      const interactive = e.target.closest("button, input, select, textarea, #toolbarViewer, #findbar, #launcherActionPill, #launcherTransPill, #launcherTransCard, #launcherCadCard");
       if (interactive) return;
 
       // Hide translation tooltip if clicking elsewhere
@@ -527,12 +625,12 @@
       // Extract text strictly from inside the drawn rectangle
       extractZoneText();
 
-      // Show floating "🌐 Перевести" pill right above the rectangle
-      if (zoneSelectedText && tooltip && zoneBox) {
+      // Show floating action pill right above the rectangle
+      if (tooltip && zoneBox) {
         const boxRect = zoneBox.getBoundingClientRect();
-        tooltip.style.top = Math.max(10, boxRect.top - 38) + "px";
-        tooltip.style.left = Math.max(10, boxRect.left + boxRect.width / 2 - 45) + "px";
-        tooltip.style.display = "block";
+        tooltip.style.top = Math.max(10, boxRect.top - 44) + "px";
+        tooltip.style.left = Math.max(10, boxRect.left + boxRect.width / 2 - 85) + "px";
+        tooltip.style.display = "flex";
       }
     });
 
@@ -547,36 +645,135 @@
         extractZoneText();
         if (zoneSelectedText && tooltip) {
           const r = target.getBoundingClientRect();
-          tooltip.style.top = Math.max(10, r.top - 38) + "px";
-          tooltip.style.left = Math.max(10, r.left + r.width / 2 - 45) + "px";
-          tooltip.style.display = "block";
+          tooltip.style.top = Math.max(10, r.top - 44) + "px";
+          tooltip.style.left = Math.max(10, r.left + r.width / 2 - 85) + "px";
+          tooltip.style.display = "flex";
         }
       }
     });
 
-    tooltip.onclick = async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      tooltip.style.display = "none";
-      const textToTranslate = zoneSelectedText;
-      if (!textToTranslate) return;
+    async function exportCurrentZoneToCad() {
+      const app = window.PDFViewerApplication;
+      if (!app) return;
 
-      popover.style.display = "block";
-      document.getElementById("launcherTransOrig").textContent = textToTranslate;
-      document.getElementById("launcherTransRes").textContent = "Переводим…";
+      const cadBtn = document.getElementById("launcherPillCadBtn");
+      if (cadBtn) {
+        cadBtn.textContent = "⏳ Экспорт…";
+        cadBtn.disabled = true;
+      }
 
       try {
-        const resp = await fetch("/api/translate", {
+        const pageNum = app.page || 1;
+        const pageView = app.pdfViewer?.getPageView(pageNum - 1);
+        let pdfCrop = null;
+
+        if (zoneBox && zoneBox.style.display !== "none") {
+          const boxRect = zoneBox.getBoundingClientRect();
+          const pageEl = (zoneBox.parentElement && zoneBox.parentElement.classList.contains("page"))
+            ? zoneBox.parentElement
+            : (document.querySelector(`.page[data-page-number="${pageNum}"]`) || zoneBox.closest(".page"));
+
+          if (pageEl && pageView) {
+            const pRect = pageEl.getBoundingClientRect();
+            const rx0 = boxRect.left - pRect.left;
+            const ry0 = boxRect.top - pRect.top;
+            const rx1 = boxRect.right - pRect.left;
+            const ry1 = boxRect.bottom - pRect.top;
+
+            const pt0 = pageView.getPagePoint(rx0, ry0);
+            const pt1 = pageView.getPagePoint(rx1, ry1);
+            pdfCrop = [
+              Math.min(pt0[0], pt1[0]),
+              Math.min(pt0[1], pt1[1]),
+              Math.max(pt0[0], pt1[0]),
+              Math.max(pt0[1], pt1[1])
+            ];
+          }
+        }
+
+        const pdfFile = getCurrentPdfPath();
+        if (!pdfFile) {
+          alert("Не удалось определить путь к открытому файлу PDF.");
+          return;
+        }
+
+        const resp = await fetch("/api/pdf/export-cad", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: textToTranslate, target: "ru" }),
+          body: JSON.stringify({
+            file: pdfFile,
+            page: pageNum,
+            crop: pdfCrop
+          })
         });
+
         const data = await resp.json();
-        document.getElementById("launcherTransRes").textContent = data.translated || "—";
+        if (!resp.ok || !data.success) {
+          throw new Error(data.error || "Ошибка экспорта в CAD");
+        }
+
+        lastExportedCadPath = data.filePath;
+        if (cadCard) {
+          const fnEl = document.getElementById("launcherCadFileName");
+          const stEl = document.getElementById("launcherCadStats");
+          const lyEl = document.getElementById("launcherCadLayers");
+
+          if (fnEl) fnEl.textContent = data.fileName || "чертеж.dxf";
+          if (stEl) {
+            stEl.textContent = `✅ ${data.entitiesCount || 0} примитивов (${data.closedLoopsCount || 0} замкнутых контуров)`;
+          }
+          if (lyEl) {
+            const layers = data.layers ? Object.keys(data.layers) : [];
+            lyEl.textContent = "Слои: " + (layers.join(", ") || "01_РАМА, 02_ШТАПИК, 03_ТЕРМОМОСТ, 04_УПЛОТНИТЕЛИ, 07_РАЗМЕРЫ");
+          }
+          cadCard.style.display = "block";
+        }
       } catch (err) {
-        document.getElementById("launcherTransRes").textContent = "Ошибка: " + err.message;
+        alert("Ошибка экспорта в CAD: " + err.message);
+      } finally {
+        if (cadBtn) {
+          cadBtn.textContent = "📐 В DWG";
+          cadBtn.disabled = false;
+        }
+        if (tooltip) tooltip.style.display = "none";
       }
-    };
+    }
+
+    const pillCadBtn = document.getElementById("launcherPillCadBtn");
+    if (pillCadBtn) {
+      pillCadBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        exportCurrentZoneToCad();
+      };
+    }
+
+    const pillTransBtn = document.getElementById("launcherPillTransBtn");
+    if (pillTransBtn) {
+      pillTransBtn.onclick = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        tooltip.style.display = "none";
+        const textToTranslate = zoneSelectedText;
+        if (!textToTranslate) return;
+
+        popover.style.display = "block";
+        document.getElementById("launcherTransOrig").textContent = textToTranslate;
+        document.getElementById("launcherTransRes").textContent = "Переводим…";
+
+        try {
+          const resp = await fetch("/api/translate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: textToTranslate, target: "ru" }),
+          });
+          const data = await resp.json();
+          document.getElementById("launcherTransRes").textContent = data.translated || "—";
+        } catch (err) {
+          document.getElementById("launcherTransRes").textContent = "Ошибка: " + err.message;
+        }
+      };
+    }
 
     // Unified Right-Click Context Menu for PDF Viewer
     document.addEventListener("contextmenu", (event) => {
@@ -641,7 +838,11 @@
         }
       } catch (_) {}
 
-      // 2. Сброс перевода (окно перевода или всплывающая плашка)
+      // 2. Сброс карточки CAD, окна перевода или всплывающей плашки
+      if (cadCard && cadCard.style.display !== "none") {
+        cadCard.style.display = "none";
+        return true;
+      }
       if (popover && popover.style.display !== "none") {
         popover.style.display = "none";
         return true;

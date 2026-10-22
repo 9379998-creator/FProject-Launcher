@@ -5,3 +5,4 @@ pywebview==6.2.1
 python-docx==1.2.0
 xlrd==2.0.2
 Pillow==12.2.0
+ezdxf>=1.4.0

@@ -3889,6 +3889,59 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
 
+        if parsed.path == "/api/pdf/export-cad":
+            try:
+                body = self.read_json()
+                pdf_file = str(body.get("file", "")).strip()
+                if not pdf_file:
+                    raise ValueError("Не выбран PDF-файл для экспорта в CAD")
+                page_num = int(body.get("page", 1))
+                crop_box = body.get("crop")
+                if crop_box and len(crop_box) == 4:
+                    crop_box = tuple(float(c) for c in crop_box)
+                else:
+                    crop_box = None
+
+                from app.cad.pdf_cad_extractor import export_pdf_page_to_cad
+                res = export_pdf_page_to_cad(
+                    pdf_path=pdf_file,
+                    page_number=page_num,
+                    crop_box=crop_box,
+                )
+                self.send_json(HTTPStatus.OK, res)
+            except Exception as error:
+                logger.exception("Error in /api/pdf/export-cad: %s", error)
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/cad/open":
+            try:
+                body = self.read_json()
+                file_path = str(body.get("path", "")).strip()
+                if not file_path:
+                    raise ValueError("Не указан путь к файлу")
+                from app.cad.pdf_cad_extractor import open_in_cad_program
+                opened = open_in_cad_program(file_path)
+                self.send_json(HTTPStatus.OK, {"success": opened, "path": file_path})
+            except Exception as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path == "/api/cad/show-folder":
+            try:
+                body = self.read_json()
+                file_path = str(body.get("path", "")).strip()
+                if not file_path:
+                    raise ValueError("Не указан путь к файлу")
+                p = Path(file_path).resolve()
+                if os.name == "nt":
+                    import subprocess
+                    subprocess.run(["explorer", f"/select,{str(p)}"])
+                self.send_json(HTTPStatus.OK, {"success": True})
+            except Exception as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
         if parsed.path == "/api/pdf/toc":
             try:
                 body = self.read_json()
