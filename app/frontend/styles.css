@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   --tree-scale: 1;
   --bg: #f5f6f8;
   --panel: #f5f6f8;
@@ -2137,295 +2137,29 @@ textarea:focus {
 
 
 /* ==========================================================================
-   Инженерный поиск артикулов и текста (Search Bar & Highlighting)
+/* ==========================================================================
+   Нативный JavaScript PDF-просмотрщик (Mozilla PDF.js Viewer)
    ========================================================================== */
 
-.viewer-search-bar {
+.pdf-doc-viewer {
   position: absolute;
-  top: 14px;
-  right: 14px;
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(10px);
-  border: 1px solid #d0d7de;
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
-  padding: 4px 10px;
-  user-select: none;
-  transition: opacity 0.15s ease, transform 0.15s ease;
-}
-
-.viewer-search-bar[hidden] {
-  display: none !important;
-}
-
-.viewer-search-icon {
-  font-size: 13px;
-  color: #0969da;
-  opacity: 0.85;
-}
-
-.viewer-search-bar input[type="search"] {
-  border: none;
-  outline: none;
-  background: transparent;
-  font-family: inherit;
-  font-size: 13px;
-  line-height: 20px;
-  width: 210px;
-  color: #1f2328;
-  padding: 2px 0;
-}
-
-.viewer-search-bar input[type="search"]::placeholder {
-  color: #8c959f;
-  font-size: 12px;
-}
-
-.viewer-search-status {
-  font-size: 11px;
-  font-weight: 600;
-  color: #57606a;
-  background: #f6f8fa;
-  border: 1px solid #d0d7de;
-  border-radius: 4px;
-  padding: 1px 6px;
-  min-width: 38px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.viewer-search-bar button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 700;
-  color: #57606a;
-  transition: all 0.12s ease;
-}
-
-.viewer-search-bar button:hover {
-  background: #eef2f6;
-  color: #0969da;
-}
-
-.viewer-search-bar button:active {
-  background: #d8e2ec;
-}
-
-#viewerSearchClose:hover {
-  color: #cf222e;
-}
-
-/* Слой подсветки совпадений над страницей */
-.search-highlight-layer {
-  display: block;
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform-origin: center center;
-  pointer-events: none;
-  z-index: 15;
-}
-
-.search-highlight-layer[hidden] {
-  display: none !important;
-}
-
-.search-hit {
-  position: absolute;
-  background: rgba(255, 230, 0, 0.42);
-  border: 1.5px solid rgba(210, 150, 0, 0.95);
-  border-radius: 3px;
-  cursor: pointer;
-  pointer-events: auto;
-  box-sizing: border-box;
-  transition: background 0.12s ease, box-shadow 0.12s ease;
-}
-
-.search-hit:hover {
-  background: rgba(255, 230, 0, 0.7);
-  box-shadow: 0 0 8px rgba(255, 190, 0, 0.9);
-}
-
-.search-hit.active-hit {
-  background: rgba(0, 163, 255, 0.55) !important;
-  border: 2px solid #0066ff !important;
-  box-shadow: 0 0 14px rgba(0, 140, 255, 0.95);
-  animation: hit-pulse 1.6s infinite ease-in-out;
-}
-
-@keyframes hit-pulse {
-  0% { box-shadow: 0 0 6px rgba(0, 140, 255, 0.7); transform: scale(1); }
-  50% { box-shadow: 0 0 16px rgba(0, 210, 255, 1); transform: scale(1.02); }
-  100% { box-shadow: 0 0 6px rgba(0, 140, 255, 0.7); transform: scale(1); }
-}
-
-/* Бейджи количества совпадений на миниатюрах */
-.pdf-thumb {
-  position: relative;
-}
-
-.thumb-hit-badge {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  background: #0969da;
-  color: #ffffff;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 14px;
-  min-width: 18px;
-  height: 18px;
-  border-radius: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 4px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
-  pointer-events: none;
-  z-index: 10;
-}
-
-/* Кнопка перевода в панели поиска */
-.viewer-search-trans-btn {
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 4px !important;
-  background: #f0f7ff !important;
-  color: #0969da !important;
-  border: 1px solid #bfdbfe !important;
-  border-radius: 4px !important;
-  font-size: 11px !important;
-  font-weight: 600 !important;
-  padding: 2px 8px !important;
-  width: auto !important;
-  height: 24px !important;
-  cursor: pointer !important;
-  transition: all 0.15s ease !important;
-}
-
-.viewer-search-trans-btn:hover {
-  background: #0969da !important;
-  color: #ffffff !important;
-  border-color: #0969da !important;
-}
-
-/* Всплывающее окно перевода */
-.translation-popover {
-  position: absolute;
-  bottom: 24px;
-  right: 24px;
-  z-index: 75;
-  width: 320px;
-  background: rgba(255, 255, 255, 0.98);
-  backdrop-filter: blur(12px);
-  border: 1px solid #0091ff;
-  border-radius: 10px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 145, 255, 0.2);
-  padding: 12px 14px;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 25;
+  background: #525659;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  animation: transSlideUp 0.18s ease-out;
 }
 
-.translation-popover[hidden] {
+.pdf-doc-viewer[hidden] {
   display: none !important;
 }
 
-@keyframes transSlideUp {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.translation-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid #e5e7eb;
-  padding-bottom: 6px;
-  font-size: 12px;
-  font-weight: 700;
-  color: #1f2328;
-}
-
-.translation-close {
+.pdf-doc-frame {
+  width: 100%;
+  height: 100%;
   border: none;
-  background: transparent;
-  cursor: pointer;
-  font-size: 13px;
-  color: #6b7280;
-  padding: 2px 4px;
-  border-radius: 4px;
-}
-
-.translation-close:hover {
-  color: #ef4444;
-  background: #fee2e2;
-}
-
-.translation-original {
-  font-size: 13px;
-  color: #4b5563;
-  word-break: break-word;
-  background: #f9fafb;
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: 1px solid #e5e7eb;
-}
-
-.translation-arrow {
-  text-align: center;
-  color: #9ca3af;
-  font-size: 12px;
-  line-height: 1;
-}
-
-.translation-result {
-  font-size: 14px;
-  font-weight: 600;
-  color: #0969da;
-  word-break: break-word;
-  background: #eff6ff;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border-left: 3px solid #0091ff;
-  border-top: 1px solid #dbeafe;
-  border-right: 1px solid #dbeafe;
-  border-bottom: 1px solid #dbeafe;
-}
-
-.translation-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.translation-btn {
-  background: #0969da;
-  color: #ffffff;
-  border: none;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 4px 12px;
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-
-.translation-btn:hover {
-  background: #0055b3;
+  flex: 1;
+  background: #525659;
 }

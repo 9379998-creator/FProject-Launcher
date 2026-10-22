@@ -8,6 +8,9 @@ import io
 import json
 import logging
 import mimetypes
+mimetypes.add_type("text/plain", ".properties")
+mimetypes.add_type("text/plain", ".ftl")
+mimetypes.add_type("application/javascript", ".mjs")
 import os
 import re
 import shlex

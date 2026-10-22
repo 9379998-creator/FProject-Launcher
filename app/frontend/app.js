@@ -48,14 +48,7 @@ const state = {
   diffPollTimer: null,
   dwgPollTimer: null,
   dwgStatusAbortController: null,
-  search: {
-    isOpen: false,
-    query: "",
-    results: null,
-    allHitsFlat: [],
-    currentHitIdx: -1,
-    activeFile: "",
-  },
+
   activeDwgPath: "",
   viewMode: "standard",
   viewerDpi: Number(localStorage.getItem("launcher_viewer_dpi")) || 150,
@@ -104,6 +97,8 @@ const els = {
   pdfThumbs: document.getElementById("pdfThumbs"),
   pdfViewer: document.getElementById("pdfViewer"),
   pdfStage: document.getElementById("pdfStage"),
+  pdfDocViewer: document.getElementById("pdfDocViewer"),
+  pdfDocFrame: document.getElementById("pdfDocFrame"),
   pdfPageImage: document.getElementById("pdfPageImage"),
   txtViewer: document.getElementById("txtViewer"),
   txtContent: document.getElementById("txtContent"),
@@ -150,20 +145,7 @@ const els = {
   settingsOpenWinSettingsBtn: document.getElementById("settingsOpenWinSettingsBtn"),
   settingsDwgHint: document.getElementById("settingsDwgHint"),
   settingsSaveBtn: document.getElementById("settingsSaveBtn"),
-  viewToggleSearch: document.getElementById("viewToggleSearch"),
-  viewerSearchBar: document.getElementById("viewerSearchBar"),
-  viewerSearchInput: document.getElementById("viewerSearchInput"),
-  viewerSearchStatus: document.getElementById("viewerSearchStatus"),
-  viewerSearchPrev: document.getElementById("viewerSearchPrev"),
-  viewerSearchNext: document.getElementById("viewerSearchNext"),
-  viewerSearchClose: document.getElementById("viewerSearchClose"),
-  searchHighlightLayer: document.getElementById("searchHighlightLayer"),
-  viewerSearchTranslate: document.getElementById("viewerSearchTranslate"),
-  translationPopover: document.getElementById("translationPopover"),
-  translationOriginal: document.getElementById("translationOriginal"),
-  translationResult: document.getElementById("translationResult"),
-  translationClose: document.getElementById("translationClose"),
-  translationCopyBtn: document.getElementById("translationCopyBtn"),
+
 
 };
 
@@ -191,6 +173,7 @@ function setMode(mode) {
     els.objectListState.classList.add("active");
     els.treeState.classList.remove("active");
     els.pdfViewer.classList.add("empty");
+    if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
     updateViewerBanner('Политика "Локальный компьютер"');
     if (els.backToTree) {
       els.backToTree.disabled = true;
@@ -3925,24 +3908,82 @@ function showPdfPage(page, options = {}) {
     return;
   }
 
-  clearExcelViewer();
+    clearExcelViewer();
+  const targetDocPath = thumbPathForPage(page);
+  const isPdf = Boolean(targetDocPath && targetDocPath.toLowerCase().endsWith(".pdf") &&
+    page.previewType !== "IMAGE" &&
+    page.previewType !== "VIDEO" &&
+    page.previewType !== "TXT" &&
+    page.type !== "missing-preview" &&
+    page.type !== "native-file");
+
+  if (isPdf) {
+    if (els.mediaVideoViewer) {
+      try { els.mediaVideoViewer.pause(); } catch (_) {}
+      els.mediaVideoViewer.hidden = true;
+      els.mediaVideoViewer.removeAttribute("src");
+    }
+    if (els.txtViewer) els.txtViewer.hidden = true;
+    if (els.wordViewer) els.wordViewer.hidden = true;
+    if (els.pdfPageImage) {
+      els.pdfPageImage.hidden = true;
+      els.pdfPageImage.removeAttribute("src");
+    }
+    const canvas = document.getElementById("pdfPageCanvas");
+    if (canvas) canvas.hidden = true;
+    els.viewerEmpty.hidden = true;
+    els.pdfViewer.classList.remove("empty");
+    els.viewerControls.hidden = true;
+
+    setActiveNativePath(targetDocPath);
+    revealPathInTree(targetDocPath, { updateSelection: true, skipScroll: skipTreeScroll });
+
+    if (els.pdfDocViewer) els.pdfDocViewer.hidden = false;
+
+    const rawUrl = "/api/file/raw?path=" + encodeURIComponent(targetDocPath);
+    const targetPageNum = Number(page.page) || 1;
+
+    if (els.pdfDocFrame.dataset.currentDoc === targetDocPath) {
+      const win = els.pdfDocFrame.contentWindow;
+      if (win && win.PDFViewerApplication && win.PDFViewerApplication.initialized) {
+        win.PDFViewerApplication.page = targetPageNum;
+      } else {
+        els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
+      }
+    } else {
+      els.pdfDocFrame.dataset.currentDoc = targetDocPath;
+      els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
+      const viewerUrl = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum;
+      els.pdfDocFrame.src = viewerUrl;
+    }
+
+    updateActivePdfThumb();
+    updatePagePosition(page);
+    return;
+  }
+
+  // Non-PDF documents (DWG, images, fallback)
+  if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
+  if (els.pdfDocFrame) {
+    els.pdfDocFrame.dataset.currentDoc = "";
+    els.pdfDocFrame.dataset.targetPage = "";
+  }
+
   const currentDpi = state.viewerDpi || 150;
-  const highPage = state.highQualityPages.get(`${key}@${currentDpi}`);
+  const highPage = state.highQualityPages.get(${key}@);
   const displayPage = highPage || page;
-  const targetDocPath = page.previewFor?.path || page.sourcePath || page.documentPath || "";
   setActiveNativePath(targetDocPath);
   revealPathInTree(targetDocPath, { updateSelection: true, skipScroll: skipTreeScroll });
   state.activePageUrl = displayPage.url;
   els.pdfPageImage.onload = () => {
     applyPageView();
-    renderSearchHighlightsForActivePage();
   };
   els.pdfPageImage.src = displayPage.url;
   els.pdfPageImage.hidden = false;
   if (displayPage.url && displayPage.url.includes("/dwg/")) {
     const pNum = Number(displayPage.page) || 1;
     const isReady = (displayPage.bytes > 0) && !displayPage.url.includes("header_thumb.png") && !displayPage.url.includes("placeholder");
-    els.pdfPageImage.dataset.dwgLoadedPage = isReady ? `${targetDocPath}|${pNum}` : "";
+    els.pdfPageImage.dataset.dwgLoadedPage = isReady ? ${targetDocPath}| : "";
     if (!isReady && !state.dwgPollTimer && targetDocPath) {
       startDwgStatusPolling(targetDocPath, page.totalPages || 0, state.renderEpoch);
     }
@@ -3958,7 +3999,6 @@ function showPdfPage(page, options = {}) {
   updateViewerDpiButton();
   if (els.pdfPageImage.complete && els.pdfPageImage.naturalWidth) {
     applyPageView();
-    renderSearchHighlightsForActivePage();
   }
   
   requestHighQualityPage(page, currentDpi);
@@ -4006,13 +4046,7 @@ function updateViewTransform() {
   const canvas = document.getElementById("pdfPageCanvas");
   if (canvas) canvas.style.transform = transform;
 
-  if (els.searchHighlightLayer) {
-    els.searchHighlightLayer.style.transform = transform;
-    if (els.pdfPageImage && els.pdfPageImage.naturalWidth) {
-      els.searchHighlightLayer.style.width = els.pdfPageImage.naturalWidth + "px";
-      els.searchHighlightLayer.style.height = els.pdfPageImage.naturalHeight + "px";
-    }
-  }
+
 
   els.pdfStage.classList.toggle("pan-mode", view.panMode);
   els.pdfStage.classList.toggle("dragging", view.dragging);
@@ -5463,18 +5497,6 @@ window.addEventListener("wheel", (event) => {
 }, { passive: false });
 
 window.addEventListener("keydown", (event) => {
-  if ((event.ctrlKey || event.metaKey) && (event.key === "f" || event.key === "F" || event.key === "а" || event.key === "А")) {
-    if (state.renderedPages && state.renderedPages.length > 0) {
-      event.preventDefault();
-      openViewerSearch();
-      return;
-    }
-  }
-  if (event.key === "F3" && state.search.isOpen) {
-    event.preventDefault();
-    navigateToSearchHit(event.shiftKey ? -1 : 1);
-    return;
-  }
   if (event.ctrlKey && (event.key === "+" || event.key === "=" || event.key === "-" || event.key === "_" || event.key === "0")) {
     event.preventDefault();
   }
@@ -5836,16 +5858,17 @@ function stepThumbnails(delta) {
 
 window.addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && (event.key === "f" || event.key === "F" || event.key === "а" || event.key === "А")) {
-    if (state.renderedPages && state.renderedPages.length > 0) {
+    if (els.pdfDocViewer && !els.pdfDocViewer.hidden) {
       event.preventDefault();
-      openViewerSearch();
+      openPdfJsSearch();
       return;
     }
-  }
-  if (event.key === "F3" && state.search.isOpen) {
-    event.preventDefault();
-    navigateToSearchHit(event.shiftKey ? -1 : 1);
-    return;
+    if (els.treeSearch) {
+      event.preventDefault();
+      els.treeSearch.focus();
+      els.treeSearch.select();
+      return;
+    }
   }
   const activeTag = document.activeElement?.tagName;
   const isInput = activeTag === "INPUT" || activeTag === "TEXTAREA";
@@ -6672,359 +6695,91 @@ try {
 
 
 // =============================================================================
-// Инженерный поиск артикулов и текста в PDF (Search Engine)
+// Интеграция с нативным просмотрщиком Mozilla PDF.js
+// Двусторонняя синхронизация (лента миниатюр ↔ страницы PDF) и поиск
 // =============================================================================
 
-function openViewerSearch() {
-  if (!els.viewerSearchBar) return;
-  state.search.isOpen = true;
-  els.viewerSearchBar.hidden = false;
-  if (els.viewerSearchInput) {
-    els.viewerSearchInput.focus();
-    els.viewerSearchInput.select();
-  }
-  const curDoc = getActiveDocumentPath();
-  if (curDoc && curDoc !== state.search.activeFile) {
-    state.search.activeFile = curDoc;
-    if (els.viewerSearchInput?.value.trim()) {
-      executePdfSearch(els.viewerSearchInput.value.trim());
-    }
-  }
-}
-
-function closeViewerSearch() {
-  if (!els.viewerSearchBar) return;
-  state.search.isOpen = false;
-  els.viewerSearchBar.hidden = true;
-  clearSearchHighlights();
-  clearThumbHitBadges();
-}
-
-function toggleViewerSearch() {
-  if (state.search.isOpen) {
-    closeViewerSearch();
-  } else {
-    openViewerSearch();
-  }
-}
-
-function getActiveDocumentPath() {
-  const activePage = state.renderedPages?.find((p) => pageKey(p) === state.activePageKey) || state.renderedPages?.[0];
-  return (activePage && (activePage.previewFor?.path || activePage.documentPath || activePage.sourcePath)) || state.activeNativePath || "";
-}
-
-function clearThumbHitBadges() {
-  document.querySelectorAll(".thumb-hit-badge").forEach((el) => el.remove());
-}
-
-function clearSearchHighlights() {
-  if (els.searchHighlightLayer) {
-    els.searchHighlightLayer.innerHTML = "";
-    els.searchHighlightLayer.hidden = true;
-  }
-}
-
-let _searchDebounceTimer = null;
-
-async function executePdfSearch(query) {
-  const q = String(query || "").trim();
-  state.search.query = q;
-  const docPath = getActiveDocumentPath();
-  state.search.activeFile = docPath;
-
-  if (!q || !docPath) {
-    state.search.results = null;
-    state.search.allHitsFlat = [];
-    state.search.currentHitIdx = -1;
-    if (els.viewerSearchStatus) els.viewerSearchStatus.textContent = "0/0";
-    clearSearchHighlights();
-    clearThumbHitBadges();
-    return;
-  }
-
-  if (els.viewerSearchStatus) els.viewerSearchStatus.textContent = "…";
-
+function openPdfJsSearch() {
+  const win = els.pdfDocFrame?.contentWindow;
+  if (!win) return;
+  win.focus();
   try {
-    const resp = await fetch("/api/pdf/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ file: docPath, query: q }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || "Ошибка поиска");
-
-    state.search.results = data;
-    const flat = [];
-    const pages = data.pages || {};
-    const sortedPageNums = Object.keys(pages).map(Number).sort((a, b) => a - b);
-
-    for (const pNum of sortedPageNums) {
-      const pHits = pages[String(pNum)]?.hits || [];
-      pHits.forEach((hit, idx) => {
-        flat.push({ ...hit, page: pNum, hitIndexOnPage: idx });
-      });
-    }
-
-    state.search.allHitsFlat = flat;
-
-    // Обновляем бейджи на миниатюрах
-    clearThumbHitBadges();
-    if (els.pdfThumbs) {
-      const thumbItems = Array.from(els.pdfThumbs.querySelectorAll(".pdf-thumb"));
-      thumbItems.forEach((thumbEl, idx) => {
-        const pNum = idx + 1;
-        const pageData = pages[String(pNum)];
-        if (pageData && pageData.count > 0) {
-          const badge = document.createElement("span");
-          badge.className = "thumb-hit-badge";
-          badge.textContent = String(pageData.count);
-          badge.title = `Найдено совпадений: ${pageData.count}`;
-          thumbEl.appendChild(badge);
-        }
-      });
-    }
-
-    if (flat.length === 0) {
-      if (els.viewerSearchStatus) els.viewerSearchStatus.textContent = "0/0";
-      clearSearchHighlights();
-      showToast(`По запросу «${q}» ничего не найдено`);
-      return;
-    }
-
-    // Определяем текущий номер страницы
-    const activePage = state.renderedPages?.find((p) => pageKey(p) === state.activePageKey) || state.renderedPages?.[0];
-    const curPNum = Number(activePage?.page) || 1;
-
-    // Ищем первое совпадение на текущей странице, либо переходим к первой странице с совпадениями
-    const matchOnCurPageIdx = flat.findIndex((h) => h.page === curPNum);
-    if (matchOnCurPageIdx >= 0) {
-      state.search.currentHitIdx = matchOnCurPageIdx;
-    } else {
-      state.search.currentHitIdx = 0;
-      const firstHit = flat[0];
-      const targetPage = state.renderedPages?.find((p) => Number(p.page) === firstHit.page);
-      if (targetPage) {
-        showPdfPage(targetPage);
+    if (win.PDFViewerApplication && win.PDFViewerApplication.findBar) {
+      win.PDFViewerApplication.findBar.open();
+      const findInput = win.document?.getElementById("findInput");
+      if (findInput) {
+        findInput.focus();
+        findInput.select();
       }
-    }
-
-    updateSearchStatusDisplay();
-    renderSearchHighlightsForActivePage();
-    if (flat[state.search.currentHitIdx]) {
-      centerOnSearchHit(flat[state.search.currentHitIdx]);
     }
   } catch (err) {
-    console.error("Search error:", err);
-    if (els.viewerSearchStatus) els.viewerSearchStatus.textContent = "Ошибка";
-    showToast(`Ошибка поиска: ${err.message}`);
+    console.warn("openPdfJsSearch error:", err);
   }
 }
 
-function updateSearchStatusDisplay() {
-  if (!els.viewerSearchStatus) return;
-  const total = state.search.allHitsFlat?.length || 0;
-  if (total === 0) {
-    els.viewerSearchStatus.textContent = "0/0";
-  } else {
-    els.viewerSearchStatus.textContent = `${state.search.currentHitIdx + 1}/${total}`;
-  }
-}
+function handlePdfViewerPageChanged(pageNum) {
+  if (!pageNum) return;
+  const currentDoc = els.pdfDocFrame?.dataset?.currentDoc;
+  if (!currentDoc) return;
 
-function navigateToSearchHit(direction) {
-  const flat = state.search.allHitsFlat;
-  if (!flat || flat.length === 0) return;
+  const matchingPage = state.renderedPages?.find(
+    (p) => (p.documentPath === currentDoc || p.sourcePath === currentDoc || p.previewFor?.path === currentDoc) && Number(p.page) === pageNum
+  );
 
-  state.search.currentHitIdx = (state.search.currentHitIdx + direction + flat.length) % flat.length;
-  updateSearchStatusDisplay();
+  if (matchingPage) {
+    state.activePageKey = pageKey(matchingPage);
+    updateActivePdfThumb();
+    updatePagePosition(matchingPage);
 
-  const targetHit = flat[state.search.currentHitIdx];
-  const activePage = state.renderedPages?.find((p) => pageKey(p) === state.activePageKey) || state.renderedPages?.[0];
-  const curPNum = Number(activePage?.page) || 1;
-
-  if (targetHit.page !== curPNum) {
-    const targetPage = state.renderedPages?.find((p) => Number(p.page) === targetHit.page);
-    if (targetPage) {
-      showPdfPage(targetPage);
-      setTimeout(() => {
-        renderSearchHighlightsForActivePage();
-        centerOnSearchHit(targetHit);
-      }, 90);
-      return;
+    const activeThumb = els.pdfThumbs?.querySelector(".pdf-thumb.active");
+    if (activeThumb) {
+      activeThumb.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
     }
   }
-
-  renderSearchHighlightsForActivePage();
-  centerOnSearchHit(targetHit);
 }
 
-function centerOnSearchHit(hit) {
-  if (!hit || !els.pdfPageImage || !els.pdfStage) return;
-  const stage = els.pdfStage.getBoundingClientRect();
-  if (stage.width <= 0 || stage.height <= 0) return;
+function initPdfDocFrameSync() {
+  if (!els.pdfDocFrame) return;
 
-  const nw = els.pdfPageImage.naturalWidth || 1000;
-  const nh = els.pdfPageImage.naturalHeight || 1000;
+  els.pdfDocFrame.addEventListener("load", () => {
+    try {
+      const win = els.pdfDocFrame.contentWindow;
+      if (!win) return;
 
-  if (state.view.scale < 1.25) {
-    state.view.scale = 1.6;
-    state.view.userZoomed = true;
-  }
+      const setupSync = () => {
+        const app = win.PDFViewerApplication;
+        if (!app || !app.eventBus) return;
 
-  const hitCenterX = (hit.left + hit.width / 2 - 50) / 100 * nw;
-  const hitCenterY = (hit.top + hit.height / 2 - 50) / 100 * nh;
+        app.eventBus.on("pagechanging", (evt) => {
+          const pageNum = evt.pageNumber;
+          handlePdfViewerPageChanged(pageNum);
+        });
 
-  state.view.panX = -hitCenterX * state.view.scale;
-  state.view.panY = -hitCenterY * state.view.scale;
-
-  updateViewTransform();
-}
-
-function renderSearchHighlightsForActivePage() {
-  if (!els.searchHighlightLayer) return;
-  if (!state.search.isOpen || !state.search.results) {
-    clearSearchHighlights();
-    return;
-  }
-
-  const activePage = state.renderedPages?.find((p) => pageKey(p) === state.activePageKey) || state.renderedPages?.[0];
-  const curPNum = Number(activePage?.page) || 1;
-  const pageHits = state.search.results.pages?.[String(curPNum)]?.hits || [];
-
-  if (pageHits.length === 0) {
-    clearSearchHighlights();
-    return;
-  }
-
-  els.searchHighlightLayer.hidden = false;
-  els.searchHighlightLayer.innerHTML = "";
-
-  const currentFlatHit = state.search.allHitsFlat[state.search.currentHitIdx];
-
-  pageHits.forEach((hit, idx) => {
-    const hitEl = document.createElement("div");
-    hitEl.className = "search-hit";
-    hitEl.style.left = `${hit.left}%`;
-    hitEl.style.top = `${hit.top}%`;
-    hitEl.style.width = `${hit.width}%`;
-    hitEl.style.height = `${hit.height}%`;
-
-    const isActive = currentFlatHit && currentFlatHit.page === curPNum && currentFlatHit.hitIndexOnPage === idx;
-    if (isActive) {
-      hitEl.classList.add("active-hit");
-    }
-
-    hitEl.title = hit.text ? `${hit.text} (клик для фокуса и перевода)` : `Совпадение #${idx + 1}`;
-    hitEl.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const flatIdx = state.search.allHitsFlat.findIndex(
-        (h) => h.page === curPNum && h.hitIndexOnPage === idx
-      );
-      if (flatIdx >= 0) {
-        state.search.currentHitIdx = flatIdx;
-        updateSearchStatusDisplay();
-        renderSearchHighlightsForActivePage();
-        centerOnSearchHit(hit);
-        if (els.translationPopover && !els.translationPopover.hidden) {
-          translateCurrentSelectionOrQuery(hit.text);
+        if (els.pdfDocFrame.dataset.targetPage) {
+          const target = parseInt(els.pdfDocFrame.dataset.targetPage, 10);
+          if (target && app.page !== target) {
+            app.page = target;
+          }
         }
-      }
-    });
+      };
 
-    els.searchHighlightLayer.appendChild(hitEl);
-  });
-
-  if (els.pdfPageImage && els.pdfPageImage.naturalWidth) {
-    els.searchHighlightLayer.style.width = `${els.pdfPageImage.naturalWidth}px`;
-    els.searchHighlightLayer.style.height = `${els.pdfPageImage.naturalHeight}px`;
-  }
-}
-
-// Слушатели событий поиска
-els.viewToggleSearch?.addEventListener("click", () => toggleViewerSearch());
-els.viewerSearchClose?.addEventListener("click", () => closeViewerSearch());
-els.viewerSearchNext?.addEventListener("click", () => navigateToSearchHit(1));
-els.viewerSearchPrev?.addEventListener("click", () => navigateToSearchHit(-1));
-
-els.viewerSearchInput?.addEventListener("input", () => {
-  clearTimeout(_searchDebounceTimer);
-  _searchDebounceTimer = setTimeout(() => {
-    executePdfSearch(els.viewerSearchInput.value);
-  }, 320);
-});
-
-els.viewerSearchInput?.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    if (e.shiftKey) {
-      navigateToSearchHit(-1);
-    } else {
-      if (state.search.query !== els.viewerSearchInput.value.trim()) {
-        executePdfSearch(els.viewerSearchInput.value);
+      if (win.PDFViewerApplication && win.PDFViewerApplication.initialized) {
+        setupSync();
       } else {
-        navigateToSearchHit(1);
+        win.document.addEventListener("webviewerloaded", () => {
+          const app = win.PDFViewerApplication;
+          if (app && app.initializedPromise) {
+            app.initializedPromise.then(setupSync);
+          } else {
+            setupSync();
+          }
+        }, { once: true });
       }
+    } catch (e) {
+      console.warn("PDF viewer frame sync setup:", e);
     }
-  } else if (e.key === "Escape") {
-    e.preventDefault();
-    closeViewerSearch();
-  }
-});
-
-
-// =============================================================================
-// Модуль инженерного перевода (Translation Popover & API)
-// =============================================================================
-
-async function translateCurrentSelectionOrQuery(textOverride) {
-  let textToTranslate = String(textOverride || "").trim();
-  if (!textToTranslate) {
-    const currentHit = state.search?.allHitsFlat?.[state.search?.currentHitIdx];
-    if (currentHit && currentHit.text) {
-      textToTranslate = currentHit.text.trim();
-    } else if (els.viewerSearchInput && els.viewerSearchInput.value.trim()) {
-      textToTranslate = els.viewerSearchInput.value.trim();
-    }
-  }
-
-  if (!textToTranslate) {
-    showToast("Введите текст в поиск или выберите совпадение на чертеже");
-    return;
-  }
-
-  if (!els.translationPopover) return;
-  els.translationPopover.hidden = false;
-  if (els.translationOriginal) els.translationOriginal.textContent = textToTranslate;
-  if (els.translationResult) els.translationResult.textContent = "Переводим…";
-
-  try {
-    const resp = await fetch("/api/translate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: textToTranslate, target: "ru" }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || "Ошибка перевода");
-    if (els.translationResult) {
-      els.translationResult.textContent = data.translated || "—";
-    }
-  } catch (err) {
-    if (els.translationResult) {
-      els.translationResult.textContent = `Ошибка: ${err.message}`;
-    }
-  }
+  });
 }
 
-els.viewerSearchTranslate?.addEventListener("click", () => translateCurrentSelectionOrQuery());
-
-els.translationClose?.addEventListener("click", () => {
-  if (els.translationPopover) els.translationPopover.hidden = true;
-});
-
-els.translationCopyBtn?.addEventListener("click", () => {
-  const resText = els.translationResult?.textContent || "";
-  if (resText && !resText.startsWith("Ошибка") && resText !== "Переводим…") {
-    navigator.clipboard.writeText(resText).then(() => {
-      showToast("Перевод скопирован в буфер");
-    });
-  }
-});
+window.handleGlobalEscape = handleGlobalEscape;
+initPdfDocFrameSync();

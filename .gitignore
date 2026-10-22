@@ -11,6 +11,7 @@ dist/
 dist_setup/
 dist_release/
 build/
+!app/frontend/lib/pdfjs/build/
 
 # Local runtime data
 runtime/cache/**

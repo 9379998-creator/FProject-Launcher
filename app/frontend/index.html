@@ -132,30 +132,9 @@
           <div class="viewer-empty" id="viewerEmpty"></div>
           <div class="quality-badge" id="qualityBadge" hidden style="display:none!important;"></div>
           <div class="page-position" id="pagePosition" hidden></div>
-          <div class="viewer-search-bar" id="viewerSearchBar" hidden>
-            <span class="viewer-search-icon" aria-hidden="true">🔍</span>
-            <input type="search" id="viewerSearchInput" placeholder="Поиск артикула, слова…" autocomplete="off" spellcheck="false">
-            <span class="viewer-search-status" id="viewerSearchStatus">0/0</span>
-            <button type="button" id="viewerSearchPrev" title="Предыдущее совпадение (Shift+Enter)">▲</button>
-            <button type="button" id="viewerSearchNext" title="Следующее совпадение (Enter)">▼</button>
-            <button type="button" id="viewerSearchTranslate" class="viewer-search-trans-btn" title="Перевести найденное слово / артикул (🌐)">🌐 Перевести</button>
-            <button type="button" id="viewerSearchClose" title="Закрыть поиск (Esc)">✕</button>
-          </div>
-          <div id="searchHighlightLayer" class="search-highlight-layer" hidden></div>
-          <div class="translation-popover" id="translationPopover" hidden>
-            <div class="translation-head">
-              <span>🌐 Инженерный перевод</span>
-              <button type="button" id="translationClose" class="translation-close" title="Закрыть">✕</button>
-            </div>
-            <div class="translation-body">
-              <div class="translation-original" id="translationOriginal"></div>
-              <div class="translation-arrow">↓</div>
-              <div class="translation-result" id="translationResult">Загрузка…</div>
-            </div>
-            <div class="translation-actions">
-              <button type="button" id="translationCopyBtn" class="translation-btn" title="Скопировать перевод">Скопировать</button>
-            </div>
-          </div>
+          <section class="pdf-doc-viewer" id="pdfDocViewer" hidden aria-label="Просмотр PDF документа">
+            <iframe class="pdf-doc-frame" id="pdfDocFrame" title="PDF Просмотрщик" loading="lazy"></iframe>
+          </section>
           <img id="pdfPageImage" alt="" hidden>
           <canvas id="pdfPageCanvas" hidden></canvas>
           <video id="mediaVideoViewer" controls hidden></video>
@@ -178,7 +157,6 @@
             <button id="viewFit" type="button" title="Вписать страницу">Вписать</button>
             <button id="viewRotate" type="button" title="Повернуть на 90°">⟳</button>
             <button id="viewToggleDpi" type="button" class="view-dpi-btn" title="Качество листа: 150 DPI (по умолчанию) / 300 DPI (сверхчёткость)">150 DPI</button>
-            <button id="viewToggleSearch" type="button" title="Поиск артикулов и текста (Ctrl+F)">🔍 Поиск</button>
             <button id="viewToggleToc" type="button" title="Оглавление и разделы каталога" hidden>📑 Разделы</button>
             <button id="viewPrevPage" type="button" title="Предыдущая страница (←)">‹ Стр</button>
             <button id="viewNextPage" type="button" title="Следующая страница (→)">Стр ›</button>
