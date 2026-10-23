@@ -166,32 +166,101 @@
     const style = document.createElement("style");
     style.id = "launcherEnhancedStyles";
     style.textContent = `
-      /* Prominent back button in PDF viewer toolbar */
+      /* Back button in PDF viewer toolbar (matches standard bottom panel button) */
       #toolbarBackBtn {
-        min-width: 74px !important;
-        width: auto !important;
+        min-width: 68px !important;
+        height: 24px !important;
+        min-height: 24px !important;
         padding: 0 8px !important;
         margin-right: 6px !important;
-        background: #f1f5f9 !important;
-        border: 1px solid #94a3b8 !important;
-        border-radius: 3px !important;
-        color: #0f172a !important;
+        background: #fbfcfd !important;
+        border: 1px solid #abadb3 !important;
+        border-radius: 2px !important;
+        color: #1e293b !important;
         cursor: pointer !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-sizing: border-box !important;
+        transition: background 0.08s ease, border-color 0.08s ease, color 0.08s ease !important;
       }
       #toolbarBackBtn > span {
         display: inline-block !important;
         text-indent: 0 !important;
+        font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif !important;
         font-size: 12px !important;
-        font-weight: 700 !important;
-        color: #0f172a !important;
+        font-weight: 400 !important;
+        color: #1e293b !important;
       }
       #toolbarBackBtn:hover {
-        background: #0969da !important;
-        border-color: #0969da !important;
-        color: #ffffff !important;
+        background: #e5f1fb !important;
+        border-color: #70c0e8 !important;
+        color: #000000 !important;
       }
       #toolbarBackBtn:hover > span {
-        color: #ffffff !important;
+        color: #000000 !important;
+      }
+
+      /* Floating Action Pill (Matches bottom .viewer-controls) */
+      #launcherActionPill {
+        position: fixed;
+        display: none;
+        z-index: 9999999;
+        background: #f0f0f0;
+        border: 1px solid #abadb3;
+        border-radius: 2px;
+        padding: 3px 6px;
+        gap: 4px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+        align-items: center;
+        box-sizing: border-box;
+      }
+      #launcherActionPill .launcher-pill-btn {
+        height: 24px;
+        min-height: 24px;
+        padding: 0 8px;
+        border: 1px solid #abadb3;
+        border-radius: 2px;
+        background: #fbfcfd;
+        color: #1e293b;
+        font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+        font-size: 12px;
+        font-weight: 400;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        box-sizing: border-box;
+        transition: background 0.08s ease, border-color 0.08s ease, color 0.08s ease;
+        white-space: nowrap;
+        user-select: none;
+      }
+      #launcherActionPill .launcher-pill-btn:hover:not(:disabled) {
+        background: #e5f1fb;
+        border-color: #70c0e8;
+        color: #000000;
+      }
+      #launcherActionPill .launcher-pill-btn:active:not(:disabled) {
+        background: #cce4f7;
+        border-color: #005499;
+        color: #000000;
+      }
+      #launcherActionPill .launcher-pill-btn:disabled {
+        opacity: 0.6;
+        cursor: wait;
+      }
+      #launcherActionPill .launcher-pill-btn .pill-icon {
+        font-size: 13px;
+        line-height: 1;
+        display: inline-block;
+      }
+      #launcherActionPill .launcher-pill-btn .pill-icon-cad {
+        color: #d6632b;
+        filter: drop-shadow(0 0 1px rgba(214, 99, 43, 0.4));
+      }
+      #launcherActionPill .launcher-pill-btn .pill-icon-globe {
+        color: #0969da;
+        filter: drop-shadow(0 0 1px rgba(9, 105, 218, 0.4));
       }
 
       /* 1. TextLayer display */
@@ -325,36 +394,11 @@
     // Floating Action Pill (Translate + CAD Export)
     tooltip = document.createElement("div");
     tooltip.id = "launcherActionPill";
-    tooltip.style.cssText = `
-      position: fixed;
-      display: none;
-      z-index: 9999999;
-      background: rgba(15, 23, 42, 0.94);
-      backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      border-radius: 8px;
-      padding: 4px 6px;
-      gap: 6px;
-      box-shadow: 0 6px 20px rgba(0,0,0,0.35);
-      align-items: center;
-    `;
     tooltip.innerHTML = `
-      <button id="launcherPillTransBtn" style="background:#272f3d; color:#f1f5f9; border:1px solid rgba(255, 255, 255, 0.14); border-radius:6px; padding:5px 11px; font-size:12px; font-weight:400; cursor:pointer; display:flex; align-items:center; gap:5px; transition:background 0.15s, border-color 0.15s;"><span style="font-size:13px; line-height:1; filter:drop-shadow(0 0 2px rgba(56,189,248,0.7));">🌐</span> <span>Перевести</span></button>
-      <button id="launcherPillCadBtn" style="background:#272f3d; color:#f1f5f9; border:1px solid rgba(255, 255, 255, 0.14); border-radius:6px; padding:5px 11px; font-size:12px; font-weight:400; cursor:pointer; display:flex; align-items:center; gap:5px; transition:background 0.15s, border-color 0.15s;"><span style="font-size:13px; line-height:1; filter:drop-shadow(0 0 2px rgba(249,115,22,0.7));">📐</span> <span>В DWG</span></button>
+      <button id="launcherPillTransBtn" type="button" class="launcher-pill-btn" title="Перевести выделенный фрагмент (RU)"><span class="pill-icon pill-icon-globe">🌐</span><span>Перевести</span></button>
+      <button id="launcherPillCadBtn" type="button" class="launcher-pill-btn" title="Экспортировать узел в чертеж DWG/DXF"><span class="pill-icon pill-icon-cad">📐</span><span>В DWG</span></button>
     `;
     document.body.appendChild(tooltip);
-
-    const btnTrans = tooltip.querySelector("#launcherPillTransBtn");
-    const btnCad = tooltip.querySelector("#launcherPillCadBtn");
-
-    if (btnTrans) {
-      btnTrans.onmouseover = () => { btnTrans.style.background = "#374151"; btnTrans.style.borderColor = "rgba(255,255,255,0.28)"; };
-      btnTrans.onmouseout = () => { btnTrans.style.background = "#272f3d"; btnTrans.style.borderColor = "rgba(255,255,255,0.14)"; };
-    }
-    if (btnCad) {
-      btnCad.onmouseover = () => { btnCad.style.background = "#374151"; btnCad.style.borderColor = "rgba(255,255,255,0.28)"; };
-      btnCad.onmouseout = () => { btnCad.style.background = "#272f3d"; btnCad.style.borderColor = "rgba(255,255,255,0.14)"; };
-    }
 
     // CAD Export Result Card
     cadCard = document.createElement("div");
@@ -658,7 +702,7 @@
 
       const cadBtn = document.getElementById("launcherPillCadBtn");
       if (cadBtn) {
-        cadBtn.innerHTML = `<span style="font-size:13px; line-height:1;">⏳</span> <span>Экспорт…</span>`;
+        cadBtn.innerHTML = `<span class="pill-icon">⏳</span><span>Экспорт…</span>`;
         cadBtn.disabled = true;
       }
 
@@ -731,7 +775,7 @@
         alert("Ошибка экспорта в CAD: " + err.message);
       } finally {
         if (cadBtn) {
-          cadBtn.innerHTML = `<span style="font-size:13px; line-height:1; filter:drop-shadow(0 0 2px rgba(249,115,22,0.7));">📐</span> <span>В DWG</span>`;
+          cadBtn.innerHTML = `<span class="pill-icon pill-icon-cad">📐</span><span>В DWG</span>`;
           cadBtn.disabled = false;
         }
         if (tooltip) tooltip.style.display = "none";
@@ -776,6 +820,10 @@
 
     // Unified Right-Click Context Menu for PDF Viewer
     document.addEventListener("contextmenu", (event) => {
+      // If right-clicking on an input/textarea (like the search bar #findInput), allow standard native context menu (Вставить / Копировать / Вырезать)
+      if (event.target.closest("input, textarea")) {
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       const sel = window.getSelection();

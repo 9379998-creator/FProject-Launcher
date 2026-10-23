@@ -6502,16 +6502,37 @@ async function pasteFromClipboard() {
       return;
     }
     const cleanText = text.trim();
-    const active = document.activeElement;
+
+    // 1. If an input or textarea in parent is focused, paste into it
+    let active = document.activeElement;
+
+    // 2. If active element is the PDF iframe or body, check if an input is active inside the iframe
+    const frameDoc = els.pdfDocFrame?.contentDocument;
+    if ((active === els.pdfDocFrame || !active || active === document.body) && frameDoc) {
+      if (frameDoc.activeElement && (frameDoc.activeElement.tagName === "INPUT" || frameDoc.activeElement.tagName === "TEXTAREA")) {
+        active = frameDoc.activeElement;
+      }
+    }
+
     if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
       const start = active.selectionStart ?? active.value.length;
       const end = active.selectionEnd ?? active.value.length;
       active.value = active.value.slice(0, start) + cleanText + active.value.slice(end);
       active.selectionStart = active.selectionEnd = start + cleanText.length;
       active.dispatchEvent(new Event("input", { bubbles: true }));
+      active.dispatchEvent(new Event("change", { bubbles: true }));
       showToast("Текст вставлен");
       return;
     }
+
+    // 3. If in PDF view (Window 3), open search and immediately search for this text
+    const isPdfActive = els.pdfDocFrame && !els.pdfDocFrame.classList.contains("hidden") && els.pdfViewer && !els.pdfViewer.classList.contains("hidden");
+    if (isPdfActive) {
+      openPdfJsSearch(cleanText);
+      showToast("Поиск в документе: " + cleanText.slice(0, 30));
+      return;
+    }
+
     triggerSearchText(cleanText);
     showToast("Поиск: " + cleanText.slice(0, 30));
   } catch (err) {
@@ -7082,20 +7103,40 @@ try {
 // Двусторонняя синхронизация (лента миниатюр ↔ страницы PDF) и поиск
 // =============================================================================
 
-function openPdfJsSearch() {
+function openPdfJsSearch(query) {
   const win = els.pdfDocFrame?.contentWindow;
   if (!win) return;
   win.focus();
   try {
-    if (win.PDFViewerApplication && win.PDFViewerApplication.findBar) {
-      if (!win.PDFViewerApplication.findBar.opened) {
-        win.PDFViewerApplication.findBar.open();
+    const app = win.PDFViewerApplication;
+    if (app && app.findBar) {
+      if (!app.findBar.opened) {
+        app.findBar.open();
       }
-      if (win.PDFViewerApplication.findBar.highlightAll) {
-        win.PDFViewerApplication.findBar.highlightAll.checked = true;
+      if (app.findBar.highlightAll) {
+        app.findBar.highlightAll.checked = true;
       }
       const findInput = win.document?.getElementById("findInput");
       if (findInput) {
+        if (typeof query === "string" && query.trim()) {
+          const val = query.trim();
+          findInput.value = val;
+          // Trigger PDF.js input search event
+          findInput.dispatchEvent(new Event("input", { bubbles: true }));
+          // Also execute find command via findController if available
+          try {
+            if (app.findController) {
+              app.findController.executeCommand("find", {
+                query: val,
+                phraseSearch: true,
+                caseSensitive: false,
+                entireWord: false,
+                highlightAll: true,
+                findPrevious: false
+              });
+            }
+          } catch (_) {}
+        }
         findInput.focus();
         findInput.select();
       }
