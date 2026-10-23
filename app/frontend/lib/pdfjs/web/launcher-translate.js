@@ -477,7 +477,12 @@
       const interactive = e.target.closest("button, input, select, textarea, #toolbarViewer, #findbar, #launcherActionPill, #launcherTransPill, #launcherTransCard, #launcherCadCard");
       if (interactive) return;
 
-      // Hide translation tooltip if clicking elsewhere
+      // Right-click or middle-click: do NOT hide the floating action pill or alter selection
+      if (e.button !== 0) {
+        return;
+      }
+
+      // Hide translation tooltip if clicking elsewhere with primary left click
       if (tooltip && e.target !== tooltip && !tooltip.contains(e.target)) {
         tooltip.style.display = "none";
       }
@@ -489,21 +494,19 @@
       }
 
       // Zone mode (mode === 0): AutoCAD-style rectangular zone selection
-      if (e.button === 0) {
-        clearZoneSelection();
-        window.getSelection()?.removeAllRanges();
+      clearZoneSelection();
+      window.getSelection()?.removeAllRanges();
 
-        isMouseDown = true;
-        isDragging = false;
-        zoneStart = {
-          clientX: e.clientX,
-          clientY: e.clientY,
-          target: e.target
-        };
+      isMouseDown = true;
+      isDragging = false;
+      zoneStart = {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        target: e.target
+      };
 
-        // Halt native 1D browser text selection across columns
-        e.preventDefault();
-      }
+      // Halt native 1D browser text selection across columns
+      e.preventDefault();
     });
 
     document.addEventListener("mousemove", (e) => {
@@ -738,6 +741,9 @@
       }
     }
 
+    // Expose CAD export function inside initUI scope for context menu reuse
+    window.exportCurrentZoneToCad = exportCurrentZoneToCad;
+
     const pillCadBtn = document.getElementById("launcherPillCadBtn");
     if (pillCadBtn) {
       pillCadBtn.onclick = (e) => {
@@ -776,18 +782,35 @@
 
     // Unified Right-Click Context Menu for PDF Viewer
     document.addEventListener("contextmenu", (event) => {
+      // 1. Pass through input, textarea, and contenteditable elements without preventDefault or stopPropagation
+      const targetEl = event.target instanceof Element ? event.target : null;
+      if (targetEl && (targetEl.closest("input, textarea") || targetEl.isContentEditable)) {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
+
       const sel = window.getSelection();
       const selText = sel ? sel.toString().trim() : "";
       const textToUse = zoneSelectedText || selText || "";
+      const hasZone = Boolean(
+        zoneBox && zoneBox.style.display !== "none" &&
+        parseInt(zoneBox.style.width, 10) > 4 && parseInt(zoneBox.style.height, 10) > 4
+      );
+
       try {
         if (window.parent && window.parent !== window && typeof window.parent.showPdfViewerContextMenu === "function") {
           const frameRect = window.frameElement ? window.frameElement.getBoundingClientRect() : { left: 0, top: 0 };
           window.parent.showPdfViewerContextMenu(
             frameRect.left + event.clientX,
             frameRect.top + event.clientY,
-            { selectedText: textToUse }
+            {
+              isPdf: true,
+              selectedText: textToUse,
+              hasZone: hasZone,
+              canCadExport: hasZone
+            }
           );
         }
       } catch (_) {}

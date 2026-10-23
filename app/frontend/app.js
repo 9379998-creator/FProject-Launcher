@@ -5696,7 +5696,10 @@ function showPdfViewerContextMenu(clientX, clientY, extra = {}) {
   const targetPath = (info && info.path) || state.activeNativePath || state.revealedPath || "";
   if (!targetPath) return;
   showFileContextMenu(clientX, clientY, {
+    isPdf: true,
     selectedText: (extra && extra.selectedText) || "",
+    hasZone: Boolean(extra && extra.hasZone),
+    canCadExport: Boolean(extra && extra.canCadExport),
     path: targetPath,
     isDir: false,
     ext: extOfPath(targetPath),
@@ -6490,28 +6493,91 @@ function showFileContextMenu(clientX, clientY, target) {
   const menu = els.contextMenu;
   if (!menu || !target) return;
 
-  const selectedText = (target.selectedText || window.getSelection()?.toString() || "").trim();
+  const isPdf = Boolean(target.isPdf);
+  const pdfSelectedText = isPdf ? String(target.selectedText || "").trim() : "";
+  const genericSelectedText = isPdf ? "" : (target.selectedText || window.getSelection()?.toString() || "").trim();
   const items = [];
 
-  // 1. РџСѓРЅРєС‚ "РЎРєРѕРїРёСЂРѕРІР°С‚СЊ" (РІС‹РґРµР»РµРЅРЅС‹Р№ С‚РµРєСЃС‚)
-  if (selectedText) {
+  if (isPdf) {
+    const hasText = Boolean(pdfSelectedText);
+    const canCad = Boolean(target.canCadExport);
+
+    // 1. Скопировать: доступно только если в зоне/выделении PDF есть текст
     items.push({
       icon: "\uD83D\uDCCB",
       label: "\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C",
       hint: "Ctrl+C",
-      run: () => copyTextToClipboard(selectedText, "\u0422\u0435\u043A\u0441\u0442 \u0441\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430"),
+      disabled: !hasText,
+      run: () => {
+        if (!hasText) return;
+        copyTextToClipboard(pdfSelectedText, "\u0422\u0435\u043A\u0441\u0442 \u0441\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430");
+      },
     });
+
+    // 2. Перевести: доступно только если в зоне/выделении PDF есть текст
     items.push({
       icon: "\uD83C\uDF10",
       label: "\u041F\u0435\u0440\u0435\u0432\u0435\u0441\u0442\u0438",
       hint: "",
-      run: () => triggerTranslateText(selectedText),
+      disabled: !hasText,
+      run: () => {
+        if (!hasText) return;
+        const pdfWin = els.pdfDocFrame?.contentWindow;
+        if (pdfWin && typeof pdfWin.launcherTranslateText === "function") {
+          pdfWin.launcherTranslateText(pdfSelectedText);
+        } else {
+          showToast("\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043F\u0435\u0440\u0435\u0432\u043e\u0434\u0430 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u043E: \u0444\u0443\u043D\u043A\u0446\u0438\u044F PDF viewer \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u0430");
+        }
+      },
+    });
+
+    // 3. Экспорт в CAD: доступен для выделенной области (с текстом или без текста)
+    if (canCad) {
+      items.push({
+        icon: "\uD83D\uDCD0",
+        label: "\u042D\u043A\u0441\u043F\u043E\u0440\u0442 \u0432 CAD",
+        hint: "",
+        run: () => {
+          const pdfWin = els.pdfDocFrame?.contentWindow;
+          if (pdfWin && typeof pdfWin.exportCurrentZoneToCad === "function") {
+            pdfWin.exportCurrentZoneToCad();
+          } else {
+            showToast("\u042D\u043A\u0441\u043F\u043E\u0440\u0442 \u0432 CAD \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D: \u0444\u0443\u043D\u043A\u0446\u0438\u044F \u044D\u043A\u0441\u043F\u043E\u0440\u0442\u0430 \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u0430");
+          }
+        },
+      });
+    }
+
+    // 4. Найти в документе: показывается только если есть текст
+    if (hasText) {
+      items.push({
+        icon: "\uD83D\uDD0D",
+        label: "\u041D\u0430\u0439\u0442\u0438 \u0432 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0435",
+        hint: "",
+        run: () => triggerSearchText(pdfSelectedText),
+      });
+    }
+
+    items.push({ sep: true });
+  } else if (genericSelectedText) {
+    // Прежнее поведение меню других окон без изменений
+    items.push({
+      icon: "\uD83D\uDCCB",
+      label: "\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C",
+      hint: "Ctrl+C",
+      run: () => copyTextToClipboard(genericSelectedText, "\u0422\u0435\u043A\u0441\u0442 \u0441\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430"),
+    });
+    items.push({
+      icon: "\uD83C\uDF10",
+      label: "\u041F\u0435\u0440\u0435\u0432\u0435\u0441т\u0438",
+      hint: "",
+      run: () => triggerTranslateText(genericSelectedText),
     });
     items.push({
       icon: "\uD83D\uDD0D",
       label: "\u041D\u0430\u0439\u0442\u0438 \u0432 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0435",
       hint: "",
-      run: () => triggerSearchText(selectedText),
+      run: () => triggerSearchText(genericSelectedText),
     });
     items.push({ sep: true });
   } else {
