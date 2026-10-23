@@ -1823,6 +1823,8 @@ async function copyTextToClipboard(rawText, successToast = "Текст скоп�
   if (!rawText) return false;
   const text = String(rawText);
   let success = false;
+
+  // 1. Backend Win32 API clipboard (works in Windows regardless of webview/browser focus)
   try {
     const resp = await fetch("/api/clipboard", {
       method: "POST",
@@ -1834,12 +1836,16 @@ async function copyTextToClipboard(rawText, successToast = "Текст скоп�
       if (data.ok) success = true;
     }
   } catch (err) {}
-  if (!success && navigator.clipboard) {
-    try {
+
+  // 2. Browser navigator.clipboard API
+  try {
+    if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
       success = true;
-    } catch (e) {}
-  }
+    }
+  } catch (e) {}
+
+  // 3. Fallback to execCommand
   if (!success) {
     try {
       const textarea = document.createElement("textarea");
@@ -1860,8 +1866,10 @@ async function copyTextToClipboard(rawText, successToast = "Текст скоп�
       document.body.removeChild(textarea);
     } catch (e) {}
   }
+
   if (success && successToast) {
-    showToast(successToast);
+    const preview = text.length > 35 ? text.slice(0, 35) + "…" : text;
+    showToast(successToast.includes("«") ? successToast : `${successToast}: «${preview}»`);
   }
   return success;
 }
@@ -5701,13 +5709,14 @@ if (els.pdfViewer) {
 function showPdfViewerContextMenu(clientX, clientY, extra = {}) {
   hideFileContextMenu();
   const info = getActiveSourceInfo();
-  const targetPath = (info && info.path) || state.activeNativePath || state.revealedPath || "";
-  if (!targetPath) return;
+  const targetPath = (extra && extra.path) || els.pdfDocFrame?.dataset?.currentDoc || (info && info.path) || state.activeNativePath || state.revealedPath || "";
   showFileContextMenu(clientX, clientY, {
     selectedText: (extra && extra.selectedText) || "",
+    isInput: Boolean(extra && extra.isInput),
+    inputElement: extra && extra.inputElement,
     path: targetPath,
     isDir: false,
-    ext: extOfPath(targetPath),
+    ext: extOfPath(targetPath) || "PDF",
   });
 }
 window.showPdfViewerContextMenu = showPdfViewerContextMenu;
@@ -6494,19 +6503,35 @@ function triggerSearchText(text) {
   openPdfJsSearch(text);
 }
 
-async function pasteFromClipboard() {
+async function pasteFromClipboard(targetInput = null) {
   try {
-    const text = await navigator.clipboard.readText();
-    if (!text || !text.trim()) {
+    let cleanText = "";
+    // 1. Попытка через navigator.clipboard
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && text.trim()) cleanText = text.trim();
+    } catch (_) {}
+
+    // 2. Резерв через Win32 API бэкенда (работает в любом вебвью без ограничений разрешений)
+    if (!cleanText) {
+      try {
+        const resp = await fetch("/api/clipboard");
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.text && data.text.trim()) {
+            cleanText = data.text.trim();
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!cleanText) {
       showToast("Буфер обмена пуст");
       return;
     }
-    const cleanText = text.trim();
 
-    // 1. If an input or textarea in parent is focused, paste into it
-    let active = document.activeElement;
-
-    // 2. If active element is the PDF iframe or body, check if an input is active inside the iframe
+    // 3. Если передан или активен input/textarea, вставляем текст по курсору
+    let active = targetInput || document.activeElement;
     const frameDoc = els.pdfDocFrame?.contentDocument;
     if ((active === els.pdfDocFrame || !active || active === document.body) && frameDoc) {
       if (frameDoc.activeElement && (frameDoc.activeElement.tagName === "INPUT" || frameDoc.activeElement.tagName === "TEXTAREA")) {
@@ -6515,6 +6540,7 @@ async function pasteFromClipboard() {
     }
 
     if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+      active.focus();
       const start = active.selectionStart ?? active.value.length;
       const end = active.selectionEnd ?? active.value.length;
       active.value = active.value.slice(0, start) + cleanText + active.value.slice(end);
@@ -6525,7 +6551,7 @@ async function pasteFromClipboard() {
       return;
     }
 
-    // 3. If in PDF view (Window 3), open search and immediately search for this text
+    // 4. Если открыт просмотрщик PDF (Окно 3), открываем поиск и ищем этот текст
     const isPdfActive = els.pdfDocFrame && !els.pdfDocFrame.classList.contains("hidden") && els.pdfViewer && !els.pdfViewer.classList.contains("hidden");
     if (isPdfActive) {
       openPdfJsSearch(cleanText);
@@ -6577,46 +6603,93 @@ function showFileContextMenu(clientX, clientY, target) {
   if (!menu || !target) return;
 
   const selectedText = (target.selectedText || window.getSelection()?.toString() || "").trim();
+  const isInput = Boolean(target.isInput);
   const items = [];
 
-  // 1. Пункт "Скопировать" (выделенный текст)
-  if (selectedText) {
+  if (isInput) {
+    // Контекстное меню для строк ввода (поиск в каталоге, поиск в PDF)
+    if (selectedText) {
+      items.push({
+        icon: "📋",
+        label: "Скопировать",
+        hint: "Ctrl+C",
+        run: () => copyTextToClipboard(selectedText, "Текст скопирован"),
+      });
+      items.push({
+        icon: "✂️",
+        label: "Вырезать",
+        hint: "Ctrl+X",
+        run: () => {
+          copyTextToClipboard(selectedText, "Текст вырезан");
+          if (target.inputElement) {
+            const el = target.inputElement;
+            const start = el.selectionStart ?? 0;
+            const end = el.selectionEnd ?? el.value.length;
+            el.value = el.value.slice(0, start) + el.value.slice(end);
+            el.selectionStart = el.selectionEnd = start;
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+        },
+      });
+    }
     items.push({
-      icon: "📋",
-      label: "Скопировать",
-      hint: "Ctrl+C",
-      run: () => copyTextToClipboard(selectedText, "Текст скопирован в буфер обмена"),
+      icon: "📥",
+      label: "Вставить",
+      hint: "Ctrl+V",
+      run: () => pasteFromClipboard(target.inputElement),
     });
     items.push({
-      icon: "🌐",
-      label: "Перевести",
+      icon: "✕",
+      label: "Очистить поле",
       hint: "",
-      run: () => triggerTranslateText(selectedText),
-    });
-    items.push({
-      icon: "🔍",
-      label: "Найти в документе",
-      hint: "",
-      run: () => triggerSearchText(selectedText),
+      run: () => {
+        if (target.inputElement) {
+          target.inputElement.value = "";
+          target.inputElement.dispatchEvent(new Event("input", { bubbles: true }));
+          target.inputElement.focus();
+        }
+      },
     });
   } else {
-    items.push({
-      icon: "📋",
-      label: "Скопировать",
-      hint: "Ctrl+C",
-      disabled: true,
-      run: () => {},
-    });
-  }
+    // 1. Пункт "Скопировать" (выделенный текст)
+    if (selectedText) {
+      items.push({
+        icon: "📋",
+        label: "Скопировать",
+        hint: "Ctrl+C",
+        run: () => copyTextToClipboard(selectedText, "Текст скопирован в буфер обмена"),
+      });
+      items.push({
+        icon: "🌐",
+        label: "Перевести",
+        hint: "",
+        run: () => triggerTranslateText(selectedText),
+      });
+      items.push({
+        icon: "🔍",
+        label: "Найти в документе",
+        hint: "",
+        run: () => triggerSearchText(selectedText),
+      });
+    } else {
+      items.push({
+        icon: "📋",
+        label: "Скопировать",
+        hint: "Ctrl+C",
+        disabled: true,
+        run: () => {},
+      });
+    }
 
-  // 2. Пункт "Вставить" (всегда доступен)
-  items.push({
-    icon: "📥",
-    label: "Вставить",
-    hint: "Ctrl+V",
-    run: () => pasteFromClipboard(),
-  });
-  items.push({ sep: true });
+    // 2. Пункт "Вставить" (всегда доступен)
+    items.push({
+      icon: "📥",
+      label: "Вставить",
+      hint: "Ctrl+V",
+      run: () => pasteFromClipboard(),
+    });
+    items.push({ sep: true });
+  }
 
   // 3. Пункт "Очистить кэш этого файла"
   if (target.path && !target.isDir) {
@@ -7293,5 +7366,17 @@ if (els.viewBackBtn) {
 window.handleGlobalEscape = handleGlobalEscape;
 initPdfDocFrameSync();
 hookIframeContextMenuDismiss(els.pdfDocFrame);
+if (els.treeSearch) {
+  els.treeSearch.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const selText = els.treeSearch.value.slice(els.treeSearch.selectionStart, els.treeSearch.selectionEnd);
+    showFileContextMenu(event.clientX, event.clientY, {
+      selectedText: selText,
+      isInput: true,
+      inputElement: els.treeSearch
+    });
+  });
+}
 hookIframeContextMenuDismiss(els.excelSheetFrame);
 hookIframeContextMenuDismiss(els.wordDocFrame);

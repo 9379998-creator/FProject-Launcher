@@ -395,6 +395,7 @@
     tooltip = document.createElement("div");
     tooltip.id = "launcherActionPill";
     tooltip.innerHTML = `
+      <button id="launcherPillCopyBtn" type="button" class="launcher-pill-btn" title="Скопировать выделенный текст (Ctrl+C)"><span class="pill-icon" style="color:#0969da;">📋</span><span>Копировать</span></button>
       <button id="launcherPillTransBtn" type="button" class="launcher-pill-btn" title="Перевести выделенный фрагмент (RU)"><span class="pill-icon pill-icon-globe">🌐</span><span>Перевести</span></button>
       <button id="launcherPillCadBtn" type="button" class="launcher-pill-btn" title="Экспортировать узел в чертеж DWG/DXF"><span class="pill-icon pill-icon-cad">📐</span><span>В DWG</span></button>
     `;
@@ -782,6 +783,34 @@
       }
     }
 
+    const pillCopyBtn = document.getElementById("launcherPillCopyBtn");
+    if (pillCopyBtn) {
+      pillCopyBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const textToCopy = zoneSelectedText || window.getSelection()?.toString().trim() || "";
+        if (!textToCopy) return;
+
+        try {
+          if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(textToCopy);
+          }
+        } catch (_) {}
+
+        try {
+          if (window.parent && typeof window.parent.copyTextToClipboard === "function") {
+            window.parent.copyTextToClipboard(textToCopy, "Текст скопирован в буфер обмена");
+          }
+        } catch (_) {}
+
+        pillCopyBtn.innerHTML = `<span class="pill-icon" style="color:#10b981;">✅</span><span>Скопировано!</span>`;
+        setTimeout(() => {
+          pillCopyBtn.innerHTML = `<span class="pill-icon" style="color:#0969da;">📋</span><span>Копировать</span>`;
+          if (tooltip) tooltip.style.display = "none";
+        }, 900);
+      };
+    }
+
     const pillCadBtn = document.getElementById("launcherPillCadBtn");
     if (pillCadBtn) {
       pillCadBtn.onclick = (e) => {
@@ -820,22 +849,32 @@
 
     // Unified Right-Click Context Menu for PDF Viewer
     document.addEventListener("contextmenu", (event) => {
-      // If right-clicking on an input/textarea (like the search bar #findInput), allow standard native context menu (Вставить / Копировать / Вырезать)
-      if (event.target.closest("input, textarea")) {
-        return;
-      }
       event.preventDefault();
       event.stopPropagation();
+
+      const inputEl = event.target.closest("input, textarea");
       const sel = window.getSelection();
       const selText = sel ? sel.toString().trim() : "";
-      const textToUse = zoneSelectedText || selText || "";
+
+      let textToUse = "";
+      if (inputEl) {
+        textToUse = inputEl.value.slice(inputEl.selectionStart, inputEl.selectionEnd) || "";
+      } else {
+        textToUse = zoneSelectedText || selText || "";
+      }
+
       try {
         if (window.parent && window.parent !== window && typeof window.parent.showPdfViewerContextMenu === "function") {
           const frameRect = window.frameElement ? window.frameElement.getBoundingClientRect() : { left: 0, top: 0 };
           window.parent.showPdfViewerContextMenu(
             frameRect.left + event.clientX,
             frameRect.top + event.clientY,
-            { selectedText: textToUse }
+            {
+              selectedText: textToUse,
+              isInput: Boolean(inputEl),
+              inputElement: inputEl,
+              path: getCurrentPdfPath()
+            }
           );
         }
       } catch (_) {}

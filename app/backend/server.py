@@ -917,6 +917,63 @@ def set_windows_clipboard(text: str) -> bool:
     except Exception:
         return False
 
+def get_windows_clipboard() -> str:
+    if os.name != "nt":
+        return ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        user32.OpenClipboard.argtypes = [wintypes.HWND]
+        user32.OpenClipboard.restype = wintypes.BOOL
+        user32.GetClipboardData.argtypes = [wintypes.UINT]
+        user32.GetClipboardData.restype = wintypes.HANDLE
+        user32.CloseClipboard.argtypes = []
+        user32.CloseClipboard.restype = wintypes.BOOL
+
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalLock.restype = wintypes.LPVOID
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalUnlock.restype = wintypes.BOOL
+
+        CF_UNICODETEXT = 13
+        opened = False
+        for _ in range(10):
+            if user32.OpenClipboard(None):
+                opened = True
+                break
+            time.sleep(0.04)
+
+        if opened:
+            try:
+                h_mem = user32.GetClipboardData(CF_UNICODETEXT)
+                if h_mem:
+                    p_mem = kernel32.GlobalLock(h_mem)
+                    if p_mem:
+                        val = ctypes.wstring_at(p_mem)
+                        kernel32.GlobalUnlock(h_mem)
+                        return val
+            finally:
+                user32.CloseClipboard()
+    except Exception:
+        pass
+
+    try:
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            close_fds=True
+        )
+        if res.returncode == 0:
+            return res.stdout.rstrip("\r\n")
+    except Exception:
+        pass
+    return ""
+
 
 NATIVE_APPS_CONFIG_FILE = RUNTIME_DIR / "native_apps.json"
 
@@ -3375,6 +3432,10 @@ class LauncherHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/clipboard":
+            text = get_windows_clipboard()
+            self.send_json(HTTPStatus.OK, {"ok": True, "text": text})
+            return
         if parsed.path == "/api/choose-exe":
             self.handle_choose_exe(initial_path="")
             return
