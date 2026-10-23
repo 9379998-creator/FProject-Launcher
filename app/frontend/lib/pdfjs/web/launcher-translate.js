@@ -133,30 +133,11 @@
   }
 
   const updateSelectionTooltip = () => {
-    if (viewerToolMode === 0 && zoneBox && zoneBox.style.display !== "none") {
-      const rect = zoneBox.getBoundingClientRect();
-      tooltip.style.top = Math.max(10, rect.top - 44) + "px";
-      tooltip.style.left = Math.max(10, rect.left + rect.width / 2 - 85) + "px";
-      tooltip.style.display = "flex";
-      return;
-    }
-
     const sel = window.getSelection();
     const txt = sel ? sel.toString().trim() : "";
-    if (!txt) {
-      if (tooltip) tooltip.style.display = "none";
-      return;
+    if (txt) {
+      zoneSelectedText = txt;
     }
-    zoneSelectedText = txt;
-    try {
-      const range = sel.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      if (rect && rect.width > 0 && rect.height > 0) {
-        tooltip.style.top = Math.max(10, rect.top - 44) + "px";
-        tooltip.style.left = Math.max(10, rect.left + rect.width / 2 - 85) + "px";
-        tooltip.style.display = "flex";
-      }
-    } catch (_) {}
   };
 
   function initUI() {
@@ -201,67 +182,7 @@
         color: #000000 !important;
       }
 
-      /* Floating Action Pill (Matches bottom .viewer-controls) */
-      #launcherActionPill {
-        position: fixed;
-        display: none;
-        z-index: 9999999;
-        background: #f0f0f0;
-        border: 1px solid #abadb3;
-        border-radius: 2px;
-        padding: 3px 6px;
-        gap: 4px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
-        align-items: center;
-        box-sizing: border-box;
-      }
-      #launcherActionPill .launcher-pill-btn {
-        height: 24px;
-        min-height: 24px;
-        padding: 0 8px;
-        border: 1px solid #abadb3;
-        border-radius: 2px;
-        background: #fbfcfd;
-        color: #1e293b;
-        font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-        font-size: 12px;
-        font-weight: 400;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        box-sizing: border-box;
-        transition: background 0.08s ease, border-color 0.08s ease, color 0.08s ease;
-        white-space: nowrap;
-        user-select: none;
-      }
-      #launcherActionPill .launcher-pill-btn:hover:not(:disabled) {
-        background: #e5f1fb;
-        border-color: #70c0e8;
-        color: #000000;
-      }
-      #launcherActionPill .launcher-pill-btn:active:not(:disabled) {
-        background: #cce4f7;
-        border-color: #005499;
-        color: #000000;
-      }
-      #launcherActionPill .launcher-pill-btn:disabled {
-        opacity: 0.6;
-        cursor: wait;
-      }
-      #launcherActionPill .launcher-pill-btn .pill-icon {
-        font-size: 13px;
-        line-height: 1;
-        display: inline-block;
-      }
-      #launcherActionPill .launcher-pill-btn .pill-icon-cad {
-        color: #d6632b;
-        filter: drop-shadow(0 0 1px rgba(214, 99, 43, 0.4));
-      }
-      #launcherActionPill .launcher-pill-btn .pill-icon-globe {
-        color: #0969da;
-        filter: drop-shadow(0 0 1px rgba(9, 105, 218, 0.4));
-      }
+
 
       /* 1. TextLayer display */
       .textLayer {
@@ -391,15 +312,7 @@
       };
     }
 
-    // Floating Action Pill (Translate + CAD Export)
-    tooltip = document.createElement("div");
-    tooltip.id = "launcherActionPill";
-    tooltip.innerHTML = `
-      <button id="launcherPillCopyBtn" type="button" class="launcher-pill-btn" title="Скопировать выделенный текст (Ctrl+C)"><span class="pill-icon" style="color:#0969da;">📋</span><span>Копировать</span></button>
-      <button id="launcherPillTransBtn" type="button" class="launcher-pill-btn" title="Перевести выделенный фрагмент (RU)"><span class="pill-icon pill-icon-globe">🌐</span><span>Перевести</span></button>
-      <button id="launcherPillCadBtn" type="button" class="launcher-pill-btn" title="Экспортировать узел в чертеж DWG/DXF"><span class="pill-icon pill-icon-cad">📐</span><span>В DWG</span></button>
-    `;
-    document.body.appendChild(tooltip);
+
 
     // CAD Export Result Card
     cadCard = document.createElement("div");
@@ -522,10 +435,7 @@
       const interactive = e.target.closest("button, input, select, textarea, #toolbarViewer, #findbar, #launcherActionPill, #launcherTransPill, #launcherTransCard, #launcherCadCard");
       if (interactive) return;
 
-      // Hide translation tooltip if clicking elsewhere
-      if (tooltip && e.target !== tooltip && !tooltip.contains(e.target)) {
-        tooltip.style.display = "none";
-      }
+
 
       // If in Hand mode (mode === 1) or Text mode (mode === 2): don't draw rectangular box
       if (viewerToolMode === 1 || viewerToolMode === 2) {
@@ -670,13 +580,7 @@
       // Extract text strictly from inside the drawn rectangle
       extractZoneText();
 
-      // Show floating action pill right above the rectangle
-      if (tooltip && zoneBox) {
-        const boxRect = zoneBox.getBoundingClientRect();
-        tooltip.style.top = Math.max(10, boxRect.top - 44) + "px";
-        tooltip.style.left = Math.max(10, boxRect.left + boxRect.width / 2 - 85) + "px";
-        tooltip.style.display = "flex";
-      }
+
     });
 
     // Double-click to select a single word/span
@@ -688,12 +592,7 @@
         target.classList.add("zone-selected");
         currentZoneSpans = [target];
         extractZoneText();
-        if (zoneSelectedText && tooltip) {
-          const r = target.getBoundingClientRect();
-          tooltip.style.top = Math.max(10, r.top - 44) + "px";
-          tooltip.style.left = Math.max(10, r.left + r.width / 2 - 85) + "px";
-          tooltip.style.display = "flex";
-        }
+
       }
     });
 
@@ -772,89 +671,35 @@
           }
           cadCard.style.display = "block";
         }
+        try {
+          if (window.parent && typeof window.parent.showToast === "function") {
+            window.parent.showToast("Чертеж DWG/DXF успешно сформирован!");
+          }
+        } catch (_) {}
       } catch (err) {
-        alert("Ошибка экспорта в CAD: " + err.message);
-      } finally {
-        if (cadBtn) {
-          cadBtn.innerHTML = `<span class="pill-icon pill-icon-cad">📐</span><span>В DWG</span>`;
-          cadBtn.disabled = false;
-        }
-        if (tooltip) tooltip.style.display = "none";
+        try {
+          if (window.parent && typeof window.parent.showToast === "function") {
+            window.parent.showToast("Ошибка экспорта в CAD: " + err.message);
+          } else {
+            alert("Ошибка экспорта в CAD: " + err.message);
+          }
+        } catch (_) {}
       }
     }
+    window.exportCurrentZoneToCad = exportCurrentZoneToCad;
 
-    const pillCopyBtn = document.getElementById("launcherPillCopyBtn");
-    if (pillCopyBtn) {
-      pillCopyBtn.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const textToCopy = zoneSelectedText || window.getSelection()?.toString().trim() || "";
-        if (!textToCopy) return;
-
-        try {
-          if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(textToCopy);
-          }
-        } catch (_) {}
-
-        try {
-          if (window.parent && typeof window.parent.copyTextToClipboard === "function") {
-            window.parent.copyTextToClipboard(textToCopy, "Текст скопирован в буфер обмена");
-          }
-        } catch (_) {}
-
-        pillCopyBtn.innerHTML = `<span class="pill-icon" style="color:#10b981;">✅</span><span>Скопировано!</span>`;
-        setTimeout(() => {
-          pillCopyBtn.innerHTML = `<span class="pill-icon" style="color:#0969da;">📋</span><span>Копировать</span>`;
-          if (tooltip) tooltip.style.display = "none";
-        }, 900);
-      };
-    }
-
-    const pillCadBtn = document.getElementById("launcherPillCadBtn");
-    if (pillCadBtn) {
-      pillCadBtn.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        exportCurrentZoneToCad();
-      };
-    }
-
-    const pillTransBtn = document.getElementById("launcherPillTransBtn");
-    if (pillTransBtn) {
-      pillTransBtn.onclick = async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        tooltip.style.display = "none";
-        const textToTranslate = zoneSelectedText;
-        if (!textToTranslate) return;
-
-        popover.style.display = "block";
-        document.getElementById("launcherTransOrig").textContent = textToTranslate;
-        document.getElementById("launcherTransRes").textContent = "Переводим…";
-
-        try {
-          const resp = await fetch("/api/translate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: textToTranslate, target: "ru" }),
-          });
-          const data = await resp.json();
-          document.getElementById("launcherTransRes").textContent = data.translated || "—";
-        } catch (err) {
-          document.getElementById("launcherTransRes").textContent = "Ошибка: " + err.message;
-        }
-      };
-    }
-
-    // Unified Right-Click Context Menu for PDF Viewer
-    document.addEventListener("contextmenu", (event) => {
+    // Unified Right-Click Context Menu for PDF Viewer (captures on window realm)
+    window.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       event.stopPropagation();
 
       const inputEl = event.target.closest("input, textarea");
       const sel = window.getSelection();
       const selText = sel ? sel.toString().trim() : "";
+      const hasZone = Boolean(
+        (zoneBox && zoneBox.style.display !== "none" && parseInt(zoneBox.style.width, 10) > 4) ||
+        (currentZoneSpans && currentZoneSpans.length > 0)
+      );
 
       let textToUse = "";
       if (inputEl) {
@@ -873,12 +718,15 @@
               selectedText: textToUse,
               isInput: Boolean(inputEl),
               inputElement: inputEl,
+              isFindInput: Boolean(inputEl && inputEl.id === "findInput"),
+              hasZoneSelection: hasZone,
+              isPdf: true,
               path: getCurrentPdfPath()
             }
           );
         }
       } catch (_) {}
-    });
+    }, true);
 
     // Dismiss parent's context menu on any mouse click or scroll inside the PDF viewer
     const dismissParentContextMenu = (e) => {
@@ -1042,6 +890,10 @@
         const selText = sel ? sel.toString().trim() : "";
         const text = zoneSelectedText || selText;
         if (text) {
+          window.__lastCopiedText = text;
+          try {
+            if (window.parent) window.parent.__lastCopiedText = text;
+          } catch (_) {}
           try {
             if (navigator.clipboard && navigator.clipboard.writeText) {
               navigator.clipboard.writeText(text);

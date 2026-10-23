@@ -1822,6 +1822,12 @@ function showToast(message) {
 async function copyTextToClipboard(rawText, successToast = "Текст скопирован") {
   if (!rawText) return false;
   const text = String(rawText);
+  window.__lastCopiedText = text;
+  try {
+    if (els.pdfDocFrame?.contentWindow) {
+      els.pdfDocFrame.contentWindow.__lastCopiedText = text;
+    }
+  } catch (_) {}
   let success = false;
 
   // 1. Backend Win32 API clipboard (works in Windows regardless of webview/browser focus)
@@ -5714,6 +5720,9 @@ function showPdfViewerContextMenu(clientX, clientY, extra = {}) {
     selectedText: (extra && extra.selectedText) || "",
     isInput: Boolean(extra && extra.isInput),
     inputElement: extra && extra.inputElement,
+    isFindInput: Boolean(extra && extra.isFindInput),
+    hasZoneSelection: Boolean(extra && extra.hasZoneSelection),
+    isPdf: true,
     path: targetPath,
     isDir: false,
     ext: extOfPath(targetPath) || "PDF",
@@ -6525,43 +6534,78 @@ async function pasteFromClipboard(targetInput = null) {
       } catch (_) {}
     }
 
+    // 3. Резерв через глобальную переменную в памяти сессии
+    if (!cleanText && window.__lastCopiedText) {
+      cleanText = window.__lastCopiedText.trim();
+    }
+
     if (!cleanText) {
       showToast("Буфер обмена пуст");
       return;
     }
 
-    // 3. Если передан или активен input/textarea, вставляем текст по курсору
+    // 4. Проверяем: это поле поиска PDF.js (#findInput) или дочерний iframe PDF?
+    const win = els.pdfDocFrame?.contentWindow;
+    const isTargetPdfFind = Boolean(
+      (targetInput && (targetInput.id === "findInput" || targetInput.closest?.("#findbar"))) ||
+      (win && targetInput && targetInput.ownerDocument === win.document && targetInput.id === "findInput")
+    );
+
+    if (isTargetPdfFind) {
+      openPdfJsSearch(cleanText);
+      const preview = cleanText.length > 30 ? cleanText.slice(0, 30) + "…" : cleanText;
+      showToast(`Текст вставлен в поиск: «${preview}»`);
+      return;
+    }
+
+    // 5. Обычный input / textarea родительского окна
     let active = targetInput || document.activeElement;
     const frameDoc = els.pdfDocFrame?.contentDocument;
     if ((active === els.pdfDocFrame || !active || active === document.body) && frameDoc) {
       if (frameDoc.activeElement && (frameDoc.activeElement.tagName === "INPUT" || frameDoc.activeElement.tagName === "TEXTAREA")) {
+        if (frameDoc.activeElement.id === "findInput") {
+          openPdfJsSearch(cleanText);
+          const preview = cleanText.length > 30 ? cleanText.slice(0, 30) + "…" : cleanText;
+          showToast(`Текст вставлен в поиск: «${preview}»`);
+          return;
+        }
         active = frameDoc.activeElement;
       }
     }
 
     if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+      const targetWin = active.ownerDocument?.defaultView || window;
+      targetWin.focus();
       active.focus();
       const start = active.selectionStart ?? active.value.length;
       const end = active.selectionEnd ?? active.value.length;
       active.value = active.value.slice(0, start) + cleanText + active.value.slice(end);
       active.selectionStart = active.selectionEnd = start + cleanText.length;
-      active.dispatchEvent(new Event("input", { bubbles: true }));
-      active.dispatchEvent(new Event("change", { bubbles: true }));
-      showToast("Текст вставлен");
+      try {
+        const FrameEvt = targetWin.Event || Event;
+        active.dispatchEvent(new FrameEvt("input", { bubbles: true }));
+        active.dispatchEvent(new FrameEvt("change", { bubbles: true }));
+      } catch (_) {}
+      const preview = cleanText.length > 30 ? cleanText.slice(0, 30) + "…" : cleanText;
+      showToast(`Текст вставлен: «${preview}»`);
       return;
     }
 
-    // 4. Если открыт просмотрщик PDF (Окно 3), открываем поиск и ищем этот текст
+    // 6. Если открыт просмотрщик PDF (Окно 3), но курсор был не в инпуте:
+    // автоматически вставляем текст в поиск PDF.js и ищем по документу
     const isPdfActive = els.pdfDocFrame && !els.pdfDocFrame.classList.contains("hidden") && els.pdfViewer && !els.pdfViewer.classList.contains("hidden");
     if (isPdfActive) {
       openPdfJsSearch(cleanText);
-      showToast("Поиск в документе: " + cleanText.slice(0, 30));
+      const preview = cleanText.length > 30 ? cleanText.slice(0, 30) + "…" : cleanText;
+      showToast(`Поиск в документе: «${preview}»`);
       return;
     }
 
     triggerSearchText(cleanText);
-    showToast("Поиск: " + cleanText.slice(0, 30));
+    const preview = cleanText.length > 30 ? cleanText.slice(0, 30) + "…" : cleanText;
+    showToast(`Поиск: «${preview}»`);
   } catch (err) {
+    console.error("pasteFromClipboard error:", err);
     showToast("Буфер обмена недоступен (Ctrl+V)");
   }
 }
@@ -6604,6 +6648,11 @@ function showFileContextMenu(clientX, clientY, target) {
 
   const selectedText = (target.selectedText || window.getSelection()?.toString() || "").trim();
   const isInput = Boolean(target.isInput);
+  const isPdfContext = Boolean(
+    target.isPdf ||
+    (target.path && extOfPath(target.path) === "PDF") ||
+    (els.pdfViewer && !els.pdfViewer.classList.contains("hidden"))
+  );
   const items = [];
 
   if (isInput) {
@@ -6623,11 +6672,22 @@ function showFileContextMenu(clientX, clientY, target) {
           copyTextToClipboard(selectedText, "Текст вырезан");
           if (target.inputElement) {
             const el = target.inputElement;
+            const targetWin = el.ownerDocument?.defaultView || window;
             const start = el.selectionStart ?? 0;
             const end = el.selectionEnd ?? el.value.length;
             el.value = el.value.slice(0, start) + el.value.slice(end);
             el.selectionStart = el.selectionEnd = start;
-            el.dispatchEvent(new Event("input", { bubbles: true }));
+            try {
+              const Evt = targetWin.Event || Event;
+              el.dispatchEvent(new Evt("input", { bubbles: true }));
+              el.dispatchEvent(new Evt("change", { bubbles: true }));
+            } catch (_) {}
+            if (el.id === "findInput") {
+              const app = targetWin.PDFViewerApplication;
+              try {
+                if (typeof app?.findBar?.dispatchEvent === "function") app.findBar.dispatchEvent("");
+              } catch (_) {}
+            }
           }
         },
       });
@@ -6644,9 +6704,20 @@ function showFileContextMenu(clientX, clientY, target) {
       hint: "",
       run: () => {
         if (target.inputElement) {
-          target.inputElement.value = "";
-          target.inputElement.dispatchEvent(new Event("input", { bubbles: true }));
-          target.inputElement.focus();
+          const el = target.inputElement;
+          const targetWin = el.ownerDocument?.defaultView || window;
+          el.value = "";
+          try {
+            const Evt = targetWin.Event || Event;
+            el.dispatchEvent(new Evt("input", { bubbles: true }));
+            el.dispatchEvent(new Evt("change", { bubbles: true }));
+          } catch (_) {}
+          if (el.id === "findInput") {
+            try {
+              if (typeof targetWin.handlePdfJsEscape === "function") targetWin.handlePdfJsEscape();
+            } catch (_) {}
+          }
+          el.focus();
         }
       },
     });
@@ -6665,12 +6736,6 @@ function showFileContextMenu(clientX, clientY, target) {
         hint: "",
         run: () => triggerTranslateText(selectedText),
       });
-      items.push({
-        icon: "🔍",
-        label: "Найти в документе",
-        hint: "",
-        run: () => triggerSearchText(selectedText),
-      });
     } else {
       items.push({
         icon: "📋",
@@ -6681,12 +6746,48 @@ function showFileContextMenu(clientX, clientY, target) {
       });
     }
 
-    // 2. Пункт "Вставить" (всегда доступен)
+    // 2. Пункт "Экспорт в DWG" (в просмотре PDF)
+    if (isPdfContext) {
+      items.push({
+        icon: "📐",
+        label: target.hasZoneSelection ? "Экспорт узла в DWG" : "Экспорт в DWG",
+        hint: target.hasZoneSelection ? "Рамка" : "Лист",
+        run: () => {
+          const win = els.pdfDocFrame?.contentWindow;
+          if (win && typeof win.exportCurrentZoneToCad === "function") {
+            win.exportCurrentZoneToCad();
+          } else {
+            showToast("Экспорт в DWG доступен в просмотре PDF");
+          }
+        },
+      });
+    }
+
+    // 3. Пункт "Найти в документе" (в просмотре PDF)
+    if (isPdfContext) {
+      if (selectedText) {
+        items.push({
+          icon: "🔍",
+          label: "Найти в документе",
+          hint: "",
+          run: () => triggerSearchText(selectedText),
+        });
+      } else {
+        items.push({
+          icon: "🔍",
+          label: "Найти в документе…",
+          hint: "Ctrl+F",
+          run: () => openPdfJsSearch(""),
+        });
+      }
+    }
+
+    // 4. Пункт "Вставить" (всегда доступен)
     items.push({
       icon: "📥",
       label: "Вставить",
       hint: "Ctrl+V",
-      run: () => pasteFromClipboard(),
+      run: () => pasteFromClipboard(target.inputElement || null),
     });
     items.push({ sep: true });
   }
@@ -7194,9 +7295,22 @@ function openPdfJsSearch(query) {
         if (typeof query === "string" && query.trim()) {
           const val = query.trim();
           findInput.value = val;
-          // Trigger PDF.js input search event
-          findInput.dispatchEvent(new Event("input", { bubbles: true }));
-          // Also execute find command via findController if available
+          findInput.selectionStart = findInput.selectionEnd = val.length;
+
+          // 1. Dispatch input event using the iframe's own realm Event constructor
+          try {
+            const FrameEvt = win.Event || Event;
+            findInput.dispatchEvent(new FrameEvt("input", { bubbles: true }));
+          } catch (_) {}
+
+          // 2. Trigger findBar dispatch if available
+          try {
+            if (typeof app.findBar.dispatchEvent === "function") {
+              app.findBar.dispatchEvent("");
+            }
+          } catch (_) {}
+
+          // 3. Execute find command via findController directly
           try {
             if (app.findController) {
               app.findController.executeCommand("find", {
@@ -7209,9 +7323,11 @@ function openPdfJsSearch(query) {
               });
             }
           } catch (_) {}
+          findInput.focus();
+        } else {
+          findInput.focus();
+          findInput.select();
         }
-        findInput.focus();
-        findInput.select();
       }
     }
   } catch (err) {
