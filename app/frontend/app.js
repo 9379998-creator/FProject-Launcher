@@ -5188,6 +5188,14 @@ async function loadMorePdfFiles(itemsToRender) {
 
 
 els.load.addEventListener("click", () => importObject(false).catch(showOperationError));
+  els.load.addEventListener("contextmenu", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const directPath = prompt("Введите или вставьте путь к папке объекта (локальный или сетевой \\\\server\\...):");
+    if (directPath && directPath.trim()) {
+      await importObjectByPath(directPath.trim());
+    }
+  });
 if (document.getElementById("reloadPage")) {
   document.getElementById("reloadPage").addEventListener("click", () => window.location.reload());
 }
@@ -6486,6 +6494,63 @@ function triggerSearchText(text) {
   openPdfJsSearch(text);
 }
 
+async function pasteFromClipboard() {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text || !text.trim()) {
+      showToast("Буфер обмена пуст");
+      return;
+    }
+    const cleanText = text.trim();
+    const active = document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+      const start = active.selectionStart ?? active.value.length;
+      const end = active.selectionEnd ?? active.value.length;
+      active.value = active.value.slice(0, start) + cleanText + active.value.slice(end);
+      active.selectionStart = active.selectionEnd = start + cleanText.length;
+      active.dispatchEvent(new Event("input", { bubbles: true }));
+      showToast("Текст вставлен");
+      return;
+    }
+    triggerSearchText(cleanText);
+    showToast("Поиск: " + cleanText.slice(0, 30));
+  } catch (err) {
+    showToast("Буфер обмена недоступен (Ctrl+V)");
+  }
+}
+
+async function clearFileCache(path) {
+  if (!path) return;
+  try {
+    showToast("Очистка кэша…");
+    const resp = await fetch("/api/cache/clear-file", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    const data = await resp.json();
+    if (data && data.cleared) {
+      showToast("Кэш файла очищен");
+      if (els.pdfDocFrame && els.pdfDocFrame.dataset.currentDoc === path) {
+        const curSrc = els.pdfDocFrame.src;
+        els.pdfDocFrame.dataset.currentDoc = "";
+        els.pdfDocFrame.src = "about:blank";
+        setTimeout(() => {
+          els.pdfDocFrame.dataset.currentDoc = path;
+          els.pdfDocFrame.src = curSrc;
+        }, 100);
+      }
+      if (typeof previewFileDirectly === "function") {
+        previewFileDirectly({ path, name: path.split(/[\\/]/).pop(), isDir: false }, { fullView: false }).catch(() => {});
+      }
+    } else {
+      showToast("Не удалось очистить кэш: " + (data.error || "ошибка"));
+    }
+  } catch (err) {
+    showToast("Ошибка: " + err.message);
+  }
+}
+
 function showFileContextMenu(clientX, clientY, target) {
   const menu = els.contextMenu;
   if (!menu || !target) return;
@@ -6493,64 +6558,82 @@ function showFileContextMenu(clientX, clientY, target) {
   const selectedText = (target.selectedText || window.getSelection()?.toString() || "").trim();
   const items = [];
 
-  // 1. РџСѓРЅРєС‚ "РЎРєРѕРїРёСЂРѕРІР°С‚СЊ" (РІС‹РґРµР»РµРЅРЅС‹Р№ С‚РµРєСЃС‚)
+  // 1. Пункт "Скопировать" (выделенный текст)
   if (selectedText) {
     items.push({
-      icon: "\uD83D\uDCCB",
-      label: "\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C",
+      icon: "📋",
+      label: "Скопировать",
       hint: "Ctrl+C",
-      run: () => copyTextToClipboard(selectedText, "\u0422\u0435\u043A\u0441\u0442 \u0441\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430"),
+      run: () => copyTextToClipboard(selectedText, "Текст скопирован в буфер обмена"),
     });
     items.push({
-      icon: "\uD83C\uDF10",
-      label: "\u041F\u0435\u0440\u0435\u0432\u0435\u0441\u0442\u0438",
+      icon: "🌐",
+      label: "Перевести",
       hint: "",
       run: () => triggerTranslateText(selectedText),
     });
     items.push({
-      icon: "\uD83D\uDD0D",
-      label: "\u041D\u0430\u0439\u0442\u0438 \u0432 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0435",
+      icon: "🔍",
+      label: "Найти в документе",
       hint: "",
       run: () => triggerSearchText(selectedText),
     });
-    items.push({ sep: true });
   } else {
     items.push({
-      icon: "\uD83D\uDCCB",
-      label: "\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C",
+      icon: "📋",
+      label: "Скопировать",
       hint: "Ctrl+C",
       disabled: true,
       run: () => {},
     });
+  }
+
+  // 2. Пункт "Вставить" (всегда доступен)
+  items.push({
+    icon: "📥",
+    label: "Вставить",
+    hint: "Ctrl+V",
+    run: () => pasteFromClipboard(),
+  });
+  items.push({ sep: true });
+
+  // 3. Пункт "Очистить кэш этого файла"
+  if (target.path && !target.isDir) {
+    items.push({
+      icon: "🧹",
+      label: "Очистить кэш этого файла",
+      hint: "Сброс рендера",
+      run: () => clearFileCache(target.path),
+    });
     items.push({ sep: true });
   }
 
-  // 2. РџСѓРЅРєС‚ "РЎРєРѕРїРёСЂРѕРІР°С‚СЊ РїСѓС‚СЊ"
+  // 4. Пункт "Скопировать путь"
   if (target.path) {
     items.push({
-      icon: "\uD83D\uDCC2",
-      label: "\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u043F\u0443\u0442\u044C",
+      icon: "📁",
+      label: "Скопировать путь",
       hint: "",
       run: () => copyPathToClipboard(target.path),
     });
     items.push({ sep: true });
   }
 
-  // 3. РџСѓРЅРєС‚ "РћС‚РєСЂС‹С‚СЊ РІ РїСЂРѕРіСЂР°РјРјРµ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ"
+  // 5. Пункт "Открыть в программе по умолчанию"
   if (target.path && !target.isDir) {
     items.push({
-      icon: "\u2197\uFE0F",
-      label: "\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u0432 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u0435 \u043F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E",
+      icon: "↗️",
+      label: "Открыть в программе по умолчанию",
       hint: "",
       run: () => openFileByPath(target.path, "native"),
     });
   }
 
-  // 4. РџСѓРЅРєС‚ "РћС‚РєСЂС‹С‚СЊ РІ РїСЂРѕРІРѕРґРЅРёРєРµ"
+  // 6. Пункт "Открыть в проводнике"
   if (target.path) {
     items.push({
-      icon: "\uD83D\uDCC1",
-      label: "\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u0432 \u043F\u0440\u043E\u0432\u043E\u0434\u043D\u0438\u043A\u0435",
+      icon: "📂",
+      label: "Открыть в проводнике",
       hint: "",
       run: () => openFileByPath(target.path, "explorer"),
     });

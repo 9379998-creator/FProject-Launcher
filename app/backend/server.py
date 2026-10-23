@@ -3446,6 +3446,18 @@ class LauncherHandler(BaseHTTPRequestHandler):
 
                 content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
                 file_size = target.stat().st_size
+                mtime_ns = target.stat().st_mtime_ns
+                etag = f'"{hashlib.sha1(f"{target.resolve()}|{mtime_ns}|{file_size}".encode()).hexdigest()[:16]}"'
+
+                if_none_match = self.headers.get("If-None-Match")
+                if if_none_match and if_none_match.strip() == etag:
+                    self.send_response(HTTPStatus.NOT_MODIFIED)
+                    self.send_header("ETag", etag)
+                    self.send_header("Cache-Control", "public, max-age=604800, immutable")
+                    self._apply_cors_headers()
+                    self.end_headers()
+                    return
+
                 range_header = self.headers.get("Range")
                 
                 if range_header and range_header.startswith("bytes="):
@@ -3479,6 +3491,8 @@ class LauncherHandler(BaseHTTPRequestHandler):
                         self.send_header("Content-Length", str(chunk_size))
                         self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
                         self.send_header("Accept-Ranges", "bytes")
+                        self.send_header("ETag", etag)
+                        self.send_header("Cache-Control", "public, max-age=604800, immutable")
                         self._apply_cors_headers()
                         self.end_headers()
                         
@@ -3486,7 +3500,7 @@ class LauncherHandler(BaseHTTPRequestHandler):
                             f.seek(start)
                             bytes_to_read = chunk_size
                             while bytes_to_read > 0:
-                                chunk = f.read(min(65536, bytes_to_read))
+                                chunk = f.read(min(1048576, bytes_to_read))
                                 if not chunk:
                                     break
                                 try:
@@ -3504,12 +3518,14 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(file_size))
                 self.send_header("Accept-Ranges", "bytes")
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "public, max-age=604800, immutable")
                 self._apply_cors_headers()
                 self.end_headers()
                 
                 with target.open("rb") as f:
                     while True:
-                        chunk = f.read(65536)
+                        chunk = f.read(1048576)
                         if not chunk:
                             break
                         self.wfile.write(chunk)
@@ -3644,21 +3660,90 @@ class LauncherHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/choose-folder":
-            # Контракт docs/LOAD_BUTTON_CONTRACT.md: один PowerShell
-            # FolderBrowserDialog, строго JSON в ответе.
+            # Контракт docs/LOAD_BUTTON_CONTRACT.md: системный диалог выбора папки Windows.
+            # Использует современный Windows Explorer (IFileOpenDialog с FOS_PICKFOLDERS),
+            # обеспечивающий адресную строку, вставку путей и выбор сетевых папок (SMB/UNC).
+            # При недоступности COM выполняет автоматический фолбэк на FolderBrowserDialog.
             try:
                 ps_command = (
                     "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
-                    "Add-Type -AssemblyName System.Windows.Forms; "
-                    "$dlg = New-Object System.Windows.Forms.FolderBrowserDialog; "
-                    '$dlg.Description = "Select object folder - FLauncher"; '
-                    "$dlg.ShowNewFolderButton = $false; "
-                    "$owner = New-Object System.Windows.Forms.Form; "
-                    "$owner.TopMost = $true; $owner.ShowInTaskbar = $false; "
-                    "$null = $owner.Handle; "
-                    "try { if ($dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) "
-                    "{ [Console]::WriteLine($dlg.SelectedPath) } } "
-                    "finally { $owner.Dispose(); $dlg.Dispose() }"
+                    "$code = @'\n"
+                    "using System;\n"
+                    "using System.Runtime.InteropServices;\n"
+                    "public class NativeFolderDialog {\n"
+                    "    [ComImport]\n"
+                    "    [Guid(\"d57c7288-d4ad-4768-be02-9d969532d960\")]\n"
+                    "    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]\n"
+                    "    private interface IFileOpenDialog {\n"
+                    "        [PreserveSig] int Show(IntPtr parent);\n"
+                    "        void SetFileTypes(uint cFileTypes, IntPtr rgFilterSpec);\n"
+                    "        void SetFileTypeIndex(uint iFileType);\n"
+                    "        void GetFileTypeIndex(out uint piFileType);\n"
+                    "        void Advise(IntPtr pfde, out uint pdwCookie);\n"
+                    "        void Unadvise(uint dwCookie);\n"
+                    "        void SetOptions(uint fos);\n"
+                    "        void GetOptions(out uint pfos);\n"
+                    "        void SetDefaultFolder(IntPtr psi);\n"
+                    "        void SetFolder(IntPtr psi);\n"
+                    "        void GetFolder(out IntPtr ppsi);\n"
+                    "        void GetCurrentSelection(out IntPtr ppsi);\n"
+                    "        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);\n"
+                    "        void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string pszName);\n"
+                    "        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);\n"
+                    "        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);\n"
+                    "        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);\n"
+                    "        void GetResult(out IShellItem ppsi);\n"
+                    "    }\n"
+                    "    [ComImport]\n"
+                    "    [Guid(\"43826d1e-e718-42ee-bc55-a1e261c37bfe\")]\n"
+                    "    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]\n"
+                    "    private interface IShellItem {\n"
+                    "        void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);\n"
+                    "        void GetParent(out IShellItem ppsi);\n"
+                    "        void GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName);\n"
+                    "        void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);\n"
+                    "        void Compare(IShellItem psi, uint hint, out int piOrder);\n"
+                    "    }\n"
+                    "    [ComImport]\n"
+                    "    [Guid(\"DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7\")]\n"
+                    "    [ClassInterface(ClassInterfaceType.None)]\n"
+                    "    private class FileOpenDialogRCW {}\n"
+                    "    public static string SelectFolder(string title) {\n"
+                    "        IFileOpenDialog dialog = (IFileOpenDialog)new FileOpenDialogRCW();\n"
+                    "        try {\n"
+                    "            uint options;\n"
+                    "            dialog.GetOptions(out options);\n"
+                    "            dialog.SetOptions(options | 0x20 | 0x40 | 0x800);\n"
+                    "            if (!string.IsNullOrEmpty(title)) dialog.SetTitle(title);\n"
+                    "            int hr = dialog.Show(IntPtr.Zero);\n"
+                    "            if (hr == 0) {\n"
+                    "                IShellItem item;\n"
+                    "                dialog.GetResult(out item);\n"
+                    "                if (item != null) {\n"
+                    "                    string path;\n"
+                    "                    item.GetDisplayName(0x80058000, out path);\n"
+                    "                    return path ?? \"\";\n"
+                    "                }\n"
+                    "            }\n"
+                    "            return \"\";\n"
+                    "        } finally {\n"
+                    "            Marshal.ReleaseComObject(dialog);\n"
+                    "        }\n"
+                    "    }\n"
+                    "}\n"
+                    "'@;\n"
+                    "try {\n"
+                    "    Add-Type -TypeDefinition $code;\n"
+                    "    $res = [NativeFolderDialog]::SelectFolder('Select object folder - FLauncher');\n"
+                    "    if ($res) { [Console]::WriteLine($res) }\n"
+                    "} catch {\n"
+                    "    Add-Type -AssemblyName System.Windows.Forms;\n"
+                    "    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog;\n"
+                    "    $dlg.Description = 'Select object folder - FLauncher';\n"
+                    "    $owner = New-Object System.Windows.Forms.Form;\n"
+                    "    $owner.TopMost = $true; $owner.ShowInTaskbar = $false;\n"
+                    "    try { if ($dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::WriteLine($dlg.SelectedPath) } } finally { $owner.Dispose(); $dlg.Dispose() }\n"
+                    "}\n"
                 )
                 # Доводчик: диалог должен открыться главным окном, а не значком в фоне.
                 _bring_window_to_front(None, "#32770", 115.0, "Select object folder")
@@ -3954,6 +4039,69 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
 
+
+        if parsed.path == "/api/cache/clear-file":
+            try:
+                body = self.read_json()
+                raw_file = str(body.get("path") or body.get("file", "")).strip()
+                if not raw_file:
+                    self.send_json(HTTPStatus.BAD_REQUEST, {"error": "Missing path"})
+                    return
+                p = Path(raw_file).expanduser().resolve()
+                cache_root = Path("runtime/cache")
+                deleted = 0
+
+                # 1. Clear PDF raster cache (manifest.json & page PNGs)
+                pdf_cache = cache_root / "pdf"
+                if pdf_cache.exists():
+                    for manifest_path in pdf_cache.glob("*/manifest.json"):
+                        try:
+                            m_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                            src = m_data.get("sourceFile") or m_data.get("source") or m_data.get("path")
+                            if src and Path(src).resolve() == p:
+                                shutil.rmtree(manifest_path.parent, ignore_errors=True)
+                                deleted += 1
+                        except Exception:
+                            pass
+
+                # 2. Clear rendering dispatcher cache for this file
+                rend_cache = cache_root / "rendering"
+                if rend_cache.exists():
+                    try:
+                        from app.rendering.engine_dwg_pdf import cache_key
+                        k = cache_key(p, 150, 0)
+                        k_dir = rend_cache / k
+                        if k_dir.exists():
+                            shutil.rmtree(k_dir, ignore_errors=True)
+                            deleted += 1
+                    except Exception:
+                        pass
+
+                # 3. Clear CAD export cache for this file
+                cad_cache = cache_root / "cad"
+                if cad_cache.exists():
+                    stem_clean = p.stem.replace(" ", "_")
+                    for dxf in cad_cache.glob(f"*{stem_clean}*"):
+                        try:
+                            dxf.unlink()
+                            deleted += 1
+                        except Exception:
+                            pass
+
+                # 4. Clear DWG cache if DWG
+                if p.suffix.lower() == ".dwg":
+                    key = file_cache_key(p, "dwg-smart-cad-v4")
+                    target_dir = DWG_CACHE_DIR / key
+                    if target_dir.exists():
+                        shutil.rmtree(target_dir, ignore_errors=True)
+                        deleted += 1
+
+                logger.info("Cleared cache for file %s (deleted %d cache entries)", p, deleted)
+                self.send_json(HTTPStatus.OK, {"cleared": True, "file": str(p), "deletedEntries": deleted})
+            except Exception as error:
+                logger.error("Error in /api/cache/clear-file: %s", error)
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
 
         if parsed.path == "/api/dwg/cache/clear":
             try:

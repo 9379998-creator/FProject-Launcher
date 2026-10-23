@@ -339,8 +339,8 @@
       align-items: center;
     `;
     tooltip.innerHTML = `
-      <button id="launcherPillTransBtn" style="background:#0969da; color:#fff; border:none; border-radius:5px; padding:6px 11px; font-size:12px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:4px;">🌐 Перевести</button>
-      <button id="launcherPillCadBtn" style="background:#10b981; color:#fff; border:none; border-radius:5px; padding:6px 11px; font-size:12px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:4px;">📐 В DWG</button>
+      <button id="launcherPillTransBtn" style="background:#272f3d; color:#f1f5f9; border:1px solid rgba(255, 255, 255, 0.14); border-radius:6px; padding:5px 11px; font-size:12px; font-weight:400; cursor:pointer; display:flex; align-items:center; gap:5px; transition:background 0.15s, border-color 0.15s;"><span style="font-size:13px; line-height:1; filter:drop-shadow(0 0 2px rgba(56,189,248,0.7));">🌐</span> <span>Перевести</span></button>
+      <button id="launcherPillCadBtn" style="background:#272f3d; color:#f1f5f9; border:1px solid rgba(255, 255, 255, 0.14); border-radius:6px; padding:5px 11px; font-size:12px; font-weight:400; cursor:pointer; display:flex; align-items:center; gap:5px; transition:background 0.15s, border-color 0.15s;"><span style="font-size:13px; line-height:1; filter:drop-shadow(0 0 2px rgba(249,115,22,0.7));">📐</span> <span>В DWG</span></button>
     `;
     document.body.appendChild(tooltip);
 
@@ -348,12 +348,12 @@
     const btnCad = tooltip.querySelector("#launcherPillCadBtn");
 
     if (btnTrans) {
-      btnTrans.onmouseover = () => btnTrans.style.background = "#0055b3";
-      btnTrans.onmouseout = () => btnTrans.style.background = "#0969da";
+      btnTrans.onmouseover = () => { btnTrans.style.background = "#374151"; btnTrans.style.borderColor = "rgba(255,255,255,0.28)"; };
+      btnTrans.onmouseout = () => { btnTrans.style.background = "#272f3d"; btnTrans.style.borderColor = "rgba(255,255,255,0.14)"; };
     }
     if (btnCad) {
-      btnCad.onmouseover = () => btnCad.style.background = "#059669";
-      btnCad.onmouseout = () => btnCad.style.background = "#10b981";
+      btnCad.onmouseover = () => { btnCad.style.background = "#374151"; btnCad.style.borderColor = "rgba(255,255,255,0.28)"; };
+      btnCad.onmouseout = () => { btnCad.style.background = "#272f3d"; btnCad.style.borderColor = "rgba(255,255,255,0.14)"; };
     }
 
     // CAD Export Result Card
@@ -658,7 +658,7 @@
 
       const cadBtn = document.getElementById("launcherPillCadBtn");
       if (cadBtn) {
-        cadBtn.textContent = "⏳ Экспорт…";
+        cadBtn.innerHTML = `<span style="font-size:13px; line-height:1;">⏳</span> <span>Экспорт…</span>`;
         cadBtn.disabled = true;
       }
 
@@ -731,7 +731,7 @@
         alert("Ошибка экспорта в CAD: " + err.message);
       } finally {
         if (cadBtn) {
-          cadBtn.textContent = "📐 В DWG";
+          cadBtn.innerHTML = `<span style="font-size:13px; line-height:1; filter:drop-shadow(0 0 2px rgba(249,115,22,0.7));">📐</span> <span>В DWG</span>`;
           cadBtn.disabled = false;
         }
         if (tooltip) tooltip.style.display = "none";
