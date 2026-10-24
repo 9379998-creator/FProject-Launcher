@@ -1823,23 +1823,37 @@ async function copyTextToClipboard(rawText, successToast = "Текст скоп�
   if (!rawText) return false;
   const text = String(rawText);
   let success = false;
-  try {
-    const resp = await fetch("/api/clipboard", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data.ok) success = true;
-    }
-  } catch (err) {}
-  if (!success && navigator.clipboard) {
+
+  // 1. Primary: navigator.clipboard.writeText (while user gesture is fresh)
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
     try {
       await navigator.clipboard.writeText(text);
       success = true;
-    } catch (e) {}
+    } catch (err) {
+      console.warn("[app copy] navigator.clipboard.writeText failed:", err);
+    }
   }
+
+  // 2. Fallback 1: backend POST /api/clipboard (only if primary failed)
+  if (!success) {
+    try {
+      const resp = await fetch("/api/clipboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && data.ok) {
+          success = true;
+        }
+      }
+    } catch (err) {
+      console.warn("[app copy] backend /api/clipboard fallback failed:", err);
+    }
+  }
+
+  // 3. Fallback 2: execCommand on temporary textarea (only if both above failed)
   if (!success) {
     try {
       const textarea = document.createElement("textarea");
@@ -1847,21 +1861,22 @@ async function copyTextToClipboard(rawText, successToast = "Текст скоп�
       textarea.style.position = "fixed";
       textarea.style.top = "0";
       textarea.style.left = "0";
-      textarea.style.width = "2em";
-      textarea.style.height = "2em";
-      textarea.style.padding = "0";
-      textarea.style.border = "none";
-      textarea.style.background = "transparent";
+      textarea.style.opacity = "0";
       document.body.appendChild(textarea);
       textarea.focus();
       textarea.select();
       textarea.setSelectionRange(0, text.length);
       success = document.execCommand("copy");
       document.body.removeChild(textarea);
-    } catch (e) {}
+    } catch (err) {
+      console.warn("[app copy] execCommand fallback failed:", err);
+    }
   }
+
   if (success && successToast) {
     showToast(successToast);
+  } else if (!success) {
+    showToast("Ошибка копирования в буфер обмена");
   }
   return success;
 }
@@ -5694,7 +5709,6 @@ function showPdfViewerContextMenu(clientX, clientY, extra = {}) {
   hideFileContextMenu();
   const info = getActiveSourceInfo();
   const targetPath = (info && info.path) || state.activeNativePath || state.revealedPath || "";
-  if (!targetPath) return;
   showFileContextMenu(clientX, clientY, {
     isPdf: true,
     selectedText: (extra && extra.selectedText) || "",
@@ -6508,9 +6522,14 @@ function showFileContextMenu(clientX, clientY, target) {
       label: "\u0421\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u0442\u044C",
       hint: "Ctrl+C",
       disabled: !hasText,
-      run: () => {
+      run: async () => {
         if (!hasText) return;
-        copyTextToClipboard(pdfSelectedText, "\u0422\u0435\u043A\u0441\u0442 \u0441\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430");
+        const pdfWin = els.pdfDocFrame?.contentWindow;
+        if (pdfWin && typeof pdfWin.copyPdfSelection === "function") {
+          await pdfWin.copyPdfSelection(pdfSelectedText);
+        } else {
+          await copyTextToClipboard(pdfSelectedText, "\u0422\u0435\u043A\u0441\u0442 \u0441\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430");
+        }
       },
     });
 

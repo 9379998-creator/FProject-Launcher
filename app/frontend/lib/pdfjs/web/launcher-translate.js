@@ -963,6 +963,216 @@
       } catch (_) {}
     };
 
+    // Unified sequential copy action with cascading fallbacks (primary -> backend -> execCommand)
+    async function copyPdfSelection(customText) {
+      const sel = window.getSelection();
+      const selText = sel ? sel.toString().trim() : "";
+      const text = (customText !== undefined && customText !== null && customText !== "")
+        ? String(customText).trim()
+        : (zoneSelectedText || selText || "");
+      if (!text) return false;
+
+      let copied = false;
+
+      // 1. Primary: navigator.clipboard.writeText (while user gesture is active)
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        try {
+          await navigator.clipboard.writeText(text);
+          copied = true;
+        } catch (err) {
+          console.warn("[PDF copy] navigator.clipboard.writeText failed:", err);
+        }
+      }
+
+      // 2. Fallback 1: backend POST /api/clipboard (only if primary failed)
+      if (!copied) {
+        try {
+          const resp = await fetch("/api/clipboard", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data && data.ok) {
+              copied = true;
+            }
+          }
+        } catch (err) {
+          console.warn("[PDF copy] backend /api/clipboard fallback failed:", err);
+        }
+      }
+
+      // 3. Fallback 2: execCommand on temporary textarea (only if both above failed)
+      if (!copied) {
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.style.position = "fixed";
+          ta.style.top = "0";
+          ta.style.left = "0";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          copied = document.execCommand("copy");
+          document.body.removeChild(ta);
+        } catch (err) {
+          console.warn("[PDF copy] execCommand fallback failed:", err);
+        }
+      }
+
+      // Single notification after sequence completes
+      if (copied) {
+        if (window.parent && window.parent !== window && typeof window.parent.showToast === "function") {
+          window.parent.showToast("Текст скопирован в буфер обмена");
+        }
+      } else {
+        if (window.parent && window.parent !== window && typeof window.parent.showToast === "function") {
+          window.parent.showToast("Ошибка копирования в буфер обмена");
+        }
+      }
+
+      return copied;
+    }
+    window.copyPdfSelection = copyPdfSelection;
+
+    // Dedicated HTML Context Menu for #findInput (ПКМ -> Вставить)
+    function initFindInputContextMenu() {
+      const findInput = document.getElementById("findInput");
+      if (!findInput || findInput.dataset.pkmContextBound === "true") return;
+      findInput.dataset.pkmContextBound = "true";
+
+      let menu = document.getElementById("launcherFindContextMenu");
+      if (!menu) {
+        menu = document.createElement("div");
+        menu.id = "launcherFindContextMenu";
+        menu.style.position = "fixed";
+        menu.style.zIndex = "99999";
+        menu.style.minWidth = "150px";
+        menu.style.padding = "4px";
+        menu.style.background = "#fbfcfd";
+        menu.style.border = "1px solid #abadb3";
+        menu.style.borderRadius = "4px";
+        menu.style.boxShadow = "2px 3px 8px rgba(0, 0, 0, 0.25)";
+        menu.style.font = "12px/1.4 'Segoe UI', -apple-system, system-ui, sans-serif";
+        menu.style.color = "#1e293b";
+        menu.style.display = "none";
+
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.style.display = "flex";
+        btn.style.alignItems = "center";
+        btn.style.gap = "8px";
+        btn.style.width = "100%";
+        btn.style.padding = "6px 10px 6px 8px";
+        btn.style.border = "0";
+        btn.style.borderRadius = "2px";
+        btn.style.background = "transparent";
+        btn.style.color = "inherit";
+        btn.style.font = "inherit";
+        btn.style.textAlign = "left";
+        btn.style.cursor = "pointer";
+        btn.style.whiteSpace = "nowrap";
+
+        btn.innerHTML = '<span style="display:inline-block; width:16px; text-align:center; font-size:13px;">📋</span><span style="flex:1 1 auto;">Вставить</span><span style="font-size:11px; color:#6b7280; margin-left:12px;">Ctrl+V</span>';
+
+        btn.addEventListener("mouseenter", () => { btn.style.background = "#e5f1fb"; });
+        btn.addEventListener("mouseleave", () => { btn.style.background = "transparent"; });
+
+        // Prevent mousedown from blurring findInput or dismissing prematurely
+        btn.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+
+        btn.addEventListener("click", async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          menu.style.display = "none";
+
+          let text = "";
+          // 1. Primary: read actual Windows clipboard via navigator.clipboard.readText()
+          if (navigator.clipboard && typeof navigator.clipboard.readText === "function") {
+            try {
+              text = await navigator.clipboard.readText();
+            } catch (err) {
+              console.warn("[PDF paste] navigator.clipboard.readText failed:", err);
+            }
+          }
+
+          // 2. Parent fallback if iframe clipboard reading was restricted
+          if (!text && window.parent && window.parent !== window && window.parent.navigator?.clipboard?.readText) {
+            try {
+              text = await window.parent.navigator.clipboard.readText();
+            } catch (err) {
+              console.warn("[PDF paste] parent.navigator.clipboard.readText failed:", err);
+            }
+          }
+
+          if (!text) {
+            if (window.parent && window.parent !== window && typeof window.parent.showToast === "function") {
+              window.parent.showToast("Буфер обмена пуст или доступ заблокирован");
+            }
+            return;
+          }
+
+          // Insert text at saved cursor / selection
+          const val = findInput.value || "";
+          const start = (savedSelectionStart !== null && savedSelectionStart !== undefined) ? savedSelectionStart : val.length;
+          const end = (savedSelectionEnd !== null && savedSelectionEnd !== undefined) ? savedSelectionEnd : start;
+          findInput.value = val.slice(0, start) + text + val.slice(end);
+
+          // Restore focus and cursor to end of inserted text
+          const newPos = start + text.length;
+          findInput.focus();
+          try {
+            findInput.setSelectionRange(newPos, newPos);
+          } catch (_) {}
+
+          // Single search execution: standard PDF.js 'input' event triggers dispatchEvent("") in viewer.js:4973
+          findInput.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+
+        menu.appendChild(btn);
+        document.body.appendChild(menu);
+      }
+
+      let savedSelectionStart = null;
+      let savedSelectionEnd = null;
+
+      findInput.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        savedSelectionStart = typeof findInput.selectionStart === "number" ? findInput.selectionStart : findInput.value.length;
+        savedSelectionEnd = typeof findInput.selectionEnd === "number" ? findInput.selectionEnd : savedSelectionStart;
+
+        menu.style.display = "block";
+        const menuWidth = menu.offsetWidth || 150;
+        const menuHeight = menu.offsetHeight || 36;
+        const x = Math.max(8, Math.min(e.clientX, window.innerWidth - menuWidth - 8));
+        const y = Math.max(8, Math.min(e.clientY, window.innerHeight - menuHeight - 8));
+        menu.style.left = x + "px";
+        menu.style.top = y + "px";
+      });
+
+      document.addEventListener("mousedown", (e) => {
+        if (menu && menu.style.display !== "none" && !menu.contains(e.target)) {
+          menu.style.display = "none";
+        }
+      });
+      window.addEventListener("scroll", () => {
+        if (menu) menu.style.display = "none";
+      }, true);
+      window.addEventListener("blur", () => {
+        if (menu) menu.style.display = "none";
+      });
+    }
+
+    // Call initFindInputContextMenu immediately in initUI
+    initFindInputContextMenu();
+
     window.addEventListener("keydown", (e) => {
       // 1. Escape: пошаговый сброс телодвижений в Окне 3
       if (e.key === "Escape") {
@@ -972,23 +1182,9 @@
           return;
         }
       }
-      // 2. Ctrl+C: copy selected zone text or native text and show toast
+      // 2. Ctrl+C: unified copy action (same function used by context menu)
       if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C" || e.key === "с" || e.key === "С")) {
-        const sel = window.getSelection();
-        const selText = sel ? sel.toString().trim() : "";
-        const text = zoneSelectedText || selText;
-        if (text) {
-          try {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-              navigator.clipboard.writeText(text);
-            }
-          } catch (_) {}
-          try {
-            if (window.parent && window.parent !== window && typeof window.parent.copyTextToClipboard === "function") {
-              window.parent.copyTextToClipboard(text, "Текст зоны скопирован в буфер обмена");
-            }
-          } catch (_) {}
-        }
+        copyPdfSelection();
       }
     });
   }
@@ -1018,6 +1214,7 @@
           app.findBar.highlightAll.checked = true;
         }
       }
+      initFindInputContextMenu();
 
       // 4. Freeze scale into a fixed numeric scale so page transitions NEVER auto-recalculate
       const freezeScale = () => {
