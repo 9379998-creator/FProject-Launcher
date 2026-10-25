@@ -12,6 +12,8 @@
   let zoneStart = { clientX: 0, clientY: 0, target: null };
   let zoneSelectedText = "";
   let currentZoneSpans = [];
+  let activeSelectionSnapshot = "";
+  let selectionMenu = null;
 
   function clearZoneSelection() {
     const hadSelection = Boolean(zoneSelectedText || (zoneBox && zoneBox.style.display !== "none") || currentZoneSpans.length > 0);
@@ -25,6 +27,8 @@
     });
     currentZoneSpans = [];
     zoneSelectedText = "";
+    activeSelectionSnapshot = "";
+    if (selectionMenu) selectionMenu.style.display = "none";
     return hadSelection;
   }
 
@@ -780,9 +784,191 @@
       };
     }
 
-    // Unified Right-Click Context Menu for PDF Viewer
+    // -------------------------------------------------------------------------
+    // Dedicated Local Context Menu for PDF Document Selection (Task 006)
+    // -------------------------------------------------------------------------
+    document.addEventListener("selectionchange", () => {
+      const s = window.getSelection();
+      if (!s || s.isCollapsed) {
+        if (!selectionMenu || selectionMenu.style.display === "none") {
+          activeSelectionSnapshot = "";
+        }
+      } else {
+        activeSelectionSnapshot = s.toString().trim();
+      }
+    });
+
+    function hideSelectionContextMenu() {
+      if (selectionMenu && selectionMenu.style.display !== "none") {
+        selectionMenu.style.display = "none";
+        return true;
+      }
+      return false;
+    }
+
+    function findPdfSelection(text) {
+      if (!text) return;
+      const app = window.PDFViewerApplication;
+      if (app && app.findBar) {
+        if (!app.findBar.opened) {
+          app.findBar.open();
+        }
+        if (app.findBar.highlightAll) {
+          app.findBar.highlightAll.checked = true;
+        }
+      }
+      const findInput = document.getElementById("findInput");
+      if (findInput) {
+        findInput.value = text;
+        findInput.focus();
+        findInput.select();
+        findInput.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    }
+
+    function showSelectionContextMenu(clientX, clientY, snapshotText, canCadExport) {
+      if (!selectionMenu) {
+        selectionMenu = document.createElement("div");
+        selectionMenu.id = "launcherSelectionContextMenu";
+        selectionMenu.style.position = "fixed";
+        selectionMenu.style.zIndex = "99999";
+        selectionMenu.style.minWidth = "175px";
+        selectionMenu.style.padding = "4px";
+        selectionMenu.style.background = "#ffffff";
+        selectionMenu.style.border = "1px solid #d1d9e0";
+        selectionMenu.style.borderRadius = "4px";
+        selectionMenu.style.boxShadow = "0 4px 12px rgba(15, 23, 42, 0.15)";
+        selectionMenu.style.font = "12px/1.4 'Segoe UI', -apple-system, system-ui, sans-serif";
+        selectionMenu.style.color = "#0F172A";
+        selectionMenu.style.display = "none";
+        document.body.appendChild(selectionMenu);
+      }
+
+      selectionMenu.innerHTML = "";
+      const hasText = Boolean(snapshotText);
+
+      const items = [
+        {
+          icon: "📋",
+          label: "Скопировать",
+          hint: "Ctrl+C",
+          disabled: !hasText,
+          run: async () => {
+            if (!hasText) return;
+            await copyPdfSelection(snapshotText);
+          }
+        },
+        {
+          icon: "🌐",
+          label: "Перевести",
+          hint: "",
+          disabled: !hasText,
+          run: () => {
+            if (!hasText) return;
+            if (typeof window.launcherTranslateText === "function") {
+              window.launcherTranslateText(snapshotText);
+            }
+          }
+        },
+        {
+          icon: "🔍",
+          label: "Найти в документе",
+          hint: "",
+          disabled: !hasText,
+          run: () => {
+            if (!hasText) return;
+            findPdfSelection(snapshotText);
+          }
+        }
+      ];
+
+      if (canCadExport) {
+        items.push({
+          icon: "📐",
+          label: "Экспорт в CAD",
+          hint: "",
+          disabled: false,
+          run: () => {
+            if (typeof window.exportCurrentZoneToCad === "function") {
+              window.exportCurrentZoneToCad();
+            }
+          }
+        });
+      }
+
+      for (const it of items) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.style.display = "flex";
+        btn.style.alignItems = "center";
+        btn.style.gap = "8px";
+        btn.style.width = "100%";
+        btn.style.padding = "6px 10px 6px 8px";
+        btn.style.border = "0";
+        btn.style.borderRadius = "3px";
+        btn.style.background = "transparent";
+        btn.style.color = it.disabled ? "#94a3b8" : "#0F172A";
+        btn.style.font = "inherit";
+        btn.style.textAlign = "left";
+        btn.style.cursor = it.disabled ? "default" : "pointer";
+        btn.style.whiteSpace = "nowrap";
+
+        if (!it.disabled) {
+          btn.addEventListener("mouseenter", () => { btn.style.background = "#f6f8fa"; });
+          btn.addEventListener("mouseleave", () => { btn.style.background = "transparent"; });
+        }
+
+        // Prevent mousedown from blurring or triggering dismiss handlers prematurely
+        btn.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+
+        btn.addEventListener("click", async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          hideSelectionContextMenu();
+          if (!it.disabled && typeof it.run === "function") {
+            await it.run();
+          }
+        });
+
+        const iconSpan = document.createElement("span");
+        iconSpan.style.display = "inline-block";
+        iconSpan.style.width = "16px";
+        iconSpan.style.textAlign = "center";
+        iconSpan.style.fontSize = "13px";
+        iconSpan.textContent = it.icon;
+
+        const labelSpan = document.createElement("span");
+        labelSpan.style.flex = "1 1 auto";
+        labelSpan.textContent = it.label;
+
+        btn.append(iconSpan, labelSpan);
+
+        if (it.hint) {
+          const hintSpan = document.createElement("span");
+          hintSpan.style.fontSize = "11px";
+          hintSpan.style.color = "#64748b";
+          hintSpan.style.marginLeft = "12px";
+          hintSpan.textContent = it.hint;
+          btn.append(hintSpan);
+        }
+
+        selectionMenu.appendChild(btn);
+      }
+
+      selectionMenu.style.display = "block";
+      const menuWidth = selectionMenu.offsetWidth || 180;
+      const menuHeight = selectionMenu.offsetHeight || 130;
+      const x = Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8));
+      const y = Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8));
+      selectionMenu.style.left = x + "px";
+      selectionMenu.style.top = y + "px";
+    }
+
     document.addEventListener("contextmenu", (event) => {
-      // 1. Pass through input, textarea, and contenteditable elements without preventDefault or stopPropagation
+      // 1. Pass through input, textarea, and contenteditable elements
       const targetEl = event.target instanceof Element ? event.target : null;
       if (targetEl && (targetEl.closest("input, textarea") || targetEl.isContentEditable)) {
         return;
@@ -791,30 +977,37 @@
       event.preventDefault();
       event.stopPropagation();
 
-      const sel = window.getSelection();
-      const selText = sel ? sel.toString().trim() : "";
-      const textToUse = zoneSelectedText || selText || "";
+      // Ensure any existing parent menus are dismissed
+      try {
+        if (window.parent && window.parent !== window && typeof window.parent.hideFileContextMenu === "function") {
+          window.parent.hideFileContextMenu();
+        }
+      } catch (_) {}
+      const findMenu = document.getElementById("launcherFindContextMenu");
+      if (findMenu) findMenu.style.display = "none";
+
+      // Snapshot text and zone context strictly at menu open
       const hasZone = Boolean(
         zoneBox && zoneBox.style.display !== "none" &&
         parseInt(zoneBox.style.width, 10) > 4 && parseInt(zoneBox.style.height, 10) > 4
       );
+      const zoneText = hasZone ? String(zoneSelectedText || "").trim() : "";
 
-      try {
-        if (window.parent && window.parent !== window && typeof window.parent.showPdfViewerContextMenu === "function") {
-          const frameRect = window.frameElement ? window.frameElement.getBoundingClientRect() : { left: 0, top: 0 };
-          window.parent.showPdfViewerContextMenu(
-            frameRect.left + event.clientX,
-            frameRect.top + event.clientY,
-            {
-              isPdf: true,
-              selectedText: textToUse,
-              hasZone: hasZone,
-              canCadExport: hasZone
-            }
-          );
-        }
-      } catch (_) {}
+      const sel = window.getSelection();
+      const liveSelText = (sel && !sel.isCollapsed) ? sel.toString().trim() : "";
+      const textSnapshot = zoneText || liveSelText || activeSelectionSnapshot || "";
+      const canCadExport = hasZone;
+
+      showSelectionContextMenu(event.clientX, event.clientY, textSnapshot, canCadExport);
     });
+
+    document.addEventListener("mousedown", (e) => {
+      if (selectionMenu && selectionMenu.style.display !== "none" && !selectionMenu.contains(e.target)) {
+        hideSelectionContextMenu();
+      }
+    });
+    window.addEventListener("scroll", () => hideSelectionContextMenu(), true);
+    window.addEventListener("blur", () => hideSelectionContextMenu());
 
     // Dismiss parent's context menu on any mouse click or scroll inside the PDF viewer
     const dismissParentContextMenu = (e) => {
@@ -853,7 +1046,11 @@
     };
 
     function handlePdfJsEscape() {
-      // 1. Сброс контекстного меню
+      // 0. Сброс локального контекстного меню выделения PDF
+      if (hideSelectionContextMenu()) {
+        return true;
+      }
+      // 1. Сброс контекстного меню родителя
       try {
         if (window.parent && window.parent !== window && typeof window.parent.hideFileContextMenu === "function") {
           if (window.parent.hideFileContextMenu()) return true;
@@ -1232,9 +1429,15 @@
         document.querySelectorAll(".textLayer").forEach(tokenizeTextLayerWords);
       });
       app.eventBus.on("pagesinit", () => {
+        activeSelectionSnapshot = "";
+        hideSelectionContextMenu();
         if (!lockedScale) {
           freezeScale();
         }
+      });
+      app.eventBus.on("pagechanging", () => {
+        activeSelectionSnapshot = "";
+        hideSelectionContextMenu();
       });
 
       // When user zooms manually (buttons, dropdown, or Ctrl+wheel), remember new scale

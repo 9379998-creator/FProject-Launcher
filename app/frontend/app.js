@@ -1830,7 +1830,7 @@ async function copyTextToClipboard(rawText, successToast = "Текст скоп�
       await navigator.clipboard.writeText(text);
       success = true;
     } catch (err) {
-      console.warn("[app copy] navigator.clipboard.writeText failed:", err);
+      console.warn("[app copy] navigator.clipboard.writeText failed:", err?.name || "Error");
     }
   }
 
@@ -1844,19 +1844,20 @@ async function copyTextToClipboard(rawText, successToast = "Текст скоп�
       });
       if (resp.ok) {
         const data = await resp.json();
-        if (data && data.ok) {
+        if (data && data.ok === true) {
           success = true;
         }
       }
     } catch (err) {
-      console.warn("[app copy] backend /api/clipboard fallback failed:", err);
+      console.warn("[app copy] backend /api/clipboard fallback failed:", err?.name || "Error");
     }
   }
 
   // 3. Fallback 2: execCommand on temporary textarea (only if both above failed)
   if (!success) {
+    let textarea = null;
     try {
-      const textarea = document.createElement("textarea");
+      textarea = document.createElement("textarea");
       textarea.value = text;
       textarea.style.position = "fixed";
       textarea.style.top = "0";
@@ -1867,9 +1868,12 @@ async function copyTextToClipboard(rawText, successToast = "Текст скоп�
       textarea.select();
       textarea.setSelectionRange(0, text.length);
       success = document.execCommand("copy");
-      document.body.removeChild(textarea);
     } catch (err) {
-      console.warn("[app copy] execCommand fallback failed:", err);
+      console.warn("[app copy] execCommand fallback failed:", err?.name || "Error");
+    } finally {
+      if (textarea && textarea.parentNode) {
+        textarea.parentNode.removeChild(textarea);
+      }
     }
   }
 
@@ -7079,7 +7083,7 @@ try {
 // Двусторонняя синхронизация (лента миниатюр ↔ страницы PDF) и поиск
 // =============================================================================
 
-function openPdfJsSearch() {
+function openPdfJsSearch(text) {
   const win = els.pdfDocFrame?.contentWindow;
   if (!win) return;
   win.focus();
@@ -7093,12 +7097,18 @@ function openPdfJsSearch() {
       }
       const findInput = win.document?.getElementById("findInput");
       if (findInput) {
+        if (text) {
+          findInput.value = text;
+        }
         findInput.focus();
         findInput.select();
+        if (text) {
+          findInput.dispatchEvent(new Event("input", { bubbles: true }));
+        }
       }
     }
   } catch (err) {
-    console.warn("openPdfJsSearch error:", err);
+    console.warn("openPdfJsSearch error:", err?.name || "Error");
   }
 }
 
