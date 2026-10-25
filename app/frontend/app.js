@@ -6549,12 +6549,25 @@ function showFileContextMenu(clientX, clientY, target) {
       },
     });
 
-    // 3. Экспорт в CAD: доступен для выделенной области (с текстом или без текста)
+    // 3. Найти в документе: штатный поиск PDF.js
+    items.push({
+      icon: "\uD83D\uDD0D",
+      label: "\u041D\u0430\u0439\u0442\u0438 \u0432 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0435",
+      hint: "",
+      disabled: !hasText,
+      run: () => {
+        if (!hasText) return;
+        triggerSearchText(pdfSelectedText);
+      },
+    });
+
+    // 4. В DWG: доступен для выделенной прямоугольной зоны
     if (canCad) {
       items.push({
         icon: "\uD83D\uDCD0",
-        label: "\u042D\u043A\u0441\u043F\u043E\u0440\u0442 \u0432 CAD",
+        label: "\u0412 DWG",
         hint: "",
+        disabled: false,
         run: () => {
           const pdfWin = els.pdfDocFrame?.contentWindow;
           if (pdfWin && typeof pdfWin.exportCurrentZoneToCad === "function") {
@@ -6563,16 +6576,6 @@ function showFileContextMenu(clientX, clientY, target) {
             showToast("\u042D\u043A\u0441\u043F\u043E\u0440\u0442 \u0432 CAD \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D: \u0444\u0443\u043D\u043A\u0446\u0438\u044F \u044D\u043A\u0441\u043F\u043E\u0440\u0442\u0430 \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u0430");
           }
         },
-      });
-    }
-
-    // 4. Найти в документе: показывается только если есть текст
-    if (hasText) {
-      items.push({
-        icon: "\uD83D\uDD0D",
-        label: "\u041D\u0430\u0439\u0442\u0438 \u0432 \u0434\u043E\u043A\u0443\u043C\u0435\u043D\u0442\u0435",
-        hint: "",
-        run: () => triggerSearchText(pdfSelectedText),
       });
     }
 

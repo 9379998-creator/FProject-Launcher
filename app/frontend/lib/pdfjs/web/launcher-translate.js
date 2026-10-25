@@ -478,7 +478,7 @@
     // Selection Handlers (Mode 0: AutoCAD Zone, Mode 2: Text I-beam)
     document.addEventListener("mousedown", (e) => {
       // Don't intercept toolbar controls, findbar, or popovers
-      const interactive = e.target.closest("button, input, select, textarea, #toolbarViewer, #findbar, #launcherActionPill, #launcherTransPill, #launcherTransCard, #launcherCadCard");
+      const interactive = e.target.closest("button, input, select, textarea, #toolbarViewer, #findbar, #launcherActionPill, #launcherSelectionContextMenu, #launcherTransPill, #launcherTransCard, #launcherCadCard");
       if (interactive) return;
 
       // Right-click or middle-click: do NOT hide the floating action pill or alter selection
@@ -845,7 +845,8 @@
       }
 
       selectionMenu.innerHTML = "";
-      const hasText = Boolean(snapshotText);
+      const textToRun = String(snapshotText || "").trim();
+      const hasText = Boolean(textToRun);
 
       const items = [
         {
@@ -855,7 +856,7 @@
           disabled: !hasText,
           run: async () => {
             if (!hasText) return;
-            await copyPdfSelection(snapshotText);
+            await copyPdfSelection(textToRun);
           }
         },
         {
@@ -866,7 +867,7 @@
           run: () => {
             if (!hasText) return;
             if (typeof window.launcherTranslateText === "function") {
-              window.launcherTranslateText(snapshotText);
+              window.launcherTranslateText(textToRun);
             }
           }
         },
@@ -877,7 +878,7 @@
           disabled: !hasText,
           run: () => {
             if (!hasText) return;
-            findPdfSelection(snapshotText);
+            findPdfSelection(textToRun);
           }
         }
       ];
@@ -885,7 +886,7 @@
       if (canCadExport) {
         items.push({
           icon: "📐",
-          label: "Экспорт в CAD",
+          label: "В DWG",
           hint: "",
           disabled: false,
           run: () => {
@@ -918,9 +919,8 @@
           btn.addEventListener("mouseleave", () => { btn.style.background = "transparent"; });
         }
 
-        // Prevent mousedown from blurring or triggering dismiss handlers prematurely
+        // Keep mousedown from triggering external dismiss handlers, while preserving button activation
         btn.addEventListener("mousedown", (e) => {
-          e.preventDefault();
           e.stopPropagation();
         });
 
@@ -991,11 +991,11 @@
         zoneBox && zoneBox.style.display !== "none" &&
         parseInt(zoneBox.style.width, 10) > 4 && parseInt(zoneBox.style.height, 10) > 4
       );
-      const zoneText = hasZone ? String(zoneSelectedText || "").trim() : "";
+      const currentZoneText = String(zoneSelectedText || "").trim();
 
       const sel = window.getSelection();
       const liveSelText = (sel && !sel.isCollapsed) ? sel.toString().trim() : "";
-      const textSnapshot = zoneText || liveSelText || activeSelectionSnapshot || "";
+      const textSnapshot = currentZoneText || liveSelText || activeSelectionSnapshot || "";
       const canCadExport = hasZone;
 
       showSelectionContextMenu(event.clientX, event.clientY, textSnapshot, canCadExport);
