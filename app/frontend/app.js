@@ -6524,12 +6524,7 @@ function showFileContextMenu(clientX, clientY, target) {
       disabled: !hasText,
       run: async () => {
         if (!hasText) return;
-        const pdfWin = els.pdfDocFrame?.contentWindow;
-        if (pdfWin && typeof pdfWin.copyPdfSelection === "function") {
-          await pdfWin.copyPdfSelection(pdfSelectedText);
-        } else {
-          await copyTextToClipboard(pdfSelectedText, "\u0422\u0435\u043A\u0441\u0442 \u0441\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430");
-        }
+        await copyTextToClipboard(pdfSelectedText, "\u0422\u0435\u043A\u0441\u0442 \u0441\u043A\u043E\u043F\u0438\u0440\u043E\u0432\u0430\u043D \u0432 \u0431\u0443\u0444\u0435\u0440 \u043E\u0431\u043C\u0435\u043D\u0430");
       },
     });
 
@@ -6680,10 +6675,10 @@ function showFileContextMenu(clientX, clientY, target) {
 
     b.addEventListener("click", (event) => {
       event.stopPropagation();
-      hideFileContextMenu();
       if (!it.disabled && typeof it.run === "function") {
         it.run();
       }
+      hideFileContextMenu();
     });
     menu.append(b);
   }
