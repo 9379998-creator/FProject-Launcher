@@ -138,10 +138,7 @@
 
   const updateSelectionTooltip = () => {
     if (viewerToolMode === 0 && zoneBox && zoneBox.style.display !== "none") {
-      const rect = zoneBox.getBoundingClientRect();
-      tooltip.style.top = Math.max(10, rect.top - 44) + "px";
-      tooltip.style.left = Math.max(10, rect.left + rect.width / 2 - 85) + "px";
-      tooltip.style.display = "flex";
+      if (tooltip) tooltip.style.display = "none";
       return;
     }
 
@@ -155,11 +152,7 @@
     try {
       const range = sel.getRangeAt(0);
       const rect = range.getBoundingClientRect();
-      if (rect && rect.width > 0 && rect.height > 0) {
-        tooltip.style.top = Math.max(10, rect.top - 44) + "px";
-        tooltip.style.left = Math.max(10, rect.left + rect.width / 2 - 85) + "px";
-        tooltip.style.display = "flex";
-      }
+      if (tooltip) tooltip.style.display = "none";
     } catch (_) {}
   };
 
@@ -632,13 +625,8 @@
       // Extract text strictly from inside the drawn rectangle
       extractZoneText();
 
-      // Show floating action pill right above the rectangle
-      if (tooltip && zoneBox) {
-        const boxRect = zoneBox.getBoundingClientRect();
-        tooltip.style.top = Math.max(10, boxRect.top - 44) + "px";
-        tooltip.style.left = Math.max(10, boxRect.left + boxRect.width / 2 - 85) + "px";
-        tooltip.style.display = "flex";
-      }
+      // Floating action pill disabled (all actions via right-click context menu)
+      if (tooltip) tooltip.style.display = "none";
     });
 
     // Double-click to select a single word/span
@@ -650,12 +638,7 @@
         target.classList.add("zone-selected");
         currentZoneSpans = [target];
         extractZoneText();
-        if (zoneSelectedText && tooltip) {
-          const r = target.getBoundingClientRect();
-          tooltip.style.top = Math.max(10, r.top - 44) + "px";
-          tooltip.style.left = Math.max(10, r.left + r.width / 2 - 85) + "px";
-          tooltip.style.display = "flex";
-        }
+        if (tooltip) tooltip.style.display = "none";
       }
     });
 
@@ -719,20 +702,14 @@
         }
 
         lastExportedCadPath = data.filePath;
-        if (cadCard) {
-          const fnEl = document.getElementById("launcherCadFileName");
-          const stEl = document.getElementById("launcherCadStats");
-          const lyEl = document.getElementById("launcherCadLayers");
-
-          if (fnEl) fnEl.textContent = data.fileName || "чертеж.dxf";
-          if (stEl) {
-            stEl.textContent = `✅ ${data.entitiesCount || 0} примитивов (${data.closedLoopsCount || 0} замкнутых контуров)`;
-          }
-          if (lyEl) {
-            const layers = data.layers ? Object.keys(data.layers) : [];
-            lyEl.textContent = "Слои: " + (layers.join(", ") || "01_РАМА, 02_ШТАПИК, 03_ТЕРМОМОСТ, 04_УПЛОТНИТЕЛИ, 07_РАЗМЕРЫ");
-          }
-          cadCard.style.display = "block";
+        if (cadCard) cadCard.style.display = "none";
+        // Прямое открытие файла DWG без промежуточных карточек
+        if (lastExportedCadPath) {
+          fetch("/api/cad/open", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: lastExportedCadPath })
+          });
         }
       } catch (err) {
         alert("Ошибка экспорта в CAD: " + err.message);
@@ -872,30 +849,18 @@
           }
         },
         {
-          icon: "🔍",
-          label: "Найти в документе",
-          hint: "",
-          disabled: !hasText,
-          run: () => {
-            if (!hasText) return;
-            findPdfSelection(textToRun);
-          }
-        }
-      ];
-
-      if (canCadExport) {
-        items.push({
           icon: "📐",
-          label: "В DWG",
+          label: "В DWG перевести",
           hint: "",
-          disabled: false,
+          disabled: !canCadExport,
           run: () => {
+            if (!canCadExport) return;
             if (typeof window.exportCurrentZoneToCad === "function") {
               window.exportCurrentZoneToCad();
             }
           }
-        });
-      }
+        }
+      ];
 
       for (const it of items) {
         const btn = document.createElement("button");
@@ -1219,11 +1184,9 @@
         }
       }
 
-      // Single notification after sequence completes
+      // Silent direct copy without toast
       if (copied) {
-        if (window.parent && window.parent !== window && typeof window.parent.showToast === "function") {
-          window.parent.showToast("Текст скопирован в буфер обмена");
-        }
+        // no toast
       } else {
         if (window.parent && window.parent !== window && typeof window.parent.showToast === "function") {
           window.parent.showToast("Ошибка копирования в буфер обмена");
