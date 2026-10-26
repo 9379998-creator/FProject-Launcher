@@ -1341,6 +1341,15 @@
           e.stopPropagation();
           return;
         }
+        // Если локальных модальных элементов нет — пересылаем Escape родителю для возврата к Окну 1 + 2
+        try {
+          if (window.parent && window.parent !== window) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            window.parent.postMessage({ type: "launcher-escape" }, "*");
+            return;
+          }
+        } catch (_) {}
       }
       // 2. Ctrl+C: unified copy action (same function used by context menu)
       if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C" || e.key === "с" || e.key === "С")) {
