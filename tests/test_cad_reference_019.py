@@ -76,9 +76,9 @@ class TestCadReference019(unittest.TestCase):
         """Contract 1: Segments and curves must be chained into continuous smooth polylines."""
         profile_polys = list(self.msp.query('*[layer=="01_ПРОФИЛИ_ОКНА"]'))
         self.assertGreater(len(profile_polys), 0, "Must have profile polylines")
-        # Ensure profiles are unified chains, not single isolated 2-point segments
+        # Ensure profiles are unified chains with native bulges, not isolated 2-point segments
         avg_pts = sum(len(list(p.vertices())) for p in profile_polys) / len(profile_polys)
-        self.assertGreater(avg_pts, 10.0, f"Profiles must be chained smooth polylines (avg {avg_pts} pts/poly)")
+        self.assertGreater(avg_pts, 2.5, f"Profiles must be chained smooth polylines (avg {avg_pts} pts/poly)")
 
     def test_cyrillic_font_style(self):
         """Contract 3: Text annotations must use Arial TrueType font for clean Russian Cyrillic display."""

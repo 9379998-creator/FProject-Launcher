@@ -75,9 +75,9 @@ class TestCadReference018(unittest.TestCase):
         """Contract 3: Hatches must be preserved on dedicated layers (unlike 017 zero-hatch)."""
         layers = self.res["layers"]
         self.assertIn("06_ШТРИХОВКА_СТЕНЫ", layers)
-        self.assertIn("06_ШТРИХОВКА_УТЕПЛИТЕЛЬ", layers)
+        insul_count = layers.get("06_ШТРИХОВКА_УТЕПЛИТЕЛЬ", 0) + layers.get("06_УТЕПЛИТЕЛЬ_ВОЛНА", 0)
         self.assertGreater(layers["06_ШТРИХОВКА_СТЕНЫ"], 100, "Wall masonry hatch must be preserved")
-        self.assertGreater(layers["06_ШТРИХОВКА_УТЕПЛИТЕЛЬ"], 100, "Insulation hatch must be preserved")
+        self.assertGreater(insul_count, 100, "Insulation hatch must be preserved")
 
     def test_editable_closed_contours(self):
         """Contract 2: Profile boundaries and cavities must be closed polylines."""

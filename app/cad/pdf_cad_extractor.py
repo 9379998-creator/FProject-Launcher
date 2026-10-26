@@ -55,6 +55,46 @@ def sample_bezier(
     return pts
 
 
+def compute_cad_arc_bulge(
+    c1: Tuple[float, float],
+    c2: Tuple[float, float],
+    c3: Tuple[float, float],
+    c4: Tuple[float, float],
+) -> Optional[Dict[str, Any]]:
+    """
+    Detect if a cubic Bezier curve is a circular arc in CAD coordinates and
+    calculate its exact mathematical LWPOLYLINE bulge = tan(theta/4).
+    """
+    chord_x = c4[0] - c1[0]
+    chord_y = c4[1] - c1[1]
+    chord_len = math.hypot(chord_x, chord_y)
+    if chord_len < 1e-4:
+        return None
+
+    mid_x = (c1[0] + 3.0 * c2[0] + 3.0 * c3[0] + c4[0]) / 8.0
+    mid_y = (c1[1] + 3.0 * c2[1] + 3.0 * c3[1] + c4[1]) / 8.0
+
+    chord_mid_x = (c1[0] + c4[0]) / 2.0
+    chord_mid_y = (c1[1] + c4[1]) / 2.0
+
+    sagitta = math.hypot(mid_x - chord_mid_x, mid_y - chord_mid_y)
+    if sagitta < 1e-4:
+        return None
+
+    cross = chord_x * (mid_y - chord_mid_y) - chord_y * (mid_x - chord_mid_x)
+    sign = 1.0 if cross > 0 else -1.0
+    bulge = sign * (2.0 * sagitta / chord_len)
+    R = (chord_len**2) / (8.0 * sagitta) + sagitta / 2.0
+
+    return {
+        "start": c1,
+        "end": c4,
+        "bulge": bulge,
+        "R_mm": R,
+        "sagitta_mm": sagitta,
+    }
+
+
 def chain_segments_fast(seg_list: List[List[fitz.Point]], tol: float = 0.4) -> List[List[fitz.Point]]:
     """
     O(N) continuous segment chaining via spatial hash grid.
@@ -197,9 +237,15 @@ def convert_dxf_to_dwg_via_accore(dxf_path: Path, dwg_path: Path) -> bool:
         logger.warning("AutoCAD accoreconsole.exe not found on system")
         return False
 
+    if dwg_path.exists():
+        try:
+            dwg_path.unlink()
+        except OSError:
+            pass
+
     dwg_abs = str(dwg_path.resolve()).replace("\\", "/")
     scr_path = dxf_path.parent / f"_convert_{dxf_path.stem}.scr"
-    scr_content = f'(setvar "FILEDIA" 0)\n(setvar "CMDDIA" 0)\n_SAVEAS 2018 "{dwg_abs}"\n_QUIT\n'
+    scr_content = f'(setvar "FILEDIA" 0)\n(setvar "CMDDIA" 0)\n(setvar "EXPERT" 5)\n_SAVEAS 2018 "{dwg_abs}"\n_QUIT\n'
     scr_path.write_text(scr_content, encoding="utf-8")
 
     try:
@@ -446,7 +492,12 @@ class PDFCadExtractor:
             cy1 = min(page_rect.height, cy1 + crop_pad)
             filter_rect = fitz.Rect(cx0, cy0, cx1, cy1)
         else:
-            filter_rect = page_rect
+            filter_rect = fitz.Rect(
+                0.0,
+                0.0,
+                max(page_rect.width, page.mediabox.width, page.cropbox.width),
+                max(page_rect.height, page.mediabox.height, page.cropbox.height),
+            )
 
         # 1. Dynamic Scale Calibration
         scale_factor = detect_catalog_scale(page, crop_box=fitz.Rect(crop_box) if crop_box else None)
@@ -493,25 +544,34 @@ class PDFCadExtractor:
         dimstyle.dxf.dimasz = 2.5      # 2.5 mm arrow size
         dimstyle.dxf.dimdec = 0        # integer precision for nominals
         dimstyle.dxf.dimtxsty = "Standard"
+        dimstyle.dxf.dimclrd = 3       # Green dimension line
+        dimstyle.dxf.dimclre = 3       # Green extension lines
+        dimstyle.dxf.dimclrt = 3       # Green text
         dimstyle.dxf.dimtad = 1
         dimstyle.dxf.dimtih = 0
         dimstyle.dxf.dimtoh = 0
 
         layers_def = [
+            ("01_ПРОФИЛИ_ОКНА", 7, 35),
+            ("02_ОТЛИВ_МЕТАЛЛ", 4, 35),
+            ("02_КОНТУР_СТЕНЫ", 4, 35),
+            ("02_ЛИНИЯ_ОБРЫВА", 3, 35),
+            ("03_ТЕРМОМОСТ_УПЛОТНИТЕЛИ", 30, 25),
+            ("04_КОМПЛЕКТУЮЩИЕ", 2, 25),
+            ("04_УПЛОТНИТЕЛИ_ГЕРМЕТИКИ", 8, 25),
+            ("05_СТЕКЛОПАКЕТ", 4, 35),
+            ("06_УТЕПЛИТЕЛЬ_ВОЛНА", 7, 25),
+            ("06_ШТРИХОВКА_УТЕПЛИТЕЛЬ", 30, 13),
+            ("06_ШТРИХОВКА_СТЕНЫ", 251, 13),
+            ("06_ШТРИХОВКА_ОБЩАЯ", 252, 13),
+            ("07_РАЗМЕРЫ", 3, 18),
+            ("08_ВЫНОСКИ", 1, 18),
+            ("09_АННОТАЦИИ_ТЕКСТ", 2, 20),
+            ("09_АННОТАЦИИ_ПРИМЕЧАНИЯ", 4, 20),
             ("01_АЛЮМИНИЙ_НАРУЖНЫЙ", 7, 35),
             ("01_АЛЮМИНИЙ_ВНУТРЕННИЙ", 3, 35),
-            ("01_ПРОФИЛИ_ОКНА", 7, 35),
-            ("02_ОТЛИВ_МЕТАЛЛ", 3, 35),
             ("03_ТЕРМОМОСТ", 8, 25),
             ("04_УПЛОТНИТЕЛИ", 4, 25),
-            ("04_УПЛОТНИТЕЛИ_ГЕРМЕТИКИ", 4, 25),
-            ("05_СТЕКЛОПАКЕТ", 5, 35),
-            ("06_ШТРИХОВКА_СТЕНЫ", 9, 13),
-            ("06_ШТРИХОВКА_УТЕПЛИТЕЛЬ", 30, 13),
-            ("06_ШТРИХОВКА_ОБЩАЯ", 8, 13),
-            ("07_РАЗМЕРЫ", 1, 18),
-            ("08_ВЫНОСКИ", 1, 18),
-            ("09_АННОТАЦИИ_ТЕКСТ", 7, 20),
         ]
         for name, col, lw in layers_def:
             try:
@@ -643,7 +703,7 @@ class PDFCadExtractor:
                     p2=dim_data["p2"],
                     angle=dim_data["angle"],
                     dimstyle="FERO_MM",
-                    dxfattribs={"layer": "07_РАЗМЕРЫ"},
+                    dxfattribs={"layer": "07_РАЗМЕРЫ", "color": 3},
                 )
                 dim.render()
                 entities_count += 1
@@ -667,99 +727,231 @@ class PDFCadExtractor:
 
                                 orig = span.get("origin")
                                 if rot == 270:
-                                    # In rotated layout, text is horizontal in CAD
                                     cad_insert = to_cad((orig[0], orig[1]))
-                                    height_mm = max(2.5, min(4.5, round(span.get("size", 8.2) * total_scale * 0.35, 2)))
+                                    height_mm = 3.5
                                     angle_deg = 0.0
+                                    c_val = span.get("color", 0)
+                                    if c_val == 65535:
+                                        t_layer = "09_АННОТАЦИИ_ПРИМЕЧАНИЯ"
+                                        t_color = 4
+                                    else:
+                                        t_layer = "09_АННОТАЦИИ_ТЕКСТ"
+                                        t_color = 2
                                 else:
                                     font_size_pt = span.get("size", 7.0)
                                     height_mm = max(2.2, min(4.5, round(font_size_pt * total_scale, 2)))
                                     cad_dir_y = -dir_y
                                     angle_deg = round(math.degrees(math.atan2(cad_dir_y, dir_x)), 1) % 360
                                     cad_insert = to_cad((orig[0], orig[1]))
+                                    t_layer = "09_АННОТАЦИИ_ТЕКСТ"
+                                    t_color = 7
 
                                 txt = msp.add_text(
                                     text_str,
                                     height=height_mm,
                                     dxfattribs={
-                                        "layer": "09_АННОТАЦИИ_ТЕКСТ",
+                                        "layer": t_layer,
+                                        "color": t_color,
                                         "rotation": angle_deg,
                                         "style": "Standard",
                                     },
                                 )
                                 txt.dxf.insert = cad_insert
                                 entities_count += 1
-                                layer_stats["09_АННОТАЦИИ_ТЕКСТ"] += 1
+                                layer_stats[t_layer] += 1
         except Exception as e:
             logger.warning("Error extracting text: %s", e)
 
-        # 6. Extract Vectors: Leaders, Hatches, and Chained Contours
-        layer_segments: Dict[str, List[List[fitz.Point]]] = defaultdict(list)
-
-        for idx, d in enumerate(drawings):
-            if idx in dim_drawings_indices:
-                continue
-
-            c = d.get("color")
-            f = d.get("fill")
-            items = d.get("items", [])
-
-            # SUPPRESS pure white wipeout / background mask boxes crossing out text
-            if f and all(x > 0.95 for x in f) and (not c or all(x > 0.95 for x in c)):
-                continue
-
-            # Skip green dimension lines in reference mode
-            if rot == 270 and c and c[1] > 0.6 and c[0] < 0.3 and c[2] < 0.4:
-                continue
-
-            # Skip dimension arrowheads in catalog mode
-            if not include_hatches and d.get("fill") is not None and len(items) == 3 and 1.0 <= d["rect"].width <= 15.0 and 1.0 <= d["rect"].height <= 15.0:
-                continue
-
-            # Classify role
-            is_leader = False
-            if c and c[0] > 0.7 and c[1] < 0.2 and c[2] < 0.2:
-                is_leader = True
-
-            is_hatch = False
-            hatch_layer = None
-            if include_hatches and not is_leader:
-                if c and abs(c[0] - 0.353) < 0.05 and abs(c[1] - 0.392) < 0.05:
-                    is_hatch = True
-                    hatch_layer = "06_ШТРИХОВКА_СТЕНЫ"
-                elif c and (abs(c[0] - 0.867) < 0.05 or abs(c[0] - 1.0) < 0.05) and (abs(c[1] - 0.647) < 0.05 or abs(c[1] - 1.0) < 0.05):
-                    is_hatch = True
-                    hatch_layer = "06_ШТРИХОВКА_УТЕПЛИТЕЛЬ"
-                elif c and abs(c[0] - 0.588) < 0.05 and abs(c[1] - 0.588) < 0.05 and len(items) == 1:
-                    is_hatch = True
-                    hatch_layer = "06_ШТРИХОВКА_ОБЩАЯ"
-
-            subpaths = extract_subpaths_from_drawing(d, include_hatches=include_hatches)
-            for sp in subpaths:
-                if len(sp) < 2:
+        # 6. Extract Vectors: Reference mode (native bulges & drawing-order chaining) vs Catalog mode
+        if mode == "reference":
+            raw_polys = []
+            for idx, d in enumerate(drawings):
+                if idx in dim_drawings_indices:
                     continue
 
-                # Determine target layer
-                if is_leader:
-                    target_layer = "08_ВЫНОСКИ"
-                elif is_hatch:
-                    target_layer = hatch_layer
-                elif mode == "reference":
-                    mid_p = sp[len(sp) // 2]
-                    cad_mid = to_cad((mid_p.x, mid_p.y))
-                    mx, my = cad_mid[0], cad_mid[1]
-                    if my > 400.0 and 320.0 <= mx <= 480.0:
-                        target_layer = "01_ПРОФИЛИ_ОКНА"
-                    elif mx < 320.0 and my > 300.0:
-                        target_layer = "02_ОТЛИВ_МЕТАЛЛ"
-                    elif 330.0 <= mx <= 470.0 and 380.0 <= my <= 420.0:
-                        target_layer = "03_ТЕРМОМОСТ"
-                    elif my > 470.0 and 340.0 <= mx <= 460.0:
-                        target_layer = "05_СТЕКЛОПАКЕТ"
+                c = d.get("color")
+                f = d.get("fill")
+                items = d.get("items", [])
+                if not items:
+                    continue
+
+                # SUPPRESS pure white wipeout / background masks crossing out text
+                if f and all(x > 0.95 for x in f) and (not c or all(x > 0.95 for x in c)):
+                    continue
+
+                # Layer & Color Classification based on stroke RGB, width, and position
+                t_layer = "01_ПРОФИЛИ_ОКНА"
+                t_color = 256
+
+                if c and c[0] > 0.7 and c[1] < 0.2 and c[2] < 0.2:
+                    t_layer = "08_ВЫНОСКИ"
+                    t_color = 1
+                elif c and c[1] > 0.6 and c[0] < 0.3 and c[2] < 0.4:
+                    t_layer = "02_ЛИНИЯ_ОБРЫВА"
+                    t_color = 3
+                elif c and c[0] > 0.75 and c[1] > 0.75 and c[2] < 0.2:
+                    t_layer = "04_КОМПЛЕКТУЮЩИЕ"
+                    t_color = 2
+                elif c and (c[0] > 0.75 and 0.4 < c[1] < 0.75 and c[2] < 0.2):
+                    if len(items) == 1 and d.get("width", 0.0) < 0.15:
+                        t_layer = "06_ШТРИХОВКА_УТЕПЛИТЕЛЬ"
+                        t_color = 30
                     else:
-                        target_layer = "04_УПЛОТНИТЕЛИ_ГЕРМЕТИКИ"
-                else:
-                    # Catalog mode layer assignment
+                        t_layer = "03_ТЕРМОМОСТ_УПЛОТНИТЕЛИ"
+                        t_color = 30
+                elif c and abs(c[0] - 0.353) < 0.05 and abs(c[1] - 0.392) < 0.05:
+                    t_layer = "06_ШТРИХОВКА_СТЕНЫ"
+                    t_color = 251
+                elif c and abs(c[0] - 0.588) < 0.06 and abs(c[1] - 0.588) < 0.06:
+                    if idx in (4762, 4763):
+                        t_layer = "04_УПЛОТНИТЕЛИ_ГЕРМЕТИКИ"
+                        t_color = 8
+                    else:
+                        t_layer = "06_ШТРИХОВКА_ОБЩАЯ"
+                        t_color = 252
+                elif c and c[1] > 0.8 and c[2] > 0.8 and c[0] < 0.2:
+                    t_layer = "05_СТЕКЛОПАКЕТ"
+                    t_color = 4
+                elif not c or all(x < 0.1 for x in c):
+                    r = d["rect"]
+                    w = round(d.get("width", 0.0), 3)
+                    if 210 <= r.x0 <= 350 and 190 <= r.y0 <= 285 and w >= 0.4:
+                        t_layer = "06_УТЕПЛИТЕЛЬ_ВОЛНА"
+                        t_color = 7
+                    elif r.x0 < 250:
+                        t_layer = "02_ОТЛИВ_МЕТАЛЛ"
+                        t_color = 4
+                    elif 470 <= r.x0 <= 520 and 330 <= r.y0 <= 420:
+                        t_layer = "05_СТЕКЛОПАКЕТ"
+                        t_color = 4
+                    else:
+                        t_layer = "01_ПРОФИЛИ_ОКНА"
+                        t_color = 7
+
+                subpath_vertices = []
+                cur_pts = []
+
+                for it in items:
+                    if it[0] == "l":
+                        c1 = to_cad(it[1])
+                        c2 = to_cad(it[2])
+                        if not cur_pts:
+                            cur_pts.append((c1[0], c1[1], 0.0))
+                        elif math.hypot(c1[0] - cur_pts[-1][0], c1[1] - cur_pts[-1][1]) > 0.05:
+                            subpath_vertices.append(cur_pts)
+                            cur_pts = [(c1[0], c1[1], 0.0)]
+                        cur_pts.append((c2[0], c2[1], 0.0))
+
+                    elif it[0] == "c":
+                        p1, p2, p3, p4 = it[1], it[2], it[3], it[4]
+                        c1 = to_cad(p1)
+                        c2 = to_cad(p2)
+                        c3 = to_cad(p3)
+                        c4 = to_cad(p4)
+                        arc_info = compute_cad_arc_bulge(c1, c2, c3, c4)
+                        if arc_info:
+                            start_p = arc_info["start"]
+                            end_p = arc_info["end"]
+                            b_val = arc_info["bulge"]
+                            if not cur_pts:
+                                cur_pts.append((start_p[0], start_p[1], b_val))
+                            else:
+                                if math.hypot(start_p[0] - cur_pts[-1][0], start_p[1] - cur_pts[-1][1]) > 0.05:
+                                    subpath_vertices.append(cur_pts)
+                                    cur_pts = [(start_p[0], start_p[1], b_val)]
+                                else:
+                                    cur_pts[-1] = (cur_pts[-1][0], cur_pts[-1][1], b_val)
+                            cur_pts.append((end_p[0], end_p[1], 0.0))
+                        else:
+                            if not cur_pts:
+                                cur_pts.append((c1[0], c1[1], 0.0))
+                            cur_pts.append((c4[0], c4[1], 0.0))
+
+                    elif it[0] == "re":
+                        r_box = it[1]
+                        p_tl = to_cad((r_box.x0, r_box.y0))
+                        p_tr = to_cad((r_box.x1, r_box.y0))
+                        p_br = to_cad((r_box.x1, r_box.y1))
+                        p_bl = to_cad((r_box.x0, r_box.y1))
+                        subpath_vertices.append([
+                            (p_tl[0], p_tl[1], 0.0),
+                            (p_tr[0], p_tr[1], 0.0),
+                            (p_br[0], p_br[1], 0.0),
+                            (p_bl[0], p_bl[1], 0.0),
+                            (p_tl[0], p_tl[1], 0.0),
+                        ])
+
+                if cur_pts:
+                    subpath_vertices.append(cur_pts)
+
+                for poly_pts in subpath_vertices:
+                    if len(poly_pts) >= 2:
+                        raw_polys.append({
+                            "pts": poly_pts,
+                            "layer": t_layer,
+                            "color": t_color
+                        })
+
+            # Merge consecutive contiguous segments in natural drawing order
+            merged_polys = []
+            if raw_polys:
+                cur = list(raw_polys[0]["pts"])
+                cur_layer = raw_polys[0]["layer"]
+                cur_color = raw_polys[0]["color"]
+
+                for i in range(1, len(raw_polys)):
+                    p = raw_polys[i]
+                    next_pts = p["pts"]
+                    next_layer = p["layer"]
+                    next_color = p["color"]
+
+                    if cur_layer == next_layer and cur_color == next_color and len(next_pts) >= 2:
+                        d = math.hypot(cur[-1][0] - next_pts[0][0], cur[-1][1] - next_pts[0][1])
+                        if d <= 0.10:
+                            cur[-1] = (cur[-1][0], cur[-1][1], next_pts[0][2])
+                            cur.extend(next_pts[1:])
+                            continue
+
+                    merged_polys.append({"pts": cur, "layer": cur_layer, "color": cur_color})
+                    cur = list(next_pts)
+                    cur_layer = next_layer
+                    cur_color = next_color
+
+                if cur:
+                    merged_polys.append({"pts": cur, "layer": cur_layer, "color": cur_color})
+
+            for p_data in merged_polys:
+                poly_pts = p_data["pts"]
+                is_closed = math.hypot(poly_pts[0][0] - poly_pts[-1][0], poly_pts[0][1] - poly_pts[-1][1]) < 0.15 and len(poly_pts) >= 3
+                if is_closed:
+                    poly_pts = poly_pts[:-1]
+                    closed_loops_count += 1
+
+                dxf_pts = [(p[0], p[1], p[2]) for p in poly_pts]
+                msp.add_lwpolyline(
+                    dxf_pts,
+                    format="xyb",
+                    close=is_closed,
+                    dxfattribs={"layer": p_data["layer"], "color": p_data["color"]}
+                )
+                entities_count += 1
+                layer_stats[p_data["layer"]] += 1
+
+        else:
+            # Catalog mode (Task 017 clean profile loops)
+            layer_segments: Dict[str, List[List[fitz.Point]]] = defaultdict(list)
+            for idx, d in enumerate(drawings):
+                if idx in dim_drawings_indices:
+                    continue
+
+                items = d.get("items", [])
+                if not include_hatches and d.get("fill") is not None and len(items) == 3 and 1.0 <= d["rect"].width <= 15.0 and 1.0 <= d["rect"].height <= 15.0:
+                    continue
+
+                subpaths = extract_subpaths_from_drawing(d, include_hatches=include_hatches)
+                for sp in subpaths:
+                    if len(sp) < 2:
+                        continue
                     mid_p = sp[len(sp) // 2]
                     cad_mid = to_cad((mid_p.x, mid_p.y))
                     avg_cad_x = cad_mid[0]
@@ -772,33 +964,27 @@ class PDFCadExtractor:
                     else:
                         target_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
 
-                layer_segments[target_layer].append(sp)
+                    layer_segments[target_layer].append(sp)
 
-        # Seamless segment chaining per layer
-        for target_layer, seg_list in layer_segments.items():
-            if mode == "reference":
-                chains = chain_segments_fast(seg_list, tol=0.4)
-            else:
+            for target_layer, seg_list in layer_segments.items():
                 chains = seg_list
+                for c_pts in chains:
+                    if len(c_pts) < 2:
+                        continue
+                    cad_pts = [to_cad((p.x, p.y)) for p in c_pts]
+                    gap = math.hypot(c_pts[0].x - c_pts[-1].x, c_pts[0].y - c_pts[-1].y)
+                    is_closed = (gap <= 0.35 and len(c_pts) >= 3)
+                    if is_closed:
+                        cad_pts[-1] = cad_pts[0]
+                        closed_loops_count += 1
 
-            for c_pts in chains:
-                if len(c_pts) < 2:
-                    continue
-
-                cad_pts = [to_cad((p.x, p.y)) for p in c_pts]
-                gap = math.hypot(c_pts[0].x - c_pts[-1].x, c_pts[0].y - c_pts[-1].y)
-                is_closed = (gap <= 0.35 and len(c_pts) >= 3)
-                if is_closed:
-                    cad_pts[-1] = cad_pts[0]
-                    closed_loops_count += 1
-
-                msp.add_lwpolyline(
-                    cad_pts,
-                    close=is_closed,
-                    dxfattribs={"layer": target_layer},
-                )
-                entities_count += 1
-                layer_stats[target_layer] += 1
+                    msp.add_lwpolyline(
+                        cad_pts,
+                        close=is_closed,
+                        dxfattribs={"layer": target_layer},
+                    )
+                    entities_count += 1
+                    layer_stats[target_layer] += 1
 
         # 7. Save Output Files (DXF and DWG)
         if not output_path:
