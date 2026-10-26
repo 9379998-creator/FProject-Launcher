@@ -1,0 +1,30 @@
+{
+  "specimen": {
+    "fileName": "catalog-pages-796-796.pdf",
+    "sha256": "99ac14ad8792dd8800d92c22079a5469258466f8c769ebb2ead356f58c528187",
+    "system": "Schüco AWS 70.HI",
+    "sheet": "E 2-2, 12.2023 / 99192 / V1",
+    "pageIndex": 0,
+    "pageNumber": 1,
+    "catalogPageNumber": 796,
+    "mediaBox": [0.0, 0.0, 595.28, 841.89],
+    "scaleFactor": 1.0,
+    "scaleUnit": "mm"
+  },
+  "nodes": {
+    "node_1_tiptronic": {
+      "name": "Blendrahmen Flügel aufschlagend / Schüco TipTronic",
+      "cropBox": [20.0, 40.0, 565.0, 420.0],
+      "keyDimensionsMm": [70, 10, 80, 26, 4, 5, 38, 37, 59, 107, 7, 41, 29, 5, 56, 22, 8],
+      "mainProfiles": ["358 550", "358 150", "184 080"],
+      "accessories": ["203 102", "224 310", "284 840", "284 351", "245 755"]
+    },
+    "node_2_sl_hi": {
+      "name": "Blendrahmen Flügel aufschlagend / Schüco AWS 70 SL.HI",
+      "cropBox": [20.0, 425.0, 565.0, 805.0],
+      "keyDimensionsMm": [70, 10, 80, 26, 4, 15, 38, 27, 59, 107, 7, 41, 29, 5, 56, 22, 8],
+      "mainProfiles": ["358 640", "358 150", "306 710"],
+      "accessories": ["224 310", "244 058", "304 767", "284 840", "284 351", "277 870", "245 755"]
+    }
+  }
+}
