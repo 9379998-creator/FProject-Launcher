@@ -3950,7 +3950,6 @@ class LauncherHandler(BaseHTTPRequestHandler):
                     raise ValueError("Не указан путь к файлу")
                 p = Path(file_path).resolve()
                 if os.name == "nt":
-                    import subprocess
                     subprocess.run(["explorer", f"/select,{str(p)}"])
                 self.send_json(HTTPStatus.OK, {"success": True})
             except Exception as error:
