@@ -194,16 +194,7 @@ function setMode(mode) {
 }
 
 function inWindow3() {
-  if (state.viewMode === "full" || els.shell.classList.contains("full-view")) {
-    return true;
-  }
-  if (els.pdfDocViewer && !els.pdfDocViewer.hidden) {
-    return true;
-  }
-  if (els.pdfViewer?.classList.contains("stage-active")) {
-    return true;
-  }
-  return false;
+  return Boolean(state.viewMode === "full" || els.shell?.classList.contains("full-view"));
 }
 
 function syncActionGridVisibility() {
