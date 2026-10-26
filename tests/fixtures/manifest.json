@@ -1,5 +1,5 @@
 {
-  "specimen": {
+  "specimen_017": {
     "fileName": "catalog-pages-796-796.pdf",
     "sha256": "99ac14ad8792dd8800d92c22079a5469258466f8c769ebb2ead356f58c528187",
     "system": "Schüco AWS 70.HI",
@@ -9,22 +9,62 @@
     "catalogPageNumber": 796,
     "mediaBox": [0.0, 0.0, 595.28, 841.89],
     "scaleFactor": 1.0,
-    "scaleUnit": "mm"
-  },
-  "nodes": {
-    "node_1_tiptronic": {
-      "name": "Blendrahmen Flügel aufschlagend / Schüco TipTronic",
-      "cropBox": [20.0, 40.0, 565.0, 420.0],
-      "keyDimensionsMm": [70, 10, 80, 26, 4, 5, 38, 37, 59, 107, 7, 41, 29, 5, 56, 22, 8],
-      "mainProfiles": ["358 550", "358 150", "184 080"],
-      "accessories": ["203 102", "224 310", "284 840", "284 351", "245 755"]
-    },
-    "node_2_sl_hi": {
-      "name": "Blendrahmen Flügel aufschlagend / Schüco AWS 70 SL.HI",
-      "cropBox": [20.0, 425.0, 565.0, 805.0],
-      "keyDimensionsMm": [70, 10, 80, 26, 4, 15, 38, 27, 59, 107, 7, 41, 29, 5, 56, 22, 8],
-      "mainProfiles": ["358 640", "358 150", "306 710"],
-      "accessories": ["224 310", "244 058", "304 767", "284 840", "284 351", "277 870", "245 755"]
+    "scaleUnit": "mm",
+    "nodes": {
+      "node_1_tiptronic": {
+        "name": "Blendrahmen Flügel aufschlagend / Schüco TipTronic",
+        "cropBox": [20.0, 40.0, 565.0, 420.0],
+        "keyDimensionsMm": [70, 10, 80, 26, 4, 5, 38, 37, 59, 107, 7, 41, 29, 5, 56, 22, 8]
+      },
+      "node_2_sl_hi": {
+        "name": "Blendrahmen Flügel aufschlagend / Schüco AWS 70 SL.HI",
+        "cropBox": [20.0, 425.0, 565.0, 805.0],
+        "keyDimensionsMm": [70, 10, 80, 26, 4, 15, 38, 27, 59, 107, 7, 41, 29, 5, 56, 22, 8]
+      }
     }
+  },
+  "reference_pair_018": {
+    "name": "Узел по низу окна",
+    "pdf": {
+      "fileName": "uzel_po_nizu_okna.pdf",
+      "originalName": "Узел по низу окна.pdf",
+      "sizeBytes": 85768,
+      "sha256": "9ba7662ffbccd82eb20a81d14df5e333c11dde78e50c042db005e668873e240d",
+      "format": "PDF-1.7",
+      "pageRotation": 270,
+      "mediaBox": [0.0, 0.0, 595.0, 842.0],
+      "cropBox": [0.0, 0.0, 595.0, 842.0],
+      "visualRect": [0.0, 0.0, 842.0, 595.0]
+    },
+    "dwg": {
+      "fileName": "uzel_po_nizu_okna.dwg",
+      "originalName": "Узел по низу окна.dwg",
+      "sizeBytes": 1634719,
+      "sha256": "61f8fc3fc36e9ba44e1ac8d907a9a053c07cb840345ec1fac70a7148370972b3",
+      "format": "AutoCAD 2018 (AC1032)",
+      "insunits": 4,
+      "measurement": 1
+    },
+    "keyDimensions": {
+      "width_frame_87": 87.0,
+      "height_frame_76": 76.0,
+      "clearance_3": 3.0
+    },
+    "keyAnnotations": [
+      "Подоконный профиль",
+      "Створка окна",
+      "Рама окна",
+      "Низ рамы окна",
+      "Дюбель-гвоздь PN-UK 8x80",
+      "Пластина анкерная оцинкованная (шаг по ГОСТ 30971-2012)",
+      "Герметик Гермес 17 (пароизоляционный)",
+      "Герметик Гермес 28 (гидроизоляционный)",
+      "Саморез JPMT 4.2х16А2 (2шт.)",
+      "Монтажные клинья",
+      "Пена монтажная",
+      "граница НВФ**",
+      "Отлив**",
+      "внутренняя отделка**"
+    ]
   }
 }
