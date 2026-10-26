@@ -7,10 +7,14 @@ and drawings into clean, editable AutoCAD DWG/DXF files.
 Supports two operational contracts:
 1. Mode "catalog" (Task 017): Zero hatch, clean closed polylines in ModelSpace,
    calibrated 1:1 / 1:2 millimeter geometry (Schüco, Reynaers).
-2. Mode "reference" (Task 018): Full working drawing reconstruction from reference PDF:
-   preserves hatches on dedicated layers (wall, insulation, seals), Russian Cyrillic
-   annotations, leader lines, native AutoCAD DIMENSION entities, and automatic
-   compilation to native binary DWG via local AutoCAD accoreconsole.exe.
+2. Mode "reference" (Task 018 / 019): Full working drawing reconstruction from reference PDF:
+   - Seamless segment chaining across lines and radiuses/curves (no broken lines at radiuses);
+   - Reconnected glass unit seal lines;
+   - Suppression of white wipeout mask rectangles crossing out text;
+   - TrueType font Arial for crystal-clear Russian Cyrillic readability;
+   - Native AutoCAD DIMENSION entities with DIMLFAC = 1.0 (exact 87, 76, 3 mm, no 100x multiplier);
+   - Preserved hatches on dedicated layers (wall, insulation, seals);
+   - Automatic compilation to native binary DWG via local AutoCAD accoreconsole.exe.
 """
 
 import os
@@ -39,7 +43,7 @@ def pt_dist(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
 
 def sample_bezier(
     p1: fitz.Point, p2: fitz.Point, p3: fitz.Point, p4: fitz.Point, steps: int = 8
-) -> List[Tuple[float, float]]:
+) -> List[fitz.Point]:
     """Sample a cubic Bezier curve into discrete line vertices."""
     pts = []
     for s in range(steps + 1):
@@ -47,8 +51,129 @@ def sample_bezier(
         mt = 1.0 - t
         x = mt**3 * p1.x + 3.0 * mt**2 * t * p2.x + 3.0 * mt * t**2 * p3.x + t**3 * p4.x
         y = mt**3 * p1.y + 3.0 * mt**2 * t * p2.y + 3.0 * mt * t**2 * p3.y + t**3 * p4.y
-        pts.append((round(x, 4), round(y, 4)))
+        pts.append(fitz.Point(x, y))
     return pts
+
+
+def chain_segments_fast(seg_list: List[List[fitz.Point]], tol: float = 0.4) -> List[List[fitz.Point]]:
+    """
+    O(N) continuous segment chaining via spatial hash grid.
+    Seamlessly merges lines and curves into continuous smooth polylines and closed loops.
+    Eliminates gaps and broken line segments at radius transitions.
+    """
+    if not seg_list:
+        return []
+
+    grid_step = max(tol, 0.05)
+
+    def grid_key(p: fitz.Point) -> Tuple[int, int]:
+        return (int(round(p.x / grid_step)), int(round(p.y / grid_step)))
+
+    active_segments: Dict[int, List[fitz.Point]] = {}
+    head_map = defaultdict(set)
+    tail_map = defaultdict(set)
+
+    for idx, seg in enumerate(seg_list):
+        if not seg or len(seg) < 2:
+            continue
+        active_segments[idx] = list(seg)
+        head_map[grid_key(seg[0])].add(idx)
+        tail_map[grid_key(seg[-1])].add(idx)
+
+    visited = set()
+    chains = []
+
+    for idx in list(active_segments.keys()):
+        if idx in visited:
+            continue
+        visited.add(idx)
+        curr = active_segments[idx]
+
+        # Extend tail forwards
+        extended = True
+        while extended:
+            extended = False
+            tail = curr[-1]
+            t_key = grid_key(tail)
+            candidates = set()
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    cand_key = (t_key[0] + dx, t_key[1] + dy)
+                    candidates.update(head_map.get(cand_key, set()))
+                    candidates.update(tail_map.get(cand_key, set()))
+
+            candidates.difference_update(visited)
+
+            best_cand = None
+            best_dist = tol
+            best_rev = False
+
+            for cand_idx in candidates:
+                cand_seg = active_segments[cand_idx]
+                d0 = math.hypot(tail.x - cand_seg[0].x, tail.y - cand_seg[0].y)
+                if d0 < best_dist:
+                    best_dist = d0
+                    best_cand = cand_idx
+                    best_rev = False
+                d1 = math.hypot(tail.x - cand_seg[-1].x, tail.y - cand_seg[-1].y)
+                if d1 < best_dist:
+                    best_dist = d1
+                    best_cand = cand_idx
+                    best_rev = True
+
+            if best_cand is not None:
+                visited.add(best_cand)
+                c_seg = active_segments[best_cand]
+                if best_rev:
+                    curr.extend(reversed(c_seg[:-1]))
+                else:
+                    curr.extend(c_seg[1:])
+                extended = True
+
+        # Extend head backwards
+        extended = True
+        while extended:
+            extended = False
+            head = curr[0]
+            h_key = grid_key(head)
+            candidates = set()
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    cand_key = (h_key[0] + dx, h_key[1] + dy)
+                    candidates.update(head_map.get(cand_key, set()))
+                    candidates.update(tail_map.get(cand_key, set()))
+
+            candidates.difference_update(visited)
+
+            best_cand = None
+            best_dist = tol
+            best_rev = False
+
+            for cand_idx in candidates:
+                cand_seg = active_segments[cand_idx]
+                d1 = math.hypot(head.x - cand_seg[-1].x, head.y - cand_seg[-1].y)
+                if d1 < best_dist:
+                    best_dist = d1
+                    best_cand = cand_idx
+                    best_rev = False
+                d0 = math.hypot(head.x - cand_seg[0].x, head.y - cand_seg[0].y)
+                if d0 < best_dist:
+                    best_dist = d0
+                    best_cand = cand_idx
+                    best_rev = True
+
+            if best_cand is not None:
+                visited.add(best_cand)
+                c_seg = active_segments[best_cand]
+                if best_rev:
+                    curr = list(reversed(c_seg))[1:] + curr
+                else:
+                    curr = c_seg[:-1] + curr
+                extended = True
+
+        chains.append(curr)
+
+    return chains
 
 
 def convert_dxf_to_dwg_via_accore(dxf_path: Path, dwg_path: Path) -> bool:
@@ -78,7 +203,7 @@ def convert_dxf_to_dwg_via_accore(dxf_path: Path, dwg_path: Path) -> bool:
     scr_path.write_text(scr_content, encoding="utf-8")
 
     try:
-        cmd = [str(accore_exe), "/i", str(dxf_path), "/s", str(scr_path), "/l", "en-US"]
+        cmd = [str(accore_exe), "/i", str(dxf_path.resolve()), "/s", str(scr_path.resolve()), "/l", "en-US"]
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
         success = dwg_path.exists() and dwg_path.stat().st_size > 0
         if success:
@@ -179,14 +304,12 @@ def detect_catalog_scale(page: fitz.Page, crop_box: Optional[fitz.Rect] = None) 
                                 wx = (w[0] + w[2]) / 2.0
                                 wy = (w[1] + w[3]) / 2.0
                                 if math.hypot(wx - mid_x, wy - mid_y) < 40.0:
-                                    # Dimension line span between arrowheads
                                     # Span between witness lines includes 2 arrowhead offsets (2 * 4.02 = 8.04 pt)
                                     witness_span = line_len + 8.04
                                     scale_ratio = val / (witness_span * PT_TO_MM)
                                     dim_ratios.append(round(scale_ratio, 3))
 
     if dim_ratios:
-        # Select consensus ratio
         calibrated_scale = Counter(dim_ratios).most_common(1)[0][0]
         logger.info("Calibrated catalog scale from dimension lines: %s", calibrated_scale)
         return float(calibrated_scale)
@@ -237,17 +360,14 @@ def extract_subpaths_from_drawing(d: Dict[str, Any], include_hatches: bool = Fal
 
         elif it[0] == "c":
             p1, p2, p3, p4 = it[1], it[2], it[3], it[4]
+            curve_pts = sample_bezier(p1, p2, p3, p4, steps=8)
             if not cur_subpath:
-                cur_subpath.append(p1)
+                cur_subpath.extend(curve_pts)
             elif math.hypot(p1.x - cur_subpath[-1].x, p1.y - cur_subpath[-1].y) > 0.05:
                 subpaths.append(cur_subpath)
-                cur_subpath = [p1]
-            for s in range(1, 9):
-                t = s / 8.0
-                mt = 1.0 - t
-                x = mt**3 * p1.x + 3.0 * mt**2 * t * p2.x + 3.0 * mt * t**2 * p3.x + t**3 * p4.x
-                y = mt**3 * p1.y + 3.0 * mt**2 * t * p2.y + 3.0 * mt * t**2 * p3.y + t**3 * p4.y
-                cur_subpath.append(fitz.Point(x, y))
+                cur_subpath = curve_pts
+            else:
+                cur_subpath.extend(curve_pts[1:])
 
         elif it[0] == "re":
             r_box = it[1]
@@ -293,7 +413,7 @@ class PDFCadExtractor:
         crop_pad = opts.get("crop_padding", 14.0)
         mode = opts.get("mode", "auto")
         include_hatches = opts.get("include_hatches", False)
-        
+
         # Determine whether to compile to native DWG
         is_dwg_target = bool(output_path and str(output_path).lower().endswith(".dwg"))
         compile_dwg = opts.get("compile_dwg", is_dwg_target)
@@ -334,8 +454,6 @@ class PDFCadExtractor:
         logger.info("Calibrated catalog scale: %s (total_scale=%f mm/pt)", scale_factor, total_scale)
 
         # 2. Coordinate Transformation
-        # For rotated landscape drawings (e.g. rot == 270):
-        # raw X (px) maps to CAD Y; raw Y (py) maps to CAD X.
         if rot == 270:
             ox = 50.0   # margin offset in py
             oy = 150.0  # margin offset in px
@@ -360,6 +478,24 @@ class PDFCadExtractor:
         dxf_doc = ezdxf.new(dxf_version, setup=True)
         dxf_doc.header["$INSUNITS"] = 4
         msp = dxf_doc.modelspace()
+
+        # Configure TrueType Arial font for readable Russian Cyrillic text
+        if "Standard" in dxf_doc.styles:
+            dxf_doc.styles.get("Standard").dxf.font = "arial.ttf"
+        else:
+            dxf_doc.styles.new("Standard", dxfattribs={"font": "arial.ttf"})
+
+        # Configure architectural dimension style FERO_MM with DIMLFAC = 1.0 (exact millimeters)
+        dimstyle = dxf_doc.dimstyles.new("FERO_MM")
+        dimstyle.dxf.dimscale = 1.0
+        dimstyle.dxf.dimlfac = 1.0     # Critical: factor 1.0, NOT 100.0!
+        dimstyle.dxf.dimtxt = 3.5      # 3.5 mm text height
+        dimstyle.dxf.dimasz = 2.5      # 2.5 mm arrow size
+        dimstyle.dxf.dimdec = 0        # integer precision for nominals
+        dimstyle.dxf.dimtxsty = "Standard"
+        dimstyle.dxf.dimtad = 1
+        dimstyle.dxf.dimtih = 0
+        dimstyle.dxf.dimtoh = 0
 
         layers_def = [
             ("01_АЛЮМИНИЙ_НАРУЖНЫЙ", 7, 35),
@@ -506,6 +642,7 @@ class PDFCadExtractor:
                     p1=dim_data["p1"],
                     p2=dim_data["p2"],
                     angle=dim_data["angle"],
+                    dimstyle="FERO_MM",
                     dxfattribs={"layer": "07_РАЗМЕРЫ"},
                 )
                 dim.render()
@@ -544,7 +681,11 @@ class PDFCadExtractor:
                                 txt = msp.add_text(
                                     text_str,
                                     height=height_mm,
-                                    dxfattribs={"layer": "09_АННОТАЦИИ_ТЕКСТ", "rotation": angle_deg},
+                                    dxfattribs={
+                                        "layer": "09_АННОТАЦИИ_ТЕКСТ",
+                                        "rotation": angle_deg,
+                                        "style": "Standard",
+                                    },
                                 )
                                 txt.dxf.insert = cad_insert
                                 entities_count += 1
@@ -552,13 +693,20 @@ class PDFCadExtractor:
         except Exception as e:
             logger.warning("Error extracting text: %s", e)
 
-        # 6. Extract Vectors: Leaders, Hatches, and Contours
+        # 6. Extract Vectors: Leaders, Hatches, and Chained Contours
+        layer_segments: Dict[str, List[List[fitz.Point]]] = defaultdict(list)
+
         for idx, d in enumerate(drawings):
             if idx in dim_drawings_indices:
                 continue
 
             c = d.get("color")
+            f = d.get("fill")
             items = d.get("items", [])
+
+            # SUPPRESS pure white wipeout / background mask boxes crossing out text
+            if f and all(x > 0.95 for x in f) and (not c or all(x > 0.95 for x in c)):
+                continue
 
             # Skip green dimension lines in reference mode
             if rot == 270 and c and c[1] > 0.6 and c[0] < 0.3 and c[2] < 0.4:
@@ -591,34 +739,30 @@ class PDFCadExtractor:
                 if len(sp) < 2:
                     continue
 
-                cad_pts = [to_cad((p.x, p.y)) for p in sp]
-                gap = math.hypot(sp[0].x - sp[-1].x, sp[0].y - sp[-1].y)
-                is_closed = (gap <= 0.25 and len(sp) >= 3)
-                if is_closed:
-                    cad_pts[-1] = cad_pts[0]
-                    closed_loops_count += 1
-
                 # Determine target layer
                 if is_leader:
                     target_layer = "08_ВЫНОСКИ"
                 elif is_hatch:
                     target_layer = hatch_layer
                 elif mode == "reference":
-                    avg_x = sum(p[0] for p in cad_pts) / len(cad_pts)
-                    avg_y = sum(p[1] for p in cad_pts) / len(cad_pts)
-                    if avg_y > 400.0 and 320.0 <= avg_x <= 480.0:
+                    mid_p = sp[len(sp) // 2]
+                    cad_mid = to_cad((mid_p.x, mid_p.y))
+                    mx, my = cad_mid[0], cad_mid[1]
+                    if my > 400.0 and 320.0 <= mx <= 480.0:
                         target_layer = "01_ПРОФИЛИ_ОКНА"
-                    elif avg_x < 320.0 and avg_y > 300.0:
+                    elif mx < 320.0 and my > 300.0:
                         target_layer = "02_ОТЛИВ_МЕТАЛЛ"
-                    elif is_closed and 330.0 <= avg_x <= 470.0 and 380.0 <= avg_y <= 420.0:
+                    elif 330.0 <= mx <= 470.0 and 380.0 <= my <= 420.0:
                         target_layer = "03_ТЕРМОМОСТ"
-                    elif is_closed and (avg_y > 480.0 and 350.0 <= avg_x <= 450.0):
+                    elif my > 470.0 and 340.0 <= mx <= 460.0:
                         target_layer = "05_СТЕКЛОПАКЕТ"
                     else:
                         target_layer = "04_УПЛОТНИТЕЛИ_ГЕРМЕТИКИ"
                 else:
                     # Catalog mode layer assignment
-                    avg_cad_x = sum(p[0] for p in cad_pts) / len(cad_pts)
+                    mid_p = sp[len(sp) // 2]
+                    cad_mid = to_cad((mid_p.x, mid_p.y))
+                    avg_cad_x = cad_mid[0]
                     if 45.0 <= avg_cad_x <= 75.0:
                         target_layer = "03_ТЕРМОМОСТ"
                     elif avg_cad_x < 45.0:
@@ -627,6 +771,26 @@ class PDFCadExtractor:
                         target_layer = "05_СТЕКЛОПАКЕТ"
                     else:
                         target_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
+
+                layer_segments[target_layer].append(sp)
+
+        # Seamless segment chaining per layer
+        for target_layer, seg_list in layer_segments.items():
+            if mode == "reference":
+                chains = chain_segments_fast(seg_list, tol=0.4)
+            else:
+                chains = seg_list
+
+            for c_pts in chains:
+                if len(c_pts) < 2:
+                    continue
+
+                cad_pts = [to_cad((p.x, p.y)) for p in c_pts]
+                gap = math.hypot(c_pts[0].x - c_pts[-1].x, c_pts[0].y - c_pts[-1].y)
+                is_closed = (gap <= 0.35 and len(c_pts) >= 3)
+                if is_closed:
+                    cad_pts[-1] = cad_pts[0]
+                    closed_loops_count += 1
 
                 msp.add_lwpolyline(
                     cad_pts,
