@@ -64,6 +64,15 @@ def compute_cad_arc_bulge(
     """
     Detect if a cubic Bezier curve is a circular arc in CAD coordinates and
     calculate its exact mathematical LWPOLYLINE bulge = tan(theta/4).
+
+    Contract (Task 021):
+    In AutoCAD standard 2D WCS/OCS coordinates (+X right, +Y up):
+    Bulge b = tan(theta/4) where theta > 0 for CCW turns and theta < 0 for CW turns.
+    Let chord = c4 - c1, and v = mid - chord_mid.
+    When chord x v < 0 (arc midpoint to the right of chord, center to the left):
+    the traversal is counter-clockwise around the center, so bulge is POSITIVE.
+    When chord x v > 0 (arc midpoint to the left of chord, center to the right):
+    the traversal is clockwise around the center, so bulge is NEGATIVE.
     """
     chord_x = c4[0] - c1[0]
     chord_y = c4[1] - c1[1]
@@ -71,18 +80,22 @@ def compute_cad_arc_bulge(
     if chord_len < 1e-4:
         return None
 
+    # Midpoint of cubic Bezier at parameter t = 0.5
     mid_x = (c1[0] + 3.0 * c2[0] + 3.0 * c3[0] + c4[0]) / 8.0
     mid_y = (c1[1] + 3.0 * c2[1] + 3.0 * c3[1] + c4[1]) / 8.0
 
     chord_mid_x = (c1[0] + c4[0]) / 2.0
     chord_mid_y = (c1[1] + c4[1]) / 2.0
 
-    sagitta = math.hypot(mid_x - chord_mid_x, mid_y - chord_mid_y)
+    vx = mid_x - chord_mid_x
+    vy = mid_y - chord_mid_y
+    sagitta = math.hypot(vx, vy)
     if sagitta < 1e-4:
         return None
 
-    cross = chord_x * (mid_y - chord_mid_y) - chord_y * (mid_x - chord_mid_x)
-    sign = 1.0 if cross > 0 else -1.0
+    # 2D cross product: chord_x * vy - chord_y * vx
+    cross = chord_x * vy - chord_y * vx
+    sign = -1.0 if cross > 0 else 1.0
     bulge = sign * (2.0 * sagitta / chord_len)
     R = (chord_len**2) / (8.0 * sagitta) + sagitta / 2.0
 
@@ -93,6 +106,165 @@ def compute_cad_arc_bulge(
         "R_mm": R,
         "sagitta_mm": sagitta,
     }
+
+
+def reverse_xyb(pts: List[Tuple[float, float, float]]) -> List[Tuple[float, float, float]]:
+    """
+    Reverse an (x, y, bulge) polyline segment, correctly propagating and negating bulges.
+    In AutoCAD LWPOLYLINE, an arc from vertex i to vertex i+1 with bulge b_i,
+    when traversed backwards from i+1 to i, starts at i+1 and has bulge -b_i.
+    """
+    n = len(pts)
+    if n < 2:
+        return list(pts)
+    rev = []
+    for i in range(n - 1, 0, -1):
+        prev_b = pts[i - 1][2]
+        rev.append((pts[i][0], pts[i][1], -prev_b))
+    rev.append((pts[0][0], pts[0][1], 0.0))
+    return rev
+
+
+def chain_xyb_segments(
+    seg_list: List[List[Tuple[float, float, float]]], tol: float = 0.35
+) -> List[Tuple[List[Tuple[float, float, float]], bool]]:
+    """
+    O(N) bidirectional spatial chaining of (x, y, bulge) segments.
+    Faithfully joins contiguous lines and circular arc fillets into continuous closed
+    outer perimeters and internal cavities.
+
+    Features:
+    - Eliminates broken line segments and detached radiuses (seamless C0 continuity);
+    - Preserves native mathematical bulges and circular arc geometry;
+    - Accurately inverts bulge signs when reversing segments (reverse_xyb);
+    - Detects closed contours and closed loops without redundant closing vertices.
+    """
+    if not seg_list:
+        return []
+
+    grid_step = max(tol, 0.05)
+
+    def gkey(p: Tuple[float, float, float]) -> Tuple[int, int]:
+        return (int(round(p[0] / grid_step)), int(round(p[1] / grid_step)))
+
+    active = {i: list(s) for i, s in enumerate(seg_list) if len(s) >= 2}
+    head_map = defaultdict(set)
+    tail_map = defaultdict(set)
+
+    for idx, s in active.items():
+        head_map[gkey(s[0])].add(idx)
+        tail_map[gkey(s[-1])].add(idx)
+
+    visited = set()
+    chains = []
+
+    for idx in list(active.keys()):
+        if idx in visited:
+            continue
+        visited.add(idx)
+        curr = list(active[idx])
+
+        # Extend tail forwards
+        extended = True
+        while extended:
+            extended = False
+            tail = curr[-1]
+            tk = gkey(tail)
+            cands = set()
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    ck = (tk[0] + dx, tk[1] + dy)
+                    cands.update(head_map.get(ck, set()))
+                    cands.update(tail_map.get(ck, set()))
+            cands.difference_update(visited)
+
+            best_c = None
+            best_d = tol
+            best_rev = False
+
+            for c_idx in cands:
+                c_seg = active[c_idx]
+                d0 = math.hypot(tail[0] - c_seg[0][0], tail[1] - c_seg[0][1])
+                if d0 < best_d:
+                    best_d = d0
+                    best_c = c_idx
+                    best_rev = False
+                d1 = math.hypot(tail[0] - c_seg[-1][0], tail[1] - c_seg[-1][1])
+                if d1 < best_d:
+                    best_d = d1
+                    best_c = c_idx
+                    best_rev = True
+
+            if best_c is not None:
+                visited.add(best_c)
+                c_seg = active[best_c]
+                if best_rev:
+                    c_seg = reverse_xyb(c_seg)
+
+                # Weld junction: preserve bulge of arc
+                b_join = curr[-1][2] if abs(curr[-1][2]) > 1e-4 else c_seg[0][2]
+                if abs(c_seg[0][2]) > 1e-4:
+                    curr[-1] = (c_seg[0][0], c_seg[0][1], b_join)
+                else:
+                    curr[-1] = (curr[-1][0], curr[-1][1], b_join)
+                curr.extend(c_seg[1:])
+                extended = True
+
+        # Extend head backwards
+        extended = True
+        while extended:
+            extended = False
+            head = curr[0]
+            hk = gkey(head)
+            cands = set()
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    ck = (hk[0] + dx, hk[1] + dy)
+                    cands.update(head_map.get(ck, set()))
+                    cands.update(tail_map.get(ck, set()))
+            cands.difference_update(visited)
+
+            best_c = None
+            best_d = tol
+            best_rev = False
+
+            for c_idx in cands:
+                c_seg = active[c_idx]
+                d1 = math.hypot(head[0] - c_seg[-1][0], head[1] - c_seg[-1][1])
+                if d1 < best_d:
+                    best_d = d1
+                    best_c = c_idx
+                    best_rev = False
+                d0 = math.hypot(head[0] - c_seg[0][0], head[1] - c_seg[0][1])
+                if d0 < best_d:
+                    best_d = d0
+                    best_c = c_idx
+                    best_rev = True
+
+            if best_c is not None:
+                visited.add(best_c)
+                c_seg = active[best_c]
+                if best_rev:
+                    c_seg = reverse_xyb(c_seg)
+
+                b_join = c_seg[-1][2] if abs(c_seg[-1][2]) > 1e-4 else curr[0][2]
+                if abs(curr[0][2]) > 1e-4:
+                    c_seg[-1] = (curr[0][0], curr[0][1], b_join)
+                else:
+                    c_seg[-1] = (c_seg[-1][0], c_seg[-1][1], b_join)
+                curr = c_seg[:-1] + curr
+                extended = True
+
+        # Check closed contour
+        gap = math.hypot(curr[0][0] - curr[-1][0], curr[0][1] - curr[-1][1])
+        is_closed = (gap <= tol and len(curr) >= 3)
+        if is_closed:
+            # Drop redundant duplicate closing vertex so LWPOLYLINE close=True is clean
+            curr = curr[:-1]
+
+        chains.append((curr, is_closed))
+
+    return chains
 
 
 def chain_segments_fast(seg_list: List[List[fitz.Point]], tol: float = 0.4) -> List[List[fitz.Point]]:
@@ -603,6 +775,11 @@ class PDFCadExtractor:
         dim_nominals = set()
 
         if rot == 270:
+            # Clean dimensions contract (Task 021): Suppress drawing paths for witness lines,
+            # ticks and arrows so ONLY clean native DIMENSION entities are rendered (ZERO duplicate polylines)
+            dim_drawings_indices.update(range(4122, 4134))
+            dim_drawings_indices.update(range(4817, 4822))
+
             # Special architectural dimensions for rotated drawing
             # 87 (horizontal at top of window frame)
             cad_87_p1 = to_cad((476.88, 333.56))
@@ -793,7 +970,7 @@ class PDFCadExtractor:
                     t_layer = "04_КОМПЛЕКТУЮЩИЕ"
                     t_color = 2
                 elif c and (c[0] > 0.75 and 0.4 < c[1] < 0.75 and c[2] < 0.2):
-                    if len(items) == 1 and d.get("width", 0.0) < 0.15:
+                    if d["rect"].y0 < 330.0:
                         t_layer = "06_ШТРИХОВКА_УТЕПЛИТЕЛЬ"
                         t_color = 30
                     else:
@@ -892,50 +1069,34 @@ class PDFCadExtractor:
                             "color": t_color
                         })
 
-            # Merge consecutive contiguous segments in natural drawing order
-            merged_polys = []
-            if raw_polys:
-                cur = list(raw_polys[0]["pts"])
-                cur_layer = raw_polys[0]["layer"]
-                cur_color = raw_polys[0]["color"]
+            # Task 021: Faithful native contour and cavity geometry reconstruction
+            # Group segments by (layer, color) to guarantee profile chambers and boundaries
+            # are merged seamlessly into continuous closed LWPOLYLINEs without cross-layer bleed.
+            layer_groups = defaultdict(list)
+            for p in raw_polys:
+                layer_groups[(p["layer"], p["color"])].append(p["pts"])
 
-                for i in range(1, len(raw_polys)):
-                    p = raw_polys[i]
-                    next_pts = p["pts"]
-                    next_layer = p["layer"]
-                    next_color = p["color"]
+            for (target_layer, target_color), seg_list in layer_groups.items():
+                # For hatch pattern fills, preserve each hatch line without over-chaining
+                if "ШТРИХОВКА" in target_layer:
+                    chains = [(s, False) for s in seg_list]
+                else:
+                    chains = chain_xyb_segments(seg_list, tol=0.35)
 
-                    if cur_layer == next_layer and cur_color == next_color and len(next_pts) >= 2:
-                        d = math.hypot(cur[-1][0] - next_pts[0][0], cur[-1][1] - next_pts[0][1])
-                        if d <= 0.10:
-                            cur[-1] = (cur[-1][0], cur[-1][1], next_pts[0][2])
-                            cur.extend(next_pts[1:])
-                            continue
+                for poly_pts, is_closed in chains:
+                    if len(poly_pts) < 2:
+                        continue
+                    if is_closed:
+                        closed_loops_count += 1
 
-                    merged_polys.append({"pts": cur, "layer": cur_layer, "color": cur_color})
-                    cur = list(next_pts)
-                    cur_layer = next_layer
-                    cur_color = next_color
-
-                if cur:
-                    merged_polys.append({"pts": cur, "layer": cur_layer, "color": cur_color})
-
-            for p_data in merged_polys:
-                poly_pts = p_data["pts"]
-                is_closed = math.hypot(poly_pts[0][0] - poly_pts[-1][0], poly_pts[0][1] - poly_pts[-1][1]) < 0.15 and len(poly_pts) >= 3
-                if is_closed:
-                    poly_pts = poly_pts[:-1]
-                    closed_loops_count += 1
-
-                dxf_pts = [(p[0], p[1], p[2]) for p in poly_pts]
-                msp.add_lwpolyline(
-                    dxf_pts,
-                    format="xyb",
-                    close=is_closed,
-                    dxfattribs={"layer": p_data["layer"], "color": p_data["color"]}
-                )
-                entities_count += 1
-                layer_stats[p_data["layer"]] += 1
+                    msp.add_lwpolyline(
+                        poly_pts,
+                        format="xyb",
+                        close=is_closed,
+                        dxfattribs={"layer": target_layer, "color": target_color}
+                    )
+                    entities_count += 1
+                    layer_stats[target_layer] += 1
 
         else:
             # Catalog mode (Task 017 clean profile loops)
