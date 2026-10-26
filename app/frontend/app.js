@@ -911,7 +911,7 @@ async function triggerSystemPicker() {
     return "";
   } finally {
     isPickerOpen = false;
-    if (els.load) els.load.disabled = false;
+    updateObjectButtons();
   }
 }
 

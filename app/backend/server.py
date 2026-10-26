@@ -3660,8 +3660,8 @@ class LauncherHandler(BaseHTTPRequestHandler):
                     "{ [Console]::WriteLine($dlg.SelectedPath) } } "
                     "finally { $owner.Dispose(); $dlg.Dispose() }"
                 )
-                # Доводчик: диалог должен открыться главным окном, а не значком в фоне.
-                _bring_window_to_front(None, "#32770", 115.0, "Select object folder")
+                # Доводчик: диалог должен открыться главным окном поверх лаунчера (любой язык/заголовок).
+                _bring_window_to_front(None, "#32770", 115.0, "")
                 # ВАЖНО: без hidden_process_kwargs() — флаг STARTF_USESHOWWINDOW
                 # с wShowWindow=0 прячет модальное окно FolderBrowserDialog.
                 # Диалог выбора папки обязан открываться поверх лаунчера.
@@ -3683,12 +3683,26 @@ class LauncherHandler(BaseHTTPRequestHandler):
                     timeout=120,
                     creationflags=creation_flags,
                 )
+                if proc.returncode != 0:
+                    err_msg = proc.stderr.decode("utf-8", errors="replace").strip() if proc.stderr else ""
+                    logger.error("PowerShell FolderBrowserDialog failed with exit code %s: %s", proc.returncode, err_msg)
+                    self.send_json(
+                        HTTPStatus.OK,
+                        {
+                            "path": "",
+                            "error": f"Ошибка системного диалога выбора папки (код {proc.returncode}): {err_msg}" if err_msg else f"Диалог выбора папки завершился с кодом {proc.returncode}."
+                        }
+                    )
+                    return
                 selected = decode_folder_dialog_output(proc.stdout)
                 if selected:
+                    logger.info("Folder dialog selected: %s", selected)
                     self.send_json(HTTPStatus.OK, {"path": selected})
                 else:
+                    logger.info("Folder dialog cancelled by user (empty path)")
                     self.send_json(HTTPStatus.OK, {"path": ""})
             except subprocess.TimeoutExpired:
+                logger.warning("Folder dialog timed out after 120s")
                 self.send_json(
                     HTTPStatus.OK,
                     {
@@ -3697,6 +3711,7 @@ class LauncherHandler(BaseHTTPRequestHandler):
                     },
                 )
             except Exception as error:
+                logger.exception("Folder dialog failed with exception: %s", error)
                 self.send_json(HTTPStatus.OK, {"path": "", "error": f"Системный диалог выбора папки недоступен: {error}"})
             return
 
