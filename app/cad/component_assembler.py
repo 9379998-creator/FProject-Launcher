@@ -188,6 +188,9 @@ def assemble_physical_components(doc: Drawing) -> Dict[str, Any]:
         },
     ]
 
+    # Target physical component taxonomy (Task 024 Component Map)
+    cdef_by_id = {c["id"]: c for c in component_defs}
+
     # Assign entities to components
     component_entities = defaultdict(list)
     assigned_handles = set()
@@ -195,11 +198,12 @@ def assemble_physical_components(doc: Drawing) -> Dict[str, Any]:
     # Pass 1: Assign structural and accessory entities matching component definitions
     for ent in all_entities:
         lyr = ent.dxf.layer
+        lyr_up = lyr.upper()
         # Never group DIMENSION entities or witness lines into parts
-        if "РАЗМЕР" in lyr or "DIMENSION" in ent.dxftype():
+        if "РАЗМЕР" in lyr_up or "DIMENSION" in ent.dxftype().upper() or "DIMENSION" in lyr_up:
             continue
-        # Never group general annotations / callouts into parts
-        if "ВЫНОСКИ" in lyr or "НАДПИСИ" in lyr:
+        # Never group general annotations / callouts / articles into parts
+        if "ВЫНОСКИ" in lyr_up or "НАДПИСИ" in lyr_up or "АРТИКУЛ" in lyr_up or "ARTICLE" in lyr_up or "АННОТАЦИИ" in lyr_up:
             continue
 
         b = get_entity_bbox(ent)
@@ -209,9 +213,30 @@ def assemble_physical_components(doc: Drawing) -> Dict[str, Any]:
                 assigned_handles.add(ent.dxf.handle)
                 break
 
+    # Pass 1b: Catalog mode fallback for extruded products
+    if not component_entities:
+        catalog_layer_map = {
+            "01_АЛЮМИНИЙ_НАРУЖНЫЙ": ("PART_ALU_SASH_OUTER", "Наружная чаша профиля створки (алюминий)"),
+            "01_АЛЮМИНИЙ_ВНУТРЕННИЙ": ("PART_ALU_SASH_INNER", "Внутренняя чаша профиля створки (алюминий)"),
+            "03_ТЕРМОМОСТ": ("PART_THERMAL_BREAKS", "Полиамидные термомосты"),
+            "04_УПЛОТНИТЕЛИ": ("PART_SEALS_EPDM", "Уплотнители резиновые / EPDM"),
+            "05_СТЕКЛОПАКЕТ": ("PART_GLASS_UNIT", "Стеклопакет и дистанционные рамки"),
+        }
+        for ent in all_entities:
+            lyr = ent.dxf.layer
+            lyr_up = lyr.upper()
+            if "РАЗМЕР" in lyr_up or "DIMENSION" in ent.dxftype().upper() or "DIMENSION" in lyr_up:
+                continue
+            if "ВЫНОСКИ" in lyr_up or "НАДПИСИ" in lyr_up or "АРТИКУЛ" in lyr_up or "ARTICLE" in lyr_up or "АННОТАЦИИ" in lyr_up:
+                continue
+            if lyr in catalog_layer_map:
+                p_id, p_name = catalog_layer_map[lyr]
+                component_entities[p_id].append(ent)
+                if p_id not in cdef_by_id:
+                    cdef_by_id[p_id] = {"name": p_name}
+
     # Pass 2: Create AutoCAD groups (ACAD_GROUP) for each populated component
     created_groups = []
-    cdef_by_id = {c["id"]: c for c in component_defs}
 
     for comp_id, entities in component_entities.items():
         if not entities:

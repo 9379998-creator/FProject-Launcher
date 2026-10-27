@@ -888,6 +888,7 @@ class PDFCadExtractor:
             ("06_ШТРИХОВКА_УТЕПЛИТЕЛЬ", 30, 13),
             ("06_ШТРИХОВКА_СТЕНЫ", 251, 13),
             ("06_ШТРИХОВКА_ОБЩАЯ", 252, 13),
+            ("Размерная линия", 3, 18),
             ("07_РАЗМЕРЫ", 3, 18),
             ("DIMENSIONS", 3, 18),
             ("08_АРТИКУЛЫ", 2, 20),
@@ -1103,10 +1104,11 @@ class PDFCadExtractor:
                     p2=dim_data["p2"],
                     angle=dim_data["angle"],
                     dimstyle="FERO_MM",
-                    dxfattribs={"layer": "07_РАЗМЕРЫ", "color": 3},
+                    dxfattribs={"layer": "Размерная линия", "color": 3},
                 )
                 dim.render()
                 entities_count += 1
+                layer_stats["Размерная линия"] += 1
                 layer_stats["07_РАЗМЕРЫ"] += 1
             except Exception as e:
                 logger.debug("Error adding native dimension: %s", e)
@@ -1607,6 +1609,17 @@ class PDFCadExtractor:
             phase2_chains_cat = chain_xyb_segments(open_chains_cat, tol=0.30)
             final_catalog_chains = closed_chains_cat + phase2_chains_cat
 
+            crop_max_x = (filter_rect.x1 - filter_rect.x0) * total_scale
+            crop_max_y = (filter_rect.y1 - filter_rect.y0) * total_scale
+
+            def touches_cad_crop(pts_list):
+                return any(
+                    pt[0] < 0.25 or pt[1] < 0.25 or abs(pt[0] - crop_max_x) < 0.25 or abs(pt[1] - crop_max_y) < 0.25
+                    for pt in pts_list
+                )
+
+            seen_signatures = set()
+
             for poly_pts, is_closed in final_catalog_chains:
                 if len(poly_pts) < 2:
                     continue
@@ -1614,20 +1627,50 @@ class PDFCadExtractor:
                     math.hypot(poly_pts[i + 1][0] - poly_pts[i][0], poly_pts[i + 1][1] - poly_pts[i][1])
                     for i in range(len(poly_pts) - 1)
                 )
-                if not is_closed and tot_len < 3.0:
-                    continue  # Filter out tiny disconnected remnant segments
 
                 # Strict crop rule: cut profiles touching boundary remain open
                 p_start = (poly_pts[0][0], poly_pts[0][1])
                 p_finish = (poly_pts[-1][0], poly_pts[-1][1])
-                if p_start in boundary_cut_points or p_finish in boundary_cut_points:
+                at_boundary = (
+                    p_start in boundary_cut_points
+                    or p_finish in boundary_cut_points
+                    or touches_cad_crop([p_start, p_finish])
+                )
+                if at_boundary:
                     is_closed = False
+
+                # Task 026: Clean contours without hatch, fill strips, or duplicate lines
+                if not is_closed:
+                    diag = max(
+                        0.1,
+                        math.hypot(
+                            max(pt[0] for pt in poly_pts) - min(pt[0] for pt in poly_pts),
+                            max(pt[1] for pt in poly_pts) - min(pt[1] for pt in poly_pts),
+                        ),
+                    )
+                    ratio = tot_len / diag
+                    if ratio > 2.2:
+                        continue
+                    if not at_boundary and tot_len < 18.0:
+                        continue
+                    if tot_len < 3.0:
+                        continue
+
+                # Deduplicate coinciding polylines (stroke + fill duplicates)
+                sig_forward = tuple((round(pt[0], 2), round(pt[1], 2)) for pt in poly_pts)
+                sig_reverse = tuple((round(pt[0], 2), round(pt[1], 2)) for pt in reversed(poly_pts))
+                if sig_forward in seen_signatures or sig_reverse in seen_signatures:
+                    continue
+                seen_signatures.add(sig_forward)
 
                 if is_closed:
                     closed_loops_count += 1
 
                 mid_x = poly_pts[len(poly_pts) // 2][0]
-                if 45.0 <= mid_x <= 75.0:
+                mid_y = poly_pts[len(poly_pts) // 2][1]
+                if 120.0 <= mid_x <= 145.0 and mid_y < 140.0:
+                    t_layer = "04_УПЛОТНИТЕЛИ"
+                elif 45.0 <= mid_x <= 75.0:
                     t_layer = "03_ТЕРМОМОСТ"
                 elif mid_x < 45.0:
                     t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"

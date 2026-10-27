@@ -145,7 +145,7 @@ class TestCadStrictCrop025(unittest.TestCase):
 
         nominals = []
         for d in dims:
-            self.assertIn(d.dxf.layer, ("07_РАЗМЕРЫ", "DIMENSIONS"))
+            self.assertIn(d.dxf.layer, ("Размерная линия", "07_РАЗМЕРЫ", "DIMENSIONS"))
             measured_dist = math.hypot(
                 d.dxf.defpoint2.x - d.dxf.defpoint3.x,
                 d.dxf.defpoint2.y - d.dxf.defpoint3.y,
