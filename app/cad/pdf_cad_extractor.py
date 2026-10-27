@@ -57,6 +57,68 @@ def sample_bezier(
     return pts
 
 
+def clip_line_to_rect(
+    p1: Tuple[float, float], p2: Tuple[float, float], rect: fitz.Rect
+) -> Optional[Tuple[Tuple[float, float], Tuple[float, float], bool]]:
+    """
+    Clip line segment p1-p2 to rect using Cohen-Sutherland algorithm.
+    Returns (clipped_p1, clipped_p2, was_clipped) or None if completely outside.
+    """
+    x1, y1 = p1
+    x2, y2 = p2
+    xmin, ymin, xmax, ymax = rect.x0, rect.y0, rect.x1, rect.y1
+
+    INSIDE = 0  # 0000
+    LEFT = 1    # 0001
+    RIGHT = 2   # 0010
+    BOTTOM = 4  # 0100
+    TOP = 8     # 1000
+
+    def compute_out_code(x: float, y: float) -> int:
+        code = INSIDE
+        if x < xmin:
+            code |= LEFT
+        elif x > xmax:
+            code |= RIGHT
+        if y < ymin:
+            code |= BOTTOM
+        elif y > ymax:
+            code |= TOP
+        return code
+
+    code1 = compute_out_code(x1, y1)
+    code2 = compute_out_code(x2, y2)
+    was_clipped = False
+
+    while True:
+        if not (code1 | code2):
+            return ((x1, y1), (x2, y2), was_clipped)
+        elif code1 & code2:
+            return None
+        else:
+            was_clipped = True
+            code_out = code1 if code1 else code2
+            if code_out & TOP:
+                x = x1 + (x2 - x1) * (ymax - y1) / (y2 - y1)
+                y = ymax
+            elif code_out & BOTTOM:
+                x = x1 + (x2 - x1) * (ymin - y1) / (y2 - y1)
+                y = ymin
+            elif code_out & RIGHT:
+                y = y1 + (y2 - y1) * (xmax - x1) / (x2 - x1)
+                x = xmax
+            elif code_out & LEFT:
+                y = y1 + (y2 - y1) * (xmin - x1) / (x2 - x1)
+                x = xmin
+
+            if code_out == code1:
+                x1, y1 = x, y
+                code1 = compute_out_code(x1, y1)
+            else:
+                x2, y2 = x, y
+                code2 = compute_out_code(x2, y2)
+
+
 def compute_cad_arc_bulge(
     c1: Tuple[float, float],
     c2: Tuple[float, float],
@@ -575,6 +637,44 @@ def detect_catalog_scale(page: fitz.Page, crop_box: Optional[fitz.Rect] = None) 
                                     scale_ratio = val / (witness_span * PT_TO_MM)
                                     dim_ratios.append(round(scale_ratio, 3))
 
+    # Case C: Triangle arrowhead dimension constructs (Reynaers MasterLine 8)
+    triangle_arrow_tips = []
+    for d in drawings:
+        if d.get("fill") is not None and len(d.get("items", [])) == 3:
+            pts = [it[1] for it in d.get("items", [])]
+            if len(pts) == 3:
+                e0 = math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)
+                e1 = math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y)
+                e2 = math.hypot(pts[2].x - pts[0].x, pts[2].y - pts[0].y)
+                tip = pts[2] if e0 <= e1 and e0 <= e2 else (pts[0] if e1 <= e0 and e1 <= e2 else pts[1])
+                triangle_arrow_tips.append(tip)
+
+    for i, t1 in enumerate(triangle_arrow_tips):
+        for t2 in triangle_arrow_tips[i + 1 :]:
+            span_pt = 0.0
+            mid_x, mid_y = 0.0, 0.0
+            if abs(t1.y - t2.y) < 3.0 and abs(t1.x - t2.x) > 3.0:
+                span_pt = abs(t1.x - t2.x)
+                mid_x = (t1.x + t2.x) / 2.0
+                mid_y = (t1.y + t2.y) / 2.0
+            elif abs(t1.x - t2.x) < 3.0 and abs(t1.y - t2.y) > 3.0:
+                span_pt = abs(t1.y - t2.y)
+                mid_x = (t1.x + t2.x) / 2.0
+                mid_y = (t1.y + t2.y) / 2.0
+
+            if span_pt > 3.0:
+                for w in crop_words:
+                    txt = str(w[4]).strip()
+                    if re.match(r"^\d+(\.\d+)?$", txt):
+                        val = float(txt)
+                        if 1.0 <= val <= 300.0:
+                            dist = math.hypot((w[0] + w[2]) / 2.0 - mid_x, (w[1] + w[3]) / 2.0 - mid_y)
+                            if dist < 25.0:
+                                ratio = val / (span_pt * PT_TO_MM)
+                                for std in [1.0, 2.0, 2.5, 5.0]:
+                                    if abs(ratio - std) < 0.10:
+                                        dim_ratios.append(std)
+
     if dim_ratios:
         calibrated_scale = Counter(dim_ratios).most_common(1)[0][0]
         logger.info("Calibrated catalog scale from dimension lines: %s", calibrated_scale)
@@ -676,7 +776,7 @@ class PDFCadExtractor:
         """
         opts = options or {}
         dxf_version = opts.get("dxf_version", "R2013")
-        crop_pad = opts.get("crop_padding", 14.0)
+        crop_pad = opts.get("crop_padding", 0.0)
         mode = opts.get("mode", "auto")
         include_hatches = opts.get("include_hatches", False)
 
@@ -700,16 +800,20 @@ class PDFCadExtractor:
 
         logger.info("Extracting CAD: mode=%s, rot=%d, include_hatches=%s", mode, rot, include_hatches)
 
+        if crop_box is None:
+            crop_box = opts.get("crop_box") or opts.get("crop_rect")
+
         if crop_box:
             cx0 = min(crop_box[0], crop_box[2])
             cy0 = min(crop_box[1], crop_box[3])
             cx1 = max(crop_box[0], crop_box[2])
             cy1 = max(crop_box[1], crop_box[3])
 
-            cx0 = max(0.0, cx0 - crop_pad)
-            cy0 = max(0.0, cy0 - crop_pad)
-            cx1 = min(page_rect.width, cx1 + crop_pad)
-            cy1 = min(page_rect.height, cy1 + crop_pad)
+            if crop_pad > 0.0:
+                cx0 = max(0.0, cx0 - crop_pad)
+                cy0 = max(0.0, cy0 - crop_pad)
+                cx1 = min(page_rect.width, cx1 + crop_pad)
+                cy1 = min(page_rect.height, cy1 + crop_pad)
             filter_rect = fitz.Rect(cx0, cy0, cx1, cy1)
         else:
             filter_rect = fitz.Rect(
@@ -785,6 +889,9 @@ class PDFCadExtractor:
             ("06_ШТРИХОВКА_СТЕНЫ", 251, 13),
             ("06_ШТРИХОВКА_ОБЩАЯ", 252, 13),
             ("07_РАЗМЕРЫ", 3, 18),
+            ("DIMENSIONS", 3, 18),
+            ("08_АРТИКУЛЫ", 2, 20),
+            ("ARTICLES", 2, 20),
             ("08_ВЫНОСКИ", 1, 18),
             ("09_АННОТАЦИИ_ТЕКСТ", 2, 20),
             ("09_АННОТАЦИИ_ПРИМЕЧАНИЯ", 4, 20),
@@ -807,11 +914,11 @@ class PDFCadExtractor:
         if crop_box:
             drawings = [
                 d for d in page.get_drawings()
-                if filter_rect.intersects(fitz.Rect(d["rect"].x0 - 1.0, d["rect"].y0 - 1.0, d["rect"].x1 + 1.0, d["rect"].y1 + 1.0))
+                if filter_rect.intersects(fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5))
             ]
             crop_words = [
                 w for w in page.get_text("words")
-                if filter_rect.intersects(fitz.Rect(w[0] - 1.0, w[1] - 1.0, w[2] + 1.0, w[3] + 1.0))
+                if filter_rect.contains(fitz.Point((w[0] + w[2]) / 2.0, (w[1] + w[3]) / 2.0))
             ]
         else:
             drawings = page.get_drawings()
@@ -920,6 +1027,74 @@ class PDFCadExtractor:
                                 "nominal": closest_txt[0],
                             })
 
+            # Check triangle arrowhead dimensions (Reynaers MasterLine 8)
+            triangle_arrows = []
+            for idx, d in enumerate(drawings):
+                if filter_rect.intersects(d["rect"]) and d.get("fill") is not None and len(d.get("items", [])) == 3:
+                    pts = [it[1] for it in d.get("items", [])]
+                    if len(pts) == 3:
+                        e0 = math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)
+                        e1 = math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y)
+                        e2 = math.hypot(pts[2].x - pts[0].x, pts[2].y - pts[0].y)
+                        tip = pts[2] if e0 <= e1 and e0 <= e2 else (pts[0] if e1 <= e0 and e1 <= e2 else pts[1])
+                        triangle_arrows.append({"idx": idx, "tip": tip, "rect": d["rect"]})
+
+            used_tri_arrows = set()
+            for i, a1 in enumerate(triangle_arrows):
+                if i in used_tri_arrows:
+                    continue
+                t1 = a1["tip"]
+                for j in range(i + 1, len(triangle_arrows)):
+                    if j in used_tri_arrows:
+                        continue
+                    a2 = triangle_arrows[j]
+                    t2 = a2["tip"]
+
+                    if abs(t1.x - t2.x) < 3.0 and abs(t1.y - t2.y) > 3.0:
+                        span_pt = abs(t1.y - t2.y)
+                        meas_mm = span_pt * total_scale
+                        mid_y = (t1.y + t2.y) / 2.0
+                        for w in crop_words:
+                            txt = str(w[4]).strip()
+                            if re.match(r"^\d+(\.\d+)?$", txt):
+                                val = float(txt)
+                                if abs(meas_mm - val) < 0.4 and abs((w[1] + w[3]) / 2.0 - mid_y) < 25.0:
+                                    dim_drawings_indices.add(a1["idx"])
+                                    dim_drawings_indices.add(a2["idx"])
+                                    dim_nominals.add(txt)
+                                    used_tri_arrows.add(i)
+                                    used_tri_arrows.add(j)
+                                    extracted_dims.append({
+                                        "base": to_cad(((w[0] + w[2]) / 2.0, mid_y)),
+                                        "p1": to_cad((t1.x, t1.y)),
+                                        "p2": to_cad((t2.x, t2.y)),
+                                        "angle": 90.0,
+                                        "nominal": txt,
+                                    })
+                                    break
+                    elif abs(t1.y - t2.y) < 3.0 and abs(t1.x - t2.x) > 3.0:
+                        span_pt = abs(t1.x - t2.x)
+                        meas_mm = span_pt * total_scale
+                        mid_x = (t1.x + t2.x) / 2.0
+                        for w in crop_words:
+                            txt = str(w[4]).strip()
+                            if re.match(r"^\d+(\.\d+)?$", txt):
+                                val = float(txt)
+                                if abs(meas_mm - val) < 0.4 and abs((w[0] + w[2]) / 2.0 - mid_x) < 25.0:
+                                    dim_drawings_indices.add(a1["idx"])
+                                    dim_drawings_indices.add(a2["idx"])
+                                    dim_nominals.add(txt)
+                                    used_tri_arrows.add(i)
+                                    used_tri_arrows.add(j)
+                                    extracted_dims.append({
+                                        "base": to_cad((mid_x, (w[1] + w[3]) / 2.0)),
+                                        "p1": to_cad((t1.x, t1.y)),
+                                        "p2": to_cad((t2.x, t2.y)),
+                                        "angle": 0.0,
+                                        "nominal": txt,
+                                    })
+                                    break
+
         for dim_data in extracted_dims:
             try:
                 dim = msp.add_linear_dim(
@@ -937,6 +1112,7 @@ class PDFCadExtractor:
                 logger.debug("Error adding native dimension: %s", e)
 
         # 5. Extract Text Annotations
+        RE_ARTICLE = re.compile(r"\b(\d{3}\.[\w\d]{4}\.[\w\d]{2}|\d{3}\.[A-Z]\d{3}\.\d{2}|095\.[A-Z\d]{4}\.\d{2})\b")
         try:
             dict_blocks = page.get_text("dict")["blocks"]
             for b in dict_blocks:
@@ -944,46 +1120,54 @@ class PDFCadExtractor:
                     for line in b.get("lines", []):
                         dir_x, dir_y = line.get("dir", (1, 0))
                         for span in line.get("spans", []):
-                            r = fitz.Rect(span["bbox"])
-                            if filter_rect.intersects(r):
-                                text_str = str(span.get("text", "")).strip()
-                                if not text_str or text_str in dim_nominals:
-                                    continue
+                            span_rect = fitz.Rect(span["bbox"])
+                            center_pt = fitz.Point((span_rect.x0 + span_rect.x1) / 2.0, (span_rect.y0 + span_rect.y1) / 2.0)
+                            if not filter_rect.contains(center_pt):
+                                # Strict boundary policy: text whose center lies outside filter_rect is completely excluded.
+                                continue
 
-                                orig = span.get("origin")
-                                if rot == 270:
-                                    cad_insert = to_cad((orig[0], orig[1]))
-                                    height_mm = 3.5
-                                    angle_deg = 0.0
-                                    c_val = span.get("color", 0)
-                                    if c_val == 65535:
-                                        t_layer = "09_АННОТАЦИИ_ПРИМЕЧАНИЯ"
-                                        t_color = 4
-                                    else:
-                                        t_layer = "09_АННОТАЦИИ_ТЕКСТ"
-                                        t_color = 2
+                            text_str = str(span.get("text", "")).strip()
+                            if not text_str or text_str in dim_nominals:
+                                continue
+
+                            orig = span.get("origin")
+                            if rot == 270:
+                                cad_insert = to_cad((orig[0], orig[1]))
+                                height_mm = 3.5
+                                angle_deg = 0.0
+                                c_val = span.get("color", 0)
+                                if c_val == 65535:
+                                    t_layer = "09_АННОТАЦИИ_ПРИМЕЧАНИЯ"
+                                    t_color = 4
                                 else:
-                                    font_size_pt = span.get("size", 7.0)
-                                    height_mm = max(2.2, min(4.5, round(font_size_pt * total_scale, 2)))
-                                    cad_dir_y = -dir_y
-                                    angle_deg = round(math.degrees(math.atan2(cad_dir_y, dir_x)), 1) % 360
-                                    cad_insert = to_cad((orig[0], orig[1]))
+                                    t_layer = "09_АННОТАЦИИ_ТЕКСТ"
+                                    t_color = 2
+                            else:
+                                font_size_pt = span.get("size", 7.0)
+                                height_mm = max(2.2, min(4.5, round(font_size_pt * total_scale, 2)))
+                                cad_dir_y = -dir_y
+                                angle_deg = round(math.degrees(math.atan2(cad_dir_y, dir_x)), 1) % 360
+                                cad_insert = to_cad((orig[0], orig[1]))
+                                if RE_ARTICLE.search(text_str) or text_str.startswith("180.") or text_str.startswith("408.") or text_str.startswith("130."):
+                                    t_layer = "08_АРТИКУЛЫ"
+                                    t_color = 2
+                                else:
                                     t_layer = "09_АННОТАЦИИ_ТЕКСТ"
                                     t_color = 7
 
-                                txt = msp.add_text(
-                                    text_str,
-                                    height=height_mm,
-                                    dxfattribs={
-                                        "layer": t_layer,
-                                        "color": t_color,
-                                        "rotation": angle_deg,
-                                        "style": "Standard",
-                                    },
-                                )
-                                txt.dxf.insert = cad_insert
-                                entities_count += 1
-                                layer_stats[t_layer] += 1
+                            txt = msp.add_text(
+                                text_str,
+                                height=height_mm,
+                                dxfattribs={
+                                    "layer": t_layer,
+                                    "color": t_color,
+                                    "rotation": angle_deg,
+                                    "style": "Standard",
+                                },
+                            )
+                            txt.dxf.insert = cad_insert
+                            entities_count += 1
+                            layer_stats[t_layer] += 1
         except Exception as e:
             logger.warning("Error extracting text: %s", e)
 
@@ -1245,53 +1429,221 @@ class PDFCadExtractor:
                     layer_stats[target_layer] += 1
 
         else:
-            # Catalog mode (Task 017 clean profile loops)
-            layer_segments: Dict[str, List[List[fitz.Point]]] = defaultdict(list)
+            # Catalog mode (Tasks 017 & 025: zero-hatch clean contours with native arc bulges & strict crop)
+            prims_catalog = []
+            boundary_cut_points = set()
+
             for idx, d in enumerate(drawings):
                 if idx in dim_drawings_indices:
                     continue
 
                 items = d.get("items", [])
-                if not include_hatches and d.get("fill") is not None and len(items) == 3 and 1.0 <= d["rect"].width <= 15.0 and 1.0 <= d["rect"].height <= 15.0:
+                rect = d.get("rect", fitz.Rect(0, 0, 0, 0))
+
+                # Zero-hatch contract: Suppress solid fill strip slices & raster stripes
+                if d.get("fill") is not None:
+                    if rect.width <= 0.45 or rect.height <= 0.45 or len(items) >= 4:
+                        continue
+                    if len(items) == 3 and not include_hatches:
+                        continue
+
+                for it in items:
+                    if it[0] == "l":
+                        p1_raw = (it[1].x, it[1].y)
+                        p2_raw = (it[2].x, it[2].y)
+
+                        # Suppress diagonal hatch lines (45 deg or ~60 deg with short length)
+                        dx = abs(p2_raw[0] - p1_raw[0])
+                        dy = abs(p2_raw[1] - p1_raw[1])
+                        l_raw = math.hypot(dx, dy)
+                        if not include_hatches and l_raw < 4.5 and (
+                            abs(dx - dy) < 0.25 or abs(dy - 1.8 * dx) < 0.25 or abs(dx - 1.8 * dy) < 0.25
+                        ):
+                            continue
+
+                        # Strict crop line clipping against filter_rect
+                        clipped = clip_line_to_rect(p1_raw, p2_raw, filter_rect)
+                        if not clipped:
+                            continue
+                        c_p1, c_p2, was_clipped = clipped
+                        cad_p1 = to_cad(c_p1)
+                        cad_p2 = to_cad(c_p2)
+                        if was_clipped:
+                            boundary_cut_points.add(cad_p1)
+                            boundary_cut_points.add(cad_p2)
+
+                        prims_catalog.append({"idx": idx, "kind": "l", "p1": cad_p1, "p2": cad_p2})
+
+                    elif it[0] == "c":
+                        c1_raw = (it[1].x, it[1].y)
+                        c2_raw = (it[2].x, it[2].y)
+                        c3_raw = (it[3].x, it[3].y)
+                        c4_raw = (it[4].x, it[4].y)
+                        curve_box = fitz.Rect(
+                            min(c1_raw[0], c2_raw[0], c3_raw[0], c4_raw[0]),
+                            min(c1_raw[1], c2_raw[1], c3_raw[1], c4_raw[1]),
+                            max(c1_raw[0], c2_raw[0], c3_raw[0], c4_raw[0]),
+                            max(c1_raw[1], c2_raw[1], c3_raw[1], c4_raw[1]),
+                        )
+                        if not filter_rect.intersects(curve_box):
+                            continue
+                        cad_c1 = to_cad(c1_raw)
+                        cad_c2 = to_cad(c2_raw)
+                        cad_c3 = to_cad(c3_raw)
+                        cad_c4 = to_cad(c4_raw)
+                        prims_catalog.append({
+                            "idx": idx, "kind": "c",
+                            "c1": cad_c1, "c2": cad_c2, "c3": cad_c3, "c4": cad_c4
+                        })
+
+                    elif it[0] == "re":
+                        r_box = it[1]
+                        clipped_box = r_box.intersect(filter_rect)
+                        if not clipped_box.is_empty and clipped_box.width > 0.5 and clipped_box.height > 0.5:
+                            p_tl = to_cad((clipped_box.x0, clipped_box.y0))
+                            p_tr = to_cad((clipped_box.x1, clipped_box.y0))
+                            p_br = to_cad((clipped_box.x1, clipped_box.y1))
+                            p_bl = to_cad((clipped_box.x0, clipped_box.y1))
+                            prims_catalog.append({
+                                "idx": idx, "kind": "re",
+                                "pts": [
+                                    (p_tl[0], p_tl[1], 0.0),
+                                    (p_tr[0], p_tr[1], 0.0),
+                                    (p_br[0], p_br[1], 0.0),
+                                    (p_bl[0], p_bl[1], 0.0),
+                                    (p_tl[0], p_tl[1], 0.0),
+                                ]
+                            })
+
+            # Two-phase contour chaining for catalog mode
+            open_chains_cat = []
+            closed_chains_cat = []
+            cur_pts_cat = []
+            cur_end_cat = None
+            first_pt_cat = None
+            max_gap = 0.50
+
+            for prim in prims_catalog:
+                kind = prim["kind"]
+                if kind == "re":
+                    if cur_pts_cat:
+                        open_chains_cat.append(cur_pts_cat)
+                        cur_pts_cat = []
+                        cur_end_cat = None
+                        first_pt_cat = None
+                    closed_chains_cat.append((prim["pts"][:-1], True))
                     continue
 
-                subpaths = extract_subpaths_from_drawing(d, include_hatches=include_hatches)
-                for sp in subpaths:
-                    if len(sp) < 2:
-                        continue
-                    mid_p = sp[len(sp) // 2]
-                    cad_mid = to_cad((mid_p.x, mid_p.y))
-                    avg_cad_x = cad_mid[0]
-                    if 45.0 <= avg_cad_x <= 75.0:
-                        target_layer = "03_ТЕРМОМОСТ"
-                    elif avg_cad_x < 45.0:
-                        target_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
-                    elif avg_cad_x > 115.0:
-                        target_layer = "05_СТЕКЛОПАКЕТ"
+                if kind == "l":
+                    p1, p2 = prim["p1"], prim["p2"]
+                    if not cur_pts_cat:
+                        cur_pts_cat = [(p1[0], p1[1], 0.0), (p2[0], p2[1], 0.0)]
+                        cur_end_cat = p2
+                        first_pt_cat = p1
                     else:
-                        target_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
+                        d1 = math.hypot(cur_end_cat[0] - p1[0], cur_end_cat[1] - p1[1])
+                        d2 = math.hypot(cur_end_cat[0] - p2[0], cur_end_cat[1] - p2[1])
+                        if min(d1, d2) < max_gap:
+                            next_p = p2 if d1 <= d2 else p1
+                            cur_pts_cat.append((next_p[0], next_p[1], 0.0))
+                            cur_end_cat = next_p
+                            if len(cur_pts_cat) > 3 and math.hypot(cur_end_cat[0] - first_pt_cat[0], cur_end_cat[1] - first_pt_cat[1]) < 0.35:
+                                if first_pt_cat not in boundary_cut_points and cur_end_cat not in boundary_cut_points:
+                                    closed_chains_cat.append((cur_pts_cat[:-1], True))
+                                else:
+                                    open_chains_cat.append(cur_pts_cat)
+                                cur_pts_cat = []
+                                cur_end_cat = None
+                                first_pt_cat = None
+                        else:
+                            open_chains_cat.append(cur_pts_cat)
+                            cur_pts_cat = [(p1[0], p1[1], 0.0), (p2[0], p2[1], 0.0)]
+                            cur_end_cat = p2
+                            first_pt_cat = p1
 
-                    layer_segments[target_layer].append(sp)
+                elif kind == "c":
+                    c1, c2, c3, c4 = prim["c1"], prim["c2"], prim["c3"], prim["c4"]
+                    if not cur_pts_cat:
+                        arc_info = compute_cad_arc_bulge(c1, c2, c3, c4, inverted_handedness=False)
+                        b_val = arc_info["bulge"] if arc_info else 0.0
+                        cur_pts_cat = [(c1[0], c1[1], b_val), (c4[0], c4[1], 0.0)]
+                        cur_end_cat = c4
+                        first_pt_cat = c1
+                    else:
+                        d1 = math.hypot(cur_end_cat[0] - c1[0], cur_end_cat[1] - c1[1])
+                        d4 = math.hypot(cur_end_cat[0] - c4[0], cur_end_cat[1] - c4[1])
+                        if min(d1, d4) < max_gap:
+                            if d1 <= d4:
+                                arc_info = compute_cad_arc_bulge(c1, c2, c3, c4, inverted_handedness=False)
+                                b_val = arc_info["bulge"] if arc_info else 0.0
+                                cur_pts_cat[-1] = (cur_pts_cat[-1][0], cur_pts_cat[-1][1], b_val)
+                                cur_pts_cat.append((c4[0], c4[1], 0.0))
+                                cur_end_cat = c4
+                            else:
+                                arc_info = compute_cad_arc_bulge(c4, c3, c2, c1, inverted_handedness=False)
+                                b_val = arc_info["bulge"] if arc_info else 0.0
+                                cur_pts_cat[-1] = (cur_pts_cat[-1][0], cur_pts_cat[-1][1], -b_val)
+                                cur_pts_cat.append((c1[0], c1[1], 0.0))
+                                cur_end_cat = c1
+                            if len(cur_pts_cat) > 3 and math.hypot(cur_end_cat[0] - first_pt_cat[0], cur_end_cat[1] - first_pt_cat[1]) < 0.35:
+                                if first_pt_cat not in boundary_cut_points and cur_end_cat not in boundary_cut_points:
+                                    closed_chains_cat.append((cur_pts_cat[:-1], True))
+                                else:
+                                    open_chains_cat.append(cur_pts_cat)
+                                cur_pts_cat = []
+                                cur_end_cat = None
+                                first_pt_cat = None
+                        else:
+                            open_chains_cat.append(cur_pts_cat)
+                            arc_info = compute_cad_arc_bulge(c1, c2, c3, c4, inverted_handedness=False)
+                            b_val = arc_info["bulge"] if arc_info else 0.0
+                            cur_pts_cat = [(c1[0], c1[1], b_val), (c4[0], c4[1], 0.0)]
+                            cur_end_cat = c4
+                            first_pt_cat = c1
 
-            for target_layer, seg_list in layer_segments.items():
-                chains = seg_list
-                for c_pts in chains:
-                    if len(c_pts) < 2:
-                        continue
-                    cad_pts = [to_cad((p.x, p.y)) for p in c_pts]
-                    gap = math.hypot(c_pts[0].x - c_pts[-1].x, c_pts[0].y - c_pts[-1].y)
-                    is_closed = (gap <= 0.35 and len(c_pts) >= 3)
-                    if is_closed:
-                        cad_pts[-1] = cad_pts[0]
-                        closed_loops_count += 1
+            if cur_pts_cat:
+                open_chains_cat.append(cur_pts_cat)
 
-                    msp.add_lwpolyline(
-                        cad_pts,
-                        close=is_closed,
-                        dxfattribs={"layer": target_layer},
-                    )
-                    entities_count += 1
-                    layer_stats[target_layer] += 1
+            phase2_chains_cat = chain_xyb_segments(open_chains_cat, tol=0.30)
+            final_catalog_chains = closed_chains_cat + phase2_chains_cat
+
+            for poly_pts, is_closed in final_catalog_chains:
+                if len(poly_pts) < 2:
+                    continue
+                tot_len = sum(
+                    math.hypot(poly_pts[i + 1][0] - poly_pts[i][0], poly_pts[i + 1][1] - poly_pts[i][1])
+                    for i in range(len(poly_pts) - 1)
+                )
+                if not is_closed and tot_len < 3.0:
+                    continue  # Filter out tiny disconnected remnant segments
+
+                # Strict crop rule: cut profiles touching boundary remain open
+                p_start = (poly_pts[0][0], poly_pts[0][1])
+                p_finish = (poly_pts[-1][0], poly_pts[-1][1])
+                if p_start in boundary_cut_points or p_finish in boundary_cut_points:
+                    is_closed = False
+
+                if is_closed:
+                    closed_loops_count += 1
+
+                mid_x = poly_pts[len(poly_pts) // 2][0]
+                if 45.0 <= mid_x <= 75.0:
+                    t_layer = "03_ТЕРМОМОСТ"
+                elif mid_x < 45.0:
+                    t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
+                elif mid_x > 115.0:
+                    t_layer = "05_СТЕКЛОПАКЕТ"
+                else:
+                    t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
+
+                msp.add_lwpolyline(
+                    poly_pts,
+                    format="xyb",
+                    close=is_closed,
+                    dxfattribs={"layer": t_layer},
+                )
+                entities_count += 1
+                layer_stats[t_layer] += 1
 
         # 7. Save Output Files (DXF and DWG)
         if not output_path:
