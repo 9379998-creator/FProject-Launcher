@@ -61,21 +61,19 @@ def compute_cad_arc_bulge(
     c3: Tuple[float, float],
     c4: Tuple[float, float],
     inverted_handedness: bool = False,
+    max_circularity_error: float = 0.05,
 ) -> Optional[Dict[str, Any]]:
     """
     Detect if a cubic Bezier curve is a circular arc in CAD coordinates and
     calculate its exact mathematical LWPOLYLINE bulge = tan(theta/4).
 
-    Contract (Task 021):
-    In AutoCAD standard 2D WCS/OCS coordinates (+X right, +Y up):
-    Bulge b = tan(theta/4) where theta > 0 for CCW turns and theta < 0 for CW turns.
-    Let chord = c4 - c1, and v = mid - chord_mid.
-    When chord x v < 0 (arc midpoint to the right of chord, center to the left):
-    the traversal is counter-clockwise around the center, so bulge is POSITIVE.
-    When chord x v > 0 (arc midpoint to the left of chord, center to the right):
-    the traversal is clockwise around the center, so bulge is NEGATIVE.
-    When inverted_handedness is True (e.g. rotation matrix swapped X and Y via reflection),
-    the sign of the 2D cross product is inverted to preserve native CAD curvature.
+    Contract (Tasks 021, 022, 023):
+    1. Validates that the curve is genuinely circular (not an arbitrary spline)
+       by checking radial distance error across t in [0.25, 0.75].
+    2. Protects against false giant arcs when sagitta is practically zero.
+    3. Calculates exact radius R, center (xc, yc), sagitta, and bulge.
+    4. Identifies small corner fillets (0.20 <= R <= 0.60 mm) vs larger arcs.
+    5. Inverts cross product sign when inverted_handedness is True (rot == 270 reflection).
     """
     chord_x = c4[0] - c1[0]
     chord_y = c4[1] - c1[1]
@@ -96,6 +94,39 @@ def compute_cad_arc_bulge(
     if sagitta < 1e-4:
         return None
 
+    # Near-straight line guard: if sagitta < 0.02 mm on a long segment, keep as straight line
+    if sagitta < 0.02 and chord_len > 2.0:
+        return None
+
+    # Circle center and radius from 3 points: c1, mid, c4
+    ax, ay = c1[0], c1[1]
+    bx, by = mid_x, mid_y
+    cx, cy = c4[0], c4[1]
+    denom = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(denom) < 1e-7:
+        return None
+
+    ux = ((ax**2 + ay**2)*(by - cy) + (bx**2 + by**2)*(cy - ay) + (cx**2 + cy**2)*(ay - by)) / denom
+    uy = ((ax**2 + ay**2)*(cx - bx) + (bx**2 + by**2)*(ax - cx) + (cx**2 + cy**2)*(bx - ax)) / denom
+    R = math.hypot(ax - ux, ay - uy)
+
+    # Circularity validation across parameter t = 0.25 and 0.75
+    t1 = 0.25; mt1 = 0.75
+    q1_x = mt1**3 * ax + 3.0 * mt1**2 * t1 * c2[0] + 3.0 * mt1 * t1**2 * c3[0] + t1**3 * cx
+    q1_y = mt1**3 * ay + 3.0 * mt1**2 * t1 * c2[1] + 3.0 * mt1 * t1**2 * c3[1] + t1**3 * cy
+
+    t2 = 0.75; mt2 = 0.25
+    q2_x = mt2**3 * ax + 3.0 * mt2**2 * t2 * c2[0] + 3.0 * mt2 * t2**2 * c3[0] + t2**3 * cx
+    q2_y = mt2**3 * ay + 3.0 * mt2**2 * t2 * c2[1] + 3.0 * mt2 * t2**2 * c3[1] + t2**3 * cy
+
+    err1 = abs(math.hypot(q1_x - ux, q1_y - uy) - R)
+    err2 = abs(math.hypot(q2_x - ux, q2_y - uy) - R)
+    circ_err = max(err1, err2)
+
+    if circ_err > max_circularity_error:
+        # Non-circular Bezier curve
+        return None
+
     # 2D cross product: chord_x * vy - chord_y * vx
     cross = chord_x * vy - chord_y * vx
     if inverted_handedness:
@@ -103,14 +134,16 @@ def compute_cad_arc_bulge(
     else:
         sign = -1.0 if cross > 0 else 1.0
     bulge = sign * (2.0 * sagitta / chord_len)
-    R = (chord_len**2) / (8.0 * sagitta) + sagitta / 2.0
 
     return {
         "start": c1,
         "end": c4,
         "bulge": bulge,
         "R_mm": R,
+        "center": (ux, uy),
         "sagitta_mm": sagitta,
+        "circularity_error_mm": circ_err,
+        "is_small_fillet": (0.20 <= R <= 0.60),
     }
 
 
@@ -419,7 +452,14 @@ def convert_dxf_to_dwg_via_accore(dxf_path: Path, dwg_path: Path) -> bool:
         try:
             dwg_path.unlink()
         except OSError:
-            pass
+            # File is locked by an external AutoCAD GUI process, use alternative non-locked path
+            logger.warning("Target DWG is locked by another process: %s", dwg_path)
+            dwg_path = dwg_path.with_name(f"{dwg_path.stem}_fixed.dwg")
+            if dwg_path.exists():
+                try:
+                    dwg_path.unlink()
+                except OSError:
+                    pass
 
     dwg_abs = str(dwg_path.resolve()).replace("\\", "/")
     scr_path = dxf_path.parent / f"_convert_{dxf_path.stem}.scr"
@@ -946,6 +986,7 @@ class PDFCadExtractor:
             logger.warning("Error extracting text: %s", e)
 
         # 6. Extract Vectors: Reference mode (native bulges & drawing-order chaining) vs Catalog mode
+        fillet_registry = []
         if mode == "reference":
             prims_by_layer = defaultdict(list)
             for idx, d in enumerate(drawings):
@@ -1119,6 +1160,15 @@ class PDFCadExtractor:
                         if not cur_pts:
                             arc_info = compute_cad_arc_bulge(c1, c2, c3, c4, inverted_handedness=inverted_handedness)
                             b_val = arc_info["bulge"] if arc_info else 0.0
+                            if arc_info:
+                                fillet_registry.append({
+                                    "idx": prim["idx"],
+                                    "layer": target_layer,
+                                    "R_mm": arc_info["R_mm"],
+                                    "bulge": b_val,
+                                    "center": arc_info["center"],
+                                    "is_small_fillet": arc_info["is_small_fillet"],
+                                })
                             cur_pts = [(c1[0], c1[1], b_val), (c4[0], c4[1], 0.0)]
                             cur_end = c4
                             first_pt = c1
@@ -1133,6 +1183,15 @@ class PDFCadExtractor:
                                     arc_info = compute_cad_arc_bulge(c4, c3, c2, c1, inverted_handedness=inverted_handedness)
                                     next_p = c1
                                 b_val = arc_info["bulge"] if arc_info else 0.0
+                                if arc_info:
+                                    fillet_registry.append({
+                                        "idx": prim["idx"],
+                                        "layer": target_layer,
+                                        "R_mm": arc_info["R_mm"],
+                                        "bulge": b_val,
+                                        "center": arc_info["center"],
+                                        "is_small_fillet": arc_info["is_small_fillet"],
+                                    })
                                 cur_pts[-1] = (cur_pts[-1][0], cur_pts[-1][1], b_val)
                                 cur_pts.append((next_p[0], next_p[1], 0.0))
                                 cur_end = next_p
@@ -1145,6 +1204,15 @@ class PDFCadExtractor:
                                 open_chains.append(cur_pts)
                                 arc_info = compute_cad_arc_bulge(c1, c2, c3, c4, inverted_handedness=inverted_handedness)
                                 b_val = arc_info["bulge"] if arc_info else 0.0
+                                if arc_info:
+                                    fillet_registry.append({
+                                        "idx": prim["idx"],
+                                        "layer": target_layer,
+                                        "R_mm": arc_info["R_mm"],
+                                        "bulge": b_val,
+                                        "center": arc_info["center"],
+                                        "is_small_fillet": arc_info["is_small_fillet"],
+                                    })
                                 cur_pts = [(c1[0], c1[1], b_val), (c4[0], c4[1], 0.0)]
                                 cur_end = c4
                                 first_pt = c1
@@ -1266,6 +1334,9 @@ class PDFCadExtractor:
             "scaleFactor": scale_factor,
             "scaleUnit": "mm",
             "scaleStr": scale_desc,
+            "filletRegistry": fillet_registry,
+            "smallFilletsCount": sum(1 for f in fillet_registry if f.get("is_small_fillet")),
+            "largeArcsCount": sum(1 for f in fillet_registry if not f.get("is_small_fillet")),
         }
 
 
