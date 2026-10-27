@@ -60,6 +60,7 @@ def compute_cad_arc_bulge(
     c2: Tuple[float, float],
     c3: Tuple[float, float],
     c4: Tuple[float, float],
+    inverted_handedness: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Detect if a cubic Bezier curve is a circular arc in CAD coordinates and
@@ -73,6 +74,8 @@ def compute_cad_arc_bulge(
     the traversal is counter-clockwise around the center, so bulge is POSITIVE.
     When chord x v > 0 (arc midpoint to the left of chord, center to the right):
     the traversal is clockwise around the center, so bulge is NEGATIVE.
+    When inverted_handedness is True (e.g. rotation matrix swapped X and Y via reflection),
+    the sign of the 2D cross product is inverted to preserve native CAD curvature.
     """
     chord_x = c4[0] - c1[0]
     chord_y = c4[1] - c1[1]
@@ -95,7 +98,10 @@ def compute_cad_arc_bulge(
 
     # 2D cross product: chord_x * vy - chord_y * vx
     cross = chord_x * vy - chord_y * vx
-    sign = -1.0 if cross > 0 else 1.0
+    if inverted_handedness:
+        sign = 1.0 if cross > 0 else -1.0
+    else:
+        sign = -1.0 if cross > 0 else 1.0
     bulge = sign * (2.0 * sagitta / chord_len)
     R = (chord_len**2) / (8.0 * sagitta) + sagitta / 2.0
 
@@ -941,7 +947,7 @@ class PDFCadExtractor:
 
         # 6. Extract Vectors: Reference mode (native bulges & drawing-order chaining) vs Catalog mode
         if mode == "reference":
-            raw_polys = []
+            prims_by_layer = defaultdict(list)
             for idx, d in enumerate(drawings):
                 if idx in dim_drawings_indices:
                     continue
@@ -1005,85 +1011,155 @@ class PDFCadExtractor:
                         t_layer = "01_ПРОФИЛИ_ОКНА"
                         t_color = 7
 
-                subpath_vertices = []
-                cur_pts = []
-
                 for it in items:
                     if it[0] == "l":
                         c1 = to_cad(it[1])
                         c2 = to_cad(it[2])
-                        if not cur_pts:
-                            cur_pts.append((c1[0], c1[1], 0.0))
-                        elif math.hypot(c1[0] - cur_pts[-1][0], c1[1] - cur_pts[-1][1]) > 0.05:
-                            subpath_vertices.append(cur_pts)
-                            cur_pts = [(c1[0], c1[1], 0.0)]
-                        cur_pts.append((c2[0], c2[1], 0.0))
-
+                        prims_by_layer[(t_layer, t_color)].append({
+                            "idx": idx, "kind": "l", "p1": c1, "p2": c2
+                        })
                     elif it[0] == "c":
-                        p1, p2, p3, p4 = it[1], it[2], it[3], it[4]
-                        c1 = to_cad(p1)
-                        c2 = to_cad(p2)
-                        c3 = to_cad(p3)
-                        c4 = to_cad(p4)
-                        arc_info = compute_cad_arc_bulge(c1, c2, c3, c4)
-                        if arc_info:
-                            start_p = arc_info["start"]
-                            end_p = arc_info["end"]
-                            b_val = arc_info["bulge"]
-                            if not cur_pts:
-                                cur_pts.append((start_p[0], start_p[1], b_val))
-                            else:
-                                if math.hypot(start_p[0] - cur_pts[-1][0], start_p[1] - cur_pts[-1][1]) > 0.05:
-                                    subpath_vertices.append(cur_pts)
-                                    cur_pts = [(start_p[0], start_p[1], b_val)]
-                                else:
-                                    cur_pts[-1] = (cur_pts[-1][0], cur_pts[-1][1], b_val)
-                            cur_pts.append((end_p[0], end_p[1], 0.0))
-                        else:
-                            if not cur_pts:
-                                cur_pts.append((c1[0], c1[1], 0.0))
-                            cur_pts.append((c4[0], c4[1], 0.0))
-
+                        c1 = to_cad(it[1])
+                        c2 = to_cad(it[2])
+                        c3 = to_cad(it[3])
+                        c4 = to_cad(it[4])
+                        prims_by_layer[(t_layer, t_color)].append({
+                            "idx": idx, "kind": "c", "c1": c1, "c2": c2, "c3": c3, "c4": c4
+                        })
                     elif it[0] == "re":
                         r_box = it[1]
                         p_tl = to_cad((r_box.x0, r_box.y0))
                         p_tr = to_cad((r_box.x1, r_box.y0))
                         p_br = to_cad((r_box.x1, r_box.y1))
                         p_bl = to_cad((r_box.x0, r_box.y1))
-                        subpath_vertices.append([
-                            (p_tl[0], p_tl[1], 0.0),
-                            (p_tr[0], p_tr[1], 0.0),
-                            (p_br[0], p_br[1], 0.0),
-                            (p_bl[0], p_bl[1], 0.0),
-                            (p_tl[0], p_tl[1], 0.0),
-                        ])
-
-                if cur_pts:
-                    subpath_vertices.append(cur_pts)
-
-                for poly_pts in subpath_vertices:
-                    if len(poly_pts) >= 2:
-                        raw_polys.append({
-                            "pts": poly_pts,
-                            "layer": t_layer,
-                            "color": t_color
+                        prims_by_layer[(t_layer, t_color)].append({
+                            "idx": idx, "kind": "re",
+                            "pts": [
+                                (p_tl[0], p_tl[1], 0.0),
+                                (p_tr[0], p_tr[1], 0.0),
+                                (p_br[0], p_br[1], 0.0),
+                                (p_bl[0], p_bl[1], 0.0),
+                                (p_tl[0], p_tl[1], 0.0),
+                            ]
                         })
 
-            # Task 021: Faithful native contour and cavity geometry reconstruction
-            # Group segments by (layer, color) to guarantee profile chambers and boundaries
-            # are merged seamlessly into continuous closed LWPOLYLINEs without cross-layer bleed.
-            layer_groups = defaultdict(list)
-            for p in raw_polys:
-                layer_groups[(p["layer"], p["color"])].append(p["pts"])
+            inverted_handedness = (rot == 270)
 
-            for (target_layer, target_color), seg_list in layer_groups.items():
-                # For hatch pattern fills, preserve each hatch line without over-chaining
+            for (target_layer, target_color), prim_list in prims_by_layer.items():
                 if "ШТРИХОВКА" in target_layer:
-                    chains = [(s, False) for s in seg_list]
-                else:
-                    chains = chain_xyb_segments(seg_list, tol=0.35)
+                    # For hatches, preserve individual lines without over-chaining
+                    for p in prim_list:
+                        if p["kind"] == "l":
+                            msp.add_lwpolyline(
+                                [(p["p1"][0], p["p1"][1], 0.0), (p["p2"][0], p["p2"][1], 0.0)],
+                                format="xyb",
+                                close=False,
+                                dxfattribs={"layer": target_layer, "color": target_color}
+                            )
+                            entities_count += 1
+                            layer_stats[target_layer] += 1
+                        elif p["kind"] == "re":
+                            msp.add_lwpolyline(
+                                p["pts"][:-1],
+                                format="xyb",
+                                close=True,
+                                dxfattribs={"layer": target_layer, "color": target_color}
+                            )
+                            entities_count += 1
+                            closed_loops_count += 1
+                            layer_stats[target_layer] += 1
+                    continue
 
-                for poly_pts, is_closed in chains:
+                # Structural / Profile layers:
+                # Phase 1: Sequential run chaining along contiguous drawing order
+                closed_chains = []
+                open_chains = []
+                cur_pts = []
+                cur_end = None
+                first_pt = None
+                max_gap = 0.50
+
+                for prim in prim_list:
+                    kind = prim["kind"]
+                    if kind == "re":
+                        if cur_pts:
+                            open_chains.append(cur_pts)
+                            cur_pts = []
+                            cur_end = None
+                            first_pt = None
+                        closed_chains.append((prim["pts"][:-1], True))
+                        continue
+
+                    if kind == "l":
+                        p1, p2 = prim["p1"], prim["p2"]
+                        if not cur_pts:
+                            cur_pts = [(p1[0], p1[1], 0.0), (p2[0], p2[1], 0.0)]
+                            cur_end = p2
+                            first_pt = p1
+                        else:
+                            d1 = math.hypot(cur_end[0] - p1[0], cur_end[1] - p1[1])
+                            d2 = math.hypot(cur_end[0] - p2[0], cur_end[1] - p2[1])
+                            if min(d1, d2) < max_gap:
+                                next_p = p2 if d1 <= d2 else p1
+                                cur_pts.append((next_p[0], next_p[1], 0.0))
+                                cur_end = next_p
+                                if len(cur_pts) > 3 and math.hypot(cur_end[0] - first_pt[0], cur_end[1] - first_pt[1]) < 0.35:
+                                    closed_chains.append((cur_pts[:-1], True))
+                                    cur_pts = []
+                                    cur_end = None
+                                    first_pt = None
+                            else:
+                                open_chains.append(cur_pts)
+                                cur_pts = [(p1[0], p1[1], 0.0), (p2[0], p2[1], 0.0)]
+                                cur_end = p2
+                                first_pt = p1
+
+                    elif kind == "c":
+                        c1, c2, c3, c4 = prim["c1"], prim["c2"], prim["c3"], prim["c4"]
+                        if not cur_pts:
+                            arc_info = compute_cad_arc_bulge(c1, c2, c3, c4, inverted_handedness=inverted_handedness)
+                            b_val = arc_info["bulge"] if arc_info else 0.0
+                            cur_pts = [(c1[0], c1[1], b_val), (c4[0], c4[1], 0.0)]
+                            cur_end = c4
+                            first_pt = c1
+                        else:
+                            d1 = math.hypot(cur_end[0] - c1[0], cur_end[1] - c1[1])
+                            d4 = math.hypot(cur_end[0] - c4[0], cur_end[1] - c4[1])
+                            if min(d1, d4) < max_gap:
+                                if d1 <= d4:
+                                    arc_info = compute_cad_arc_bulge(c1, c2, c3, c4, inverted_handedness=inverted_handedness)
+                                    next_p = c4
+                                else:
+                                    arc_info = compute_cad_arc_bulge(c4, c3, c2, c1, inverted_handedness=inverted_handedness)
+                                    next_p = c1
+                                b_val = arc_info["bulge"] if arc_info else 0.0
+                                cur_pts[-1] = (cur_pts[-1][0], cur_pts[-1][1], b_val)
+                                cur_pts.append((next_p[0], next_p[1], 0.0))
+                                cur_end = next_p
+                                if len(cur_pts) > 3 and math.hypot(cur_end[0] - first_pt[0], cur_end[1] - first_pt[1]) < 0.35:
+                                    closed_chains.append((cur_pts[:-1], True))
+                                    cur_pts = []
+                                    cur_end = None
+                                    first_pt = None
+                            else:
+                                open_chains.append(cur_pts)
+                                arc_info = compute_cad_arc_bulge(c1, c2, c3, c4, inverted_handedness=inverted_handedness)
+                                b_val = arc_info["bulge"] if arc_info else 0.0
+                                cur_pts = [(c1[0], c1[1], b_val), (c4[0], c4[1], 0.0)]
+                                cur_end = c4
+                                first_pt = c1
+
+                if cur_pts:
+                    if len(cur_pts) > 3 and math.hypot(cur_end[0] - first_pt[0], cur_end[1] - first_pt[1]) < 0.35:
+                        closed_chains.append((cur_pts[:-1], True))
+                    else:
+                        open_chains.append(cur_pts)
+
+                # Phase 2: Spatial chaining for remaining open segments
+                phase2_chains = chain_xyb_segments(open_chains, tol=0.25)
+                final_chains = closed_chains + phase2_chains
+
+                for poly_pts, is_closed in final_chains:
                     if len(poly_pts) < 2:
                         continue
                     if is_closed:
