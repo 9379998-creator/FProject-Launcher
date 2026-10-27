@@ -30,6 +30,8 @@ import fitz  # PyMuPDF
 import ezdxf
 from ezdxf.enums import TextEntityAlignment
 
+from app.cad.component_assembler import assemble_physical_components
+
 logger = logging.getLogger(__name__)
 
 # Standard conversion: 1 typographical point = 25.4 / 72 mm = 0.35277778 mm
@@ -1304,6 +1306,9 @@ class PDFCadExtractor:
         dxf_path = output_path.with_suffix(".dxf")
         dwg_path = output_path.with_suffix(".dwg")
 
+        # Assemble entities into native physical components (Task 024)
+        comp_summary = assemble_physical_components(dxf_doc)
+
         try:
             dxf_doc.saveas(str(dxf_path))
         except PermissionError:
@@ -1311,7 +1316,8 @@ class PDFCadExtractor:
             dxf_doc.saveas(str(alt_path))
             dxf_path = alt_path
 
-        logger.info("Saved CAD DXF to %s (%d entities, %d closed loops)", dxf_path, entities_count, closed_loops_count)
+        logger.info("Saved CAD DXF to %s (%d entities, %d closed loops, %d physical components)",
+                    dxf_path, entities_count, closed_loops_count, comp_summary.get("componentsCount", 0))
 
         dwg_success = False
         if compile_dwg:
@@ -1337,6 +1343,8 @@ class PDFCadExtractor:
             "filletRegistry": fillet_registry,
             "smallFilletsCount": sum(1 for f in fillet_registry if f.get("is_small_fillet")),
             "largeArcsCount": sum(1 for f in fillet_registry if not f.get("is_small_fillet")),
+            "componentsCount": comp_summary.get("componentsCount", 0),
+            "components": comp_summary.get("groups", []),
         }
 
 
