@@ -1,14 +1,16 @@
 """
-FERO CAD Physical Component Assembly Engine (Task 024)
-======================================================
+FERO CAD Physical Component Assembly Engine (Tasks 024 & 032)
+=============================================================
 Assembles individual CAD polylines, cavities, and hatches into
 distinct, selectable, and movable physical components using native
 AutoCAD groups (ACAD_GROUP).
 
-Duality Contract:
-- Level 1: Every contour and cavity remains an independent, closed LWPOLYLINE.
-- Level 2: The physical component binds outer perimeter, cavities, and hatch
-  into a native AutoCAD group, enabling 1-click selection and movement in CAD.
+Multi-Section Spatial Separation Contract (Task 032):
+- Distinct vertical/spatial sections (e.g. Schüco AWS 70 TipTronic vs SL.HI)
+  are separated into independent spatial clusters so identical materials
+  from separate sections are NEVER merged into a single global group.
+- Each glass unit is its own discrete physical assembly.
+- All grouping is coordinate-offset invariant.
 """
 
 import math
@@ -62,180 +64,90 @@ def assemble_physical_components(doc: Drawing) -> Dict[str, Any]:
     if not all_entities:
         return {"componentsCount": 0, "groups": []}
 
-    # Group table in ezdxf
     group_table = doc.groups
 
-    # Target physical component taxonomy (Task 024 Component Map)
-    component_defs = [
-        # 1. Glass unit assembly
-        {
-            "id": "PART_01_GLASS_UNIT",
-            "name": "Стеклопакет двухкамерный",
-            "layer_filter": lambda lyr: "СТЕКЛОПАКЕТ" in lyr,
-            "bbox_filter": lambda b: 350.0 <= b[0] <= 445.0 and 390.0 <= b[1] <= 450.0,
-        },
-        # 2. Exterior glass seal
-        {
-            "id": "PART_02_SEAL_GLASS_EXT",
-            "name": "Наружный EPDM уплотнитель стеклопакета",
-            "layer_filter": lambda lyr: "КОМПЛЕКТУЮЩИЕ" in lyr or "ГЕРМЕТИК" in lyr,
-            "bbox_filter": lambda b: 350.0 <= b[0] <= 365.0 and 395.0 <= b[1] <= 412.0,
-        },
-        # 3. Interior glazing bead seal
-        {
-            "id": "PART_03_SEAL_GLASS_INT",
-            "name": "Внутренний уплотнитель штапика",
-            "layer_filter": lambda lyr: "КОМПЛЕКТУЮЩИЕ" in lyr or "ГЕРМЕТИК" in lyr,
-            "bbox_filter": lambda b: 410.0 <= b[0] <= 430.0 and 395.0 <= b[1] <= 415.0,
-        },
-        # 4. Glazing bridge & setting blocks
-        {
-            "id": "PART_04_GLAZING_BRIDGE_SHIM",
-            "name": "Опорная подкладка стеклопакета и фальцевый вкладыш",
-            "layer_filter": lambda lyr: "КОМПЛЕКТУЮЩИЕ" in lyr,
-            "bbox_filter": lambda b: 365.0 <= b[0] <= 410.0 and 385.0 <= b[1] <= 405.0,
-        },
-        # 5. Glazing bead (штапик)
-        {
-            "id": "PART_05_GLAZING_BEAD",
-            "name": "Штапик алюминиевый прижимной",
-            "layer_filter": lambda lyr: "ПРОФИЛИ" in lyr,
-            "bbox_filter": lambda b: 400.0 <= b[0] <= 435.0 and 350.0 <= b[1] <= 395.0,
-        },
-        # 6. Sash: outer aluminium shell
-        {
-            "id": "PART_06_SASH_OUTER_ALU",
-            "name": "Наружная чаша створки (алюминий)",
-            "layer_filter": lambda lyr: "ПРОФИЛИ" in lyr,
-            "bbox_filter": lambda b: 350.0 <= b[0] <= 372.0 and 335.0 <= b[1] <= 365.0,
-        },
-        # 7. Sash: inner aluminium shell
-        {
-            "id": "PART_07_SASH_INNER_ALU",
-            "name": "Внутренняя чаша створки (алюминий)",
-            "layer_filter": lambda lyr: "ПРОФИЛИ" in lyr,
-            "bbox_filter": lambda b: 405.0 <= b[0] <= 435.0 and 335.0 <= b[1] <= 365.0,
-        },
-        # 8. Sash thermal break assembly
-        {
-            "id": "PART_08_SASH_THERMAL_BREAK",
-            "name": "Полиамидные термомосты створки",
-            "layer_filter": lambda lyr: "ПРОФИЛИ" in lyr or "ТЕРМОМОСТ" in lyr,
-            "bbox_filter": lambda b: 368.0 <= b[0] <= 408.0 and 342.0 <= b[1] <= 360.0,
-        },
-        # 9. Central weather / acoustic seal
-        {
-            "id": "PART_09_SEAL_CENTRAL",
-            "name": "Средний лепестковый уплотнитель притвора",
-            "layer_filter": lambda lyr: "КОМПЛЕКТУЮЩИЕ" in lyr or "ТЕРМОМОСТ" in lyr,
-            "bbox_filter": lambda b: 368.0 <= b[0] <= 385.0 and 330.0 <= b[1] <= 345.0,
-        },
-        # 10. Frame: outer aluminium shell
-        {
-            "id": "PART_10_FRAME_OUTER_ALU",
-            "name": "Наружная чаша рамы (алюминий)",
-            "layer_filter": lambda lyr: "ПРОФИЛИ" in lyr,
-            "bbox_filter": lambda b: 350.0 <= b[0] <= 375.0 and 305.0 <= b[1] <= 335.0,
-        },
-        # 11. Frame: inner aluminium shell
-        {
-            "id": "PART_11_FRAME_INNER_ALU",
-            "name": "Внутренняя чаша рамы (алюминий)",
-            "layer_filter": lambda lyr: "ПРОФИЛИ" in lyr,
-            "bbox_filter": lambda b: 405.0 <= b[0] <= 440.0 and 305.0 <= b[1] <= 335.0,
-        },
-        # 12. Frame thermal break assembly
-        {
-            "id": "PART_12_FRAME_THERMAL_BREAK",
-            "name": "Полиамидные термомосты рамы",
-            "layer_filter": lambda lyr: "ПРОФИЛИ" in lyr or "ТЕРМОМОСТ" in lyr,
-            "bbox_filter": lambda b: 368.0 <= b[0] <= 408.0 and 365.0 <= b[1] <= 385.0,
-        },
-        # 13. Subframe base profile
-        {
-            "id": "PART_13_SUBFRAME_PROFILE",
-            "name": "Подставочный базовый профиль под рамой",
-            "layer_filter": lambda lyr: "ПРОФИЛИ" in lyr,
-            "bbox_filter": lambda b: 365.0 <= b[0] <= 410.0 and 305.0 <= b[1] <= 330.0,
-        },
-        # 14. Exterior sill / flashing
-        {
-            "id": "PART_14_EXTERNAL_SILL_ALU",
-            "name": "Наружный металлический отлив / капельник",
-            "layer_filter": lambda lyr: "ОТЛИВ" in lyr,
-            "bbox_filter": lambda b: True,
-        },
-        # 15. Wall insulation wave
-        {
-            "id": "PART_15_MINERAL_WOOL_WAVE",
-            "name": "Минераловатный утеплитель примыкания (волна)",
-            "layer_filter": lambda lyr: "УТЕПЛИТЕЛЬ_ВОЛНА" in lyr,
-            "bbox_filter": lambda b: True,
-        },
-        # 16. Polyurethane foam insulation
-        {
-            "id": "PART_16_FOAM_INSULATION",
-            "name": "Монтажная пена теплоизоляционного шва",
-            "layer_filter": lambda lyr: "ШТРИХОВКА_УТЕПЛИТЕЛЬ" in lyr or "ШТРИХОВКА_ОБЩАЯ" in lyr,
-            "bbox_filter": lambda b: True,
-        },
-        # 17. Masonry / wall reveal substrate
-        {
-            "id": "PART_17_WALL_SUBSTRATE",
-            "name": "Стеновое основание (четверть проёма)",
-            "layer_filter": lambda lyr: "ШТРИХОВКА_СТЕНЫ" in lyr,
-            "bbox_filter": lambda b: True,
-        },
-    ]
-
-    # Target physical component taxonomy (Task 024 Component Map)
-    cdef_by_id = {c["id"]: c for c in component_defs}
-
-    # Assign entities to components
+    cdef_by_id = {}
     component_entities = defaultdict(list)
-    assigned_handles = set()
 
-    # Pass 1: Assign structural and accessory entities matching component definitions
+    # 1. Filter out dimensions, annotations, callouts, and article notes
+    structural_entities = []
     for ent in all_entities:
         lyr = ent.dxf.layer
         lyr_up = lyr.upper()
-        # Never group DIMENSION entities or witness lines into parts
         if "РАЗМЕР" in lyr_up or "DIMENSION" in ent.dxftype().upper() or "DIMENSION" in lyr_up:
             continue
-        # Never group general annotations / callouts / articles into parts
-        if "ВЫНОСКИ" in lyr_up or "НАДПИСИ" in lyr_up or "АРТИКУЛ" in lyr_up or "ARTICLE" in lyr_up or "АННОТАЦИИ" in lyr_up or "ОБОЗНАЧЕНИЯ" in lyr_up:
+        if any(k in lyr_up for k in ("ОБОЗНАЧ", "АРТИКУЛ", "ВЫНОСК", "ARTICLE", "CALLOUT", "НАДПИСИ", "АННОТАЦИИ")):
             continue
+        structural_entities.append(ent)
 
-        b = get_entity_bbox(ent)
-        for cdef in component_defs:
-            if cdef["layer_filter"](lyr) and cdef["bbox_filter"](b):
-                component_entities[cdef["id"]].append(ent)
-                assigned_handles.add(ent.dxf.handle)
-                break
+    if not structural_entities:
+        return {"componentsCount": 0, "groups": []}
 
-    # Pass 1b: Catalog mode fallback for extruded products
-    if not component_entities:
-        catalog_layer_map = {
-            "01_АЛЮМИНИЙ_НАРУЖНЫЙ": ("PART_ALU_SASH_OUTER", "Профиль наружной чаши (алюминий)"),
-            "01_АЛЮМИНИЙ_ВНУТРЕННИЙ": ("PART_ALU_SASH_INNER", "Профиль внутренней чаши (алюминий)"),
-            "03_ТЕРМОМОСТ": ("PART_THERMAL_BREAKS", "Термоизоляционные мосты"),
-            "04_УПЛОТНИТЕЛИ": ("PART_SEALS_EPDM", "Уплотнители фальца / EPDM"),
-            "05_СТЕКЛОПАКЕТ": ("PART_GLASS_UNIT", "Заполнение / стеклопакет"),
-        }
-        for ent in all_entities:
-            lyr = ent.dxf.layer
-            lyr_up = lyr.upper()
-            if "РАЗМЕР" in lyr_up or "DIMENSION" in ent.dxftype().upper() or "DIMENSION" in lyr_up:
-                continue
-            if "ОБОЗНАЧ" in lyr_up or "АРТИКУЛ" in lyr_up or "ВЫНОСК" in lyr_up or "ARTICLE" in lyr_up or "CALLOUT" in lyr_up:
-                continue
-            if lyr in catalog_layer_map:
-                p_id, p_name = catalog_layer_map[lyr]
-                component_entities[p_id].append(ent)
-                if p_id not in cdef_by_id:
-                    cdef_by_id[p_id] = {"name": p_name}
+    # 2. Detect independent spatial clusters along Y (e.g. separate sections on Schüco sheet E 2-2)
+    # A gap of > 10 mm between bounding intervals indicates distinct physical assemblies.
+    ent_boxes = [(ent, get_entity_bbox(ent)) for ent in structural_entities]
+    valid_boxes = [eb for eb in ent_boxes if bbox_area(eb[1]) > 0.0 or (eb[1][2] - eb[1][0] > 0.0)]
 
-    # Pass 2: Create AutoCAD groups (ACAD_GROUP) for each populated component
+    if valid_boxes:
+        sorted_boxes = sorted(valid_boxes, key=lambda eb: eb[1][1])
+        clusters: List[List[DXFGraphic]] = []
+        cur_cluster: List[DXFGraphic] = [sorted_boxes[0][0]]
+        cur_min_y = sorted_boxes[0][1][1]
+        cur_max_y = sorted_boxes[0][1][3]
+
+        for ent, b in sorted_boxes[1:]:
+            y0, y1 = b[1], b[3]
+            if y0 <= cur_max_y + 10.0:
+                cur_cluster.append(ent)
+                cur_min_y = min(cur_min_y, y0)
+                cur_max_y = max(cur_max_y, y1)
+            else:
+                clusters.append(cur_cluster)
+                cur_cluster = [ent]
+                cur_min_y = y0
+                cur_max_y = y1
+        if cur_cluster:
+            clusters.append(cur_cluster)
+
+        # Only treat substantive multi-entity assemblies (>= 15 entities) as independent sections
+        substantive_clusters = [c for c in clusters if len(c) >= 15]
+        if len(substantive_clusters) >= 2:
+            clusters = substantive_clusters
+        else:
+            clusters = [structural_entities]
+    else:
+        clusters = [structural_entities]
+
+    num_clusters = len(clusters)
+    logger.info("Identified %d independent spatial section cluster(s)", num_clusters)
+
+    # 3. Layer mapping for architectural components (coordinate-offset invariant)
+    catalog_layer_defs = [
+        ("05_СТЕКЛОПАКЕТ", "PART_GLASS_UNIT", "Заполнение / стеклопакет"),
+        ("01_АЛЮМИНИЙ_НАРУЖНЫЙ", "PART_ALU_OUTER", "Профиль наружной чаши (алюминий)"),
+        ("01_АЛЮМИНИЙ_ВНУТРЕННИЙ", "PART_ALU_INNER", "Профиль внутренней чаши (алюминий)"),
+        ("01_АЛЮМИНИЙ", "PART_ALU_PROFILE", "Профиль алюминиевый"),
+        ("01_ПРОФИЛИ", "PART_PROFILES", "Профили фасадные"),
+        ("03_ТЕРМОМОСТ", "PART_THERMAL_BREAKS", "Термоизоляционные мосты"),
+        ("04_УПЛОТНИТЕЛИ", "PART_SEALS_EPDM", "Уплотнители фальца / EPDM"),
+        ("ОТЛИВ", "PART_EXTERNAL_SILL", "Отлив / капельник"),
+        ("УТЕПЛИТЕЛЬ", "PART_INSULATION", "Утеплитель примыкания"),
+    ]
+
+    for cluster_idx, cluster_ents in enumerate(clusters):
+        suffix = f"_S{cluster_idx + 1}" if num_clusters > 1 else ""
+        section_desc = f" (сечение {cluster_idx + 1})" if num_clusters > 1 else ""
+
+        for l_key, p_id_base, p_desc_base in catalog_layer_defs:
+            p_id = f"{p_id_base}{suffix}"
+            p_desc = f"{p_desc_base}{section_desc}"
+
+            matching = [e for e in cluster_ents if l_key in e.dxf.layer.upper()]
+            if matching:
+                component_entities[p_id].extend(matching)
+                cdef_by_id[p_id] = {"name": p_desc}
+
+    # 4. Create AutoCAD groups (ACAD_GROUP) for each populated component
     created_groups = []
 
     for comp_id, entities in component_entities.items():
@@ -245,13 +157,11 @@ def assemble_physical_components(doc: Drawing) -> Dict[str, Any]:
         part_name = comp_id
         part_desc = cdef["name"]
 
-        # Check if group name already exists
         if part_name in group_table:
             grp = group_table.get(part_name)
         else:
             grp = group_table.new(name=part_name, description=part_desc)
 
-        # Extend group with entities
         grp.extend(entities)
         created_groups.append({
             "id": comp_id,

@@ -568,6 +568,96 @@ def convert_dxf_to_dwg_via_accore(dxf_path: Path, dwg_path: Path) -> bool:
                 except OSError:
                     pass
 
+def plot_dwg_to_pdf_via_accore(dwg_path: Path, pdf_path: Path) -> bool:
+    """
+    Plot a native binary DWG file into a vector PDF file using AutoCAD accoreconsole.exe
+    headless engine and the proven international _.-PLOT command syntax (Task 032).
+    """
+    accore_candidates = [
+        Path(r"C:\Program Files\Autodesk\AutoCAD 2024\accoreconsole.exe"),
+        Path(r"C:\Program Files\Autodesk\AutoCAD 2025\accoreconsole.exe"),
+        Path(r"C:\Program Files\Autodesk\AutoCAD 2026\accoreconsole.exe"),
+        Path(r"C:\Program Files\Autodesk\AutoCAD 2023\accoreconsole.exe"),
+    ]
+    accore_exe = None
+    for c in accore_candidates:
+        if c.exists():
+            accore_exe = c
+            break
+
+    if not accore_exe:
+        logger.warning("AutoCAD accoreconsole.exe not found on system for plotting")
+        return False
+
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    if pdf_path.exists():
+        try:
+            pdf_path.unlink()
+        except OSError:
+            pass
+
+    has_non_ascii = any(ord(c) > 127 for c in str(dwg_path.resolve()) + str(pdf_path.resolve()))
+    if has_non_ascii:
+        import uuid
+        tmp_id = uuid.uuid4().hex[:8]
+        tmp_dwg = dwg_path.parent / f"_acad_plot_in_{tmp_id}.dwg"
+        tmp_pdf = dwg_path.parent / f"_acad_plot_out_{tmp_id}.pdf"
+        shutil.copy2(dwg_path, tmp_dwg)
+        actual_in = tmp_dwg
+        actual_out = tmp_pdf
+    else:
+        actual_in = dwg_path
+        actual_out = pdf_path
+        tmp_dwg = None
+        tmp_pdf = None
+
+    pdf_abs = str(actual_out.resolve()).replace("\\", "/")
+    scr_path = dwg_path.parent / f"_plot_{actual_in.stem}.scr"
+    scr_content = (
+        "_.-PLOT\n"
+        "_y\n"
+        "\n"
+        "AutoCAD PDF (General Documentation).pc3\n"
+        "\n"
+        "_m\n"
+        "_landscape\n"
+        "_n\n"
+        "_e\n"
+        "_fit\n"
+        "_c\n"
+        "_y\n"
+        "acad.ctb\n"
+        "_y\n"
+        "_a\n"
+        f"{pdf_abs}\n"
+        "_n\n"
+        "_y\n"
+        "_quit\n"
+        "_y\n"
+    )
+    scr_path.write_text(scr_content, encoding="utf-8")
+
+    try:
+        cmd = [str(accore_exe), "/i", str(actual_in.resolve()), "/s", str(scr_path.resolve()), "/readonly", "/l", "en-US"]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        if tmp_pdf and tmp_pdf.exists() and tmp_pdf.stat().st_size > 0:
+            shutil.copy2(tmp_pdf, pdf_path)
+        success = pdf_path.exists() and pdf_path.stat().st_size > 0
+        if success:
+            logger.info("Successfully plotted DWG to reverse PDF: %s (%d bytes)", pdf_path, pdf_path.stat().st_size)
+        return success
+    except Exception as ex:
+        logger.warning("AutoCAD accoreconsole plotting failed: %s", ex)
+        return False
+    finally:
+        for p in (scr_path, tmp_dwg, tmp_pdf):
+            if p and p.exists():
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+
+
 def detect_catalog_scale(page: fitz.Page, crop_box: Optional[fitz.Rect] = None) -> float:
     """
     Dynamic dual-engine catalog scale detector:
@@ -657,18 +747,22 @@ def detect_catalog_scale(page: fitz.Page, crop_box: Optional[fitz.Rect] = None) 
                                     scale_ratio = val / (witness_span * PT_TO_MM)
                                     dim_ratios.append(round(scale_ratio, 3))
 
-    # Case C: Triangle arrowhead dimension constructs (Reynaers MasterLine 8)
+    # Case C: Triangle arrowhead dimension constructs (Reynaers MasterLine 8, Schüco AWS 70)
     triangle_arrow_tips = []
     for d in drawings:
         items = d.get("items", [])
-        if d.get("fill") is not None and len(items) == 3 and all(it[0] == "l" for it in items):
-            pts = [it[1] for it in items]
-            if len(pts) == 3:
-                e0 = math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)
-                e1 = math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y)
-                e2 = math.hypot(pts[2].x - pts[0].x, pts[2].y - pts[0].y)
-                tip = pts[2] if e0 <= e1 and e0 <= e2 else (pts[0] if e1 <= e0 and e1 <= e2 else pts[1])
-                triangle_arrow_tips.append(tip)
+        if d.get("fill") is not None:
+            lines = [it for it in items if it[0] == "l"]
+            if len(lines) >= 3 and len(lines) % 3 == 0:
+                for k in range(0, len(lines), 3):
+                    p0 = lines[k][1]
+                    p1 = lines[k+1][1]
+                    p2 = lines[k+2][1]
+                    e0 = math.hypot(p0.x - p1.x, p0.y - p1.y)
+                    e1 = math.hypot(p1.x - p2.x, p1.y - p2.y)
+                    e2 = math.hypot(p2.x - p0.x, p2.y - p0.y)
+                    tip = p2 if e0 <= e1 and e0 <= e2 else (p0 if e1 <= e0 and e1 <= e2 else p1)
+                    triangle_arrow_tips.append(tip)
 
     for i, t1 in enumerate(triangle_arrow_tips):
         for t2 in triangle_arrow_tips[i + 1 :]:
@@ -695,6 +789,9 @@ def detect_catalog_scale(page: fitz.Page, crop_box: Optional[fitz.Rect] = None) 
                                 for std in [1.0, 2.0, 2.5, 5.0]:
                                     if abs(ratio - std) < 0.10:
                                         dim_ratios.append(std)
+                                        if Counter(dim_ratios)[std] >= 3:
+                                            logger.info("Calibrated catalog scale from dimension lines (early match): %s", std)
+                                            return float(std)
 
     if dim_ratios:
         calibrated_scale = Counter(dim_ratios).most_common(1)[0][0]
@@ -801,9 +898,9 @@ class PDFCadExtractor:
         mode = opts.get("mode", "auto")
         include_hatches = opts.get("include_hatches", False)
 
-        # Determine whether to compile to native DWG
+        # Determine whether to compile to native DWG (Task 032 default: True for CAD exports)
         is_dwg_target = bool(output_path and str(output_path).lower().endswith(".dwg"))
-        compile_dwg = opts.get("compile_dwg", is_dwg_target)
+        compile_dwg = opts.get("compile_dwg", True)
 
         doc = fitz.open(self.pdf_path)
         page_idx = max(0, min(page_number - 1, len(doc) - 1))
@@ -824,19 +921,38 @@ class PDFCadExtractor:
         if crop_box is None:
             crop_box = opts.get("crop_box") or opts.get("crop_rect")
 
+        rot_m = page.rotation_matrix
+        inv_rot_m = ~rot_m
+
         if crop_box:
-            cx0 = min(crop_box[0], crop_box[2])
-            cy0 = min(crop_box[1], crop_box[3])
-            cx1 = max(crop_box[0], crop_box[2])
-            cy1 = max(crop_box[1], crop_box[3])
+            # crop_box is provided in visual viewer coordinates [vx0, vy0, vx1, vy1]
+            vx0 = min(crop_box[0], crop_box[2])
+            vy0 = min(crop_box[1], crop_box[3])
+            vx1 = max(crop_box[0], crop_box[2])
+            vy1 = max(crop_box[1], crop_box[3])
 
             if crop_pad > 0.0:
-                cx0 = max(0.0, cx0 - crop_pad)
-                cy0 = max(0.0, cy0 - crop_pad)
-                cx1 = min(page_rect.width, cx1 + crop_pad)
-                cy1 = min(page_rect.height, cy1 + crop_pad)
-            filter_rect = fitz.Rect(cx0, cy0, cx1, cy1)
+                vx0 = max(0.0, vx0 - crop_pad)
+                vy0 = max(0.0, vy0 - crop_pad)
+                vx1 = min(page_rect.width, vx1 + crop_pad)
+                vy1 = min(page_rect.height, vy1 + crop_pad)
+
+            visual_crop = fitz.Rect(vx0, vy0, vx1, vy1)
+            vis_corners = [
+                fitz.Point(vx0, vy0),
+                fitz.Point(vx1, vy0),
+                fitz.Point(vx1, vy1),
+                fitz.Point(vx0, vy1)
+            ]
+            phys_corners = [p * inv_rot_m for p in vis_corners]
+            filter_rect = fitz.Rect(
+                min(p.x for p in phys_corners),
+                min(p.y for p in phys_corners),
+                max(p.x for p in phys_corners),
+                max(p.y for p in phys_corners),
+            )
         else:
+            visual_crop = fitz.Rect(0.0, 0.0, page_rect.width, page_rect.height)
             filter_rect = fitz.Rect(
                 0.0,
                 0.0,
@@ -845,30 +961,24 @@ class PDFCadExtractor:
             )
 
         # 1. Dynamic Scale Calibration
-        scale_factor = detect_catalog_scale(page, crop_box=fitz.Rect(crop_box) if crop_box else None)
+        scale_opt = options.get("scale") if options else None
+        if scale_opt is not None and float(scale_opt) > 0.0:
+            scale_factor = float(scale_opt)
+        else:
+            scale_factor = detect_catalog_scale(page, crop_box=filter_rect if crop_box else None)
         total_scale = PT_TO_MM * scale_factor
         logger.info("Calibrated catalog scale: %s (total_scale=%f mm/pt)", scale_factor, total_scale)
 
-        # 2. Coordinate Transformation
-        if rot == 270:
-            ox = 50.0   # margin offset in py
-            oy = 150.0  # margin offset in px
+        # 2. Universal Upright Coordinate Transformation (Task 032)
+        # Accurately maps physical PDF coordinates to upright CAD millimeter coordinates across 0/90/180/270
+        vis_origin_x = visual_crop.x0
+        vis_origin_y = visual_crop.y1
 
-            def to_cad(pt: Tuple[float, float]) -> Tuple[float, float]:
-                px, py = pt[0], pt[1]
-                cad_x = (py - ox) * total_scale
-                cad_y = (px - oy) * total_scale
-                return (round(cad_x, 4), round(cad_y, 4))
-
-        else:
-            # Standard unrotated PDF coordinate space
-            ox = filter_rect.x0
-            oy = filter_rect.y1
-
-            def to_cad(pt: Tuple[float, float]) -> Tuple[float, float]:
-                cad_x = (pt[0] - ox) * total_scale
-                cad_y = (oy - pt[1]) * total_scale
-                return (round(cad_x, 4), round(cad_y, 4))
+        def to_cad(pt: Tuple[float, float]) -> Tuple[float, float]:
+            p_vis = fitz.Point(pt[0], pt[1]) * rot_m
+            cad_x = (p_vis.x - vis_origin_x) * total_scale
+            cad_y = (vis_origin_y - p_vis.y) * total_scale
+            return (round(cad_x, 4), round(cad_y, 4))
 
         # 3. Setup AutoCAD DXF Document with Millimeters Unit ($INSUNITS = 4)
         dxf_doc = ezdxf.new(dxf_version, setup=True)
@@ -948,284 +1058,197 @@ class PDFCadExtractor:
             drawings = page.get_drawings()
             crop_words = page.get_text("words")
 
-        # 4. Extract Native AutoCAD DIMENSION Entities
+        # 4. Extract Native AutoCAD DIMENSION Entities (Tasks 021, 027, 029 & 032)
+        # Fast spatially-indexed universal dimension matcher across rotations 0/90/180/270
         extracted_dims = []
         dim_drawings_indices = set()
         dim_nominals = set()
 
-        if rot == 270:
-            # Clean dimensions contract (Task 021): Suppress drawing paths for witness lines,
-            # ticks and arrows so ONLY clean native DIMENSION entities are rendered (ZERO duplicate polylines)
-            dim_drawings_indices.update(range(4122, 4134))
-            dim_drawings_indices.update(range(4817, 4822))
+        # Transform all drawings inside filter_rect to find arrowheads and ticks in visual CAD space
+        arrow_candidates = []
+        for idx, d in enumerate(drawings):
+            r_padded = fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5)
+            if not filter_rect.intersects(r_padded):
+                continue
+            items = d.get("items", [])
+            # Triangle arrowheads (filled lines, chunked in groups of 3)
+            if d.get("fill") is not None:
+                lines = [it for it in items if it[0] == "l"]
+                if len(lines) >= 3 and len(lines) % 3 == 0:
+                    for k in range(0, len(lines), 3):
+                        p0 = lines[k][1]
+                        p1 = lines[k+1][1]
+                        p2 = lines[k+2][1]
+                        e0 = math.hypot(p0.x - p1.x, p0.y - p1.y)
+                        e1 = math.hypot(p1.x - p2.x, p1.y - p2.y)
+                        e2 = math.hypot(p2.x - p0.x, p2.y - p0.y)
+                        tip_phys = p2 if e0 <= e1 and e0 <= e2 else (p0 if e1 <= e0 and e1 <= e2 else p1)
+                        tip_vis = fitz.Point(tip_phys.x, tip_phys.y) * rot_m
+                        arrow_candidates.append({
+                            "idx": idx, "tip_phys": tip_phys, "tip_vis": tip_vis, "kind": "arrow", "rect": d["rect"]
+                        })
+            # 45-degree architectural slash ticks
+            elif len(items) == 1 and items[0][0] == "l":
+                p1_phys, p2_phys = items[0][1], items[0][2]
+                tick_len = math.hypot(p1_phys.x - p2_phys.x, p1_phys.y - p2_phys.y)
+                if 1.5 <= tick_len <= 7.5 and abs(abs(p1_phys.x - p2_phys.x) - abs(p1_phys.y - p2_phys.y)) < 0.8:
+                    mid_phys = fitz.Point((p1_phys.x + p2_phys.x) / 2.0, (p1_phys.y + p2_phys.y) / 2.0)
+                    mid_vis = mid_phys * rot_m
+                    arrow_candidates.append({
+                        "idx": idx, "tip_phys": mid_phys, "tip_vis": mid_vis, "kind": "tick", "rect": d["rect"]
+                    })
 
-            # Special architectural dimensions for rotated drawing
-            # 87 (horizontal at top of window frame)
-            cad_87_p1 = to_cad((476.88, 333.56))
-            cad_87_p2 = to_cad((476.88, 403.64))
-            cad_87_base = to_cad((504.12, 368.60))
-            extracted_dims.append({
-                "base": cad_87_base, "p1": cad_87_p1, "p2": cad_87_p2,
-                "angle": 0.0, "nominal": "87"
-            })
-            dim_nominals.add("87")
+        # Spatially index arrows in visual space
+        arrows_by_vy = defaultdict(list)
+        arrows_by_vx = defaultdict(list)
+        for a in arrow_candidates:
+            arrows_by_vy[round(a["tip_vis"].y / 2.0)].append(a)
+            arrows_by_vx[round(a["tip_vis"].x / 2.0)].append(a)
 
-            # 76 (vertical on left of window frame)
-            cad_76_p1 = to_cad((415.68, 333.56))
-            cad_76_p2 = to_cad((476.88, 333.56))
-            cad_76_base = to_cad((446.28, 323.24))
-            extracted_dims.append({
-                "base": cad_76_base, "p1": cad_76_p1, "p2": cad_76_p2,
-                "angle": 90.0, "nominal": "76"
-            })
-            dim_nominals.add("76")
+        # Transform numeric words to visual coordinates
+        num_words = []
+        for w in crop_words:
+            txt = str(w[4]).strip()
+            if re.match(r"^\d+(\.\d+)?$", txt):
+                val = float(txt)
+                if 2.0 <= val <= 3000.0:
+                    p_mid_phys = fitz.Point((w[0] + w[2]) / 2.0, (w[1] + w[3]) / 2.0)
+                    p_mid_vis = p_mid_phys * rot_m
+                    num_words.append((txt, val, p_mid_phys, p_mid_vis, w))
 
-            # 3 (clearance under window frame)
-            cad_3_p1 = to_cad((476.88, 333.56))
-            cad_3_p2 = to_cad((479.28, 333.56))
-            cad_3_base = to_cad((478.08, 323.24))
-            extracted_dims.append({
-                "base": cad_3_base, "p1": cad_3_p1, "p2": cad_3_p2,
-                "angle": 90.0, "nominal": "3"
-            })
-            dim_nominals.add("3")
+        # Match each numeric word to the best arrow or tick pair in visual CAD coordinates
+        for txt, val, w_phys, w_vis, w_raw in num_words:
+            best_candidate = None
+            best_score = 9999.0
 
-        else:
-            # Standard unrotated catalog dimension parsing
-            for idx, d in enumerate(drawings):
-                items = d.get("items", [])
-                if len(items) == 4 and all(it[0] == "l" for it in items):
-                    lines = [(it[1], it[2]) for it in items]
-                    horiz = [l for l in lines if abs(l[0].y - l[1].y) < 0.2]
-                    vert = [l for l in lines if abs(l[0].x - l[1].x) < 0.2]
+            # 1. Search Horizontal dimension in visual space
+            w_y_bin = round(w_vis.y / 2.0)
+            cand_h = []
+            for b in range(w_y_bin - 25, w_y_bin + 26):
+                cand_h.extend(arrows_by_vy[b])
 
-                    # Vertical dimension
-                    if len(horiz) == 2 and len(vert) == 2:
-                        y1, y2 = horiz[0][0].y, horiz[1][0].y
-                        dim_x = vert[0][0].x
-                        meas_mm = abs(y2 - y1) * total_scale
-                        mid_y = (y1 + y2) / 2.0
-                        closest_txt = None
-                        min_d = 9999.0
-                        for w in crop_words:
-                            txt = str(w[4]).strip()
-                            if re.match(r"^\d{1,3}$", txt):
-                                d_txt = math.hypot((w[0] + w[2]) / 2.0 - dim_x, (w[1] + w[3]) / 2.0 - mid_y)
-                                if d_txt < min_d:
-                                    min_d = d_txt
-                                    closest_txt = (txt, d_txt)
-                        if closest_txt and closest_txt[1] < 20.0 and meas_mm >= 3.5:
-                            dim_drawings_indices.add(idx)
-                            dim_nominals.add(closest_txt[0])
-                            extracted_dims.append({
-                                "base": to_cad((dim_x, mid_y)),
-                                "p1": to_cad((horiz[0][0].x, y1)),
-                                "p2": to_cad((horiz[1][0].x, y2)),
-                                "angle": 90.0,
-                                "nominal": closest_txt[0],
-                            })
+            for i, a1 in enumerate(cand_h):
+                tv1 = a1["tip_vis"]
+                for j in range(i + 1, len(cand_h)):
+                    a2 = cand_h[j]
+                    tv2 = a2["tip_vis"]
+                    if abs(tv1.y - tv2.y) < 2.8 and abs(tv1.x - tv2.x) > 2.5:
+                        meas_mm = abs(tv1.x - tv2.x) * total_scale
+                        diff = abs(meas_mm - val)
+                        if diff < 0.35:
+                            dim_vy = (tv1.y + tv2.y) / 2.0
+                            dim_vx = (tv1.x + tv2.x) / 2.0
+                            dx = abs(w_vis.x - dim_vx)
+                            dy = abs(w_vis.y - dim_vy)
+                            if dx < 45.0 and dy < 35.0:
+                                score = diff * 10.0 + dy * 2.0 + dx
+                                if score < best_score:
+                                    best_score = score
+                                    cad_p1 = ((min(tv1.x, tv2.x) - vis_origin_x) * total_scale, (vis_origin_y - dim_vy) * total_scale)
+                                    cad_p2 = ((max(tv1.x, tv2.x) - vis_origin_x) * total_scale, (vis_origin_y - dim_vy) * total_scale)
+                                    cad_base = ((dim_vx - vis_origin_x) * total_scale, (vis_origin_y - dim_vy) * total_scale)
+                                    best_candidate = {
+                                        "nominal": txt,
+                                        "val": val,
+                                        "meas_mm": meas_mm,
+                                        "diff": diff,
+                                        "base": cad_base,
+                                        "p1": cad_p1,
+                                        "p2": cad_p2,
+                                        "angle": 0.0,
+                                        "a1_idx": a1["idx"],
+                                        "a2_idx": a2["idx"],
+                                        "is_horiz": True,
+                                        "dim_coord": dim_vy,
+                                        "min_val": min(tv1.x, tv2.x),
+                                        "max_val": max(tv1.x, tv2.x),
+                                    }
 
-                    # Horizontal dimension
-                    elif len(vert) == 2 and len(horiz) == 2:
-                        x1, x2 = vert[0][0].x, vert[1][0].x
-                        dim_y = horiz[0][0].y
-                        meas_mm = abs(x2 - x1) * total_scale
-                        mid_x = (x1 + x2) / 2.0
-                        closest_txt = None
-                        min_d = 9999.0
-                        for w in crop_words:
-                            txt = str(w[4]).strip()
-                            if re.match(r"^\d{1,3}$", txt):
-                                d_txt = math.hypot((w[0] + w[2]) / 2.0 - mid_x, (w[1] + w[3]) / 2.0 - dim_y)
-                                if d_txt < min_d:
-                                    min_d = d_txt
-                                    closest_txt = (txt, d_txt)
-                        if closest_txt and closest_txt[1] < 20.0 and meas_mm >= 3.5:
-                            dim_drawings_indices.add(idx)
-                            dim_nominals.add(closest_txt[0])
-                            extracted_dims.append({
-                                "base": to_cad((mid_x, dim_y)),
-                                "p1": to_cad((x1, vert[0][0].y)),
-                                "p2": to_cad((x2, vert[1][0].y)),
-                                "angle": 0.0,
-                                "nominal": closest_txt[0],
-                            })
+            # 2. Search Vertical dimension in visual space
+            w_x_bin = round(w_vis.x / 2.0)
+            cand_v = []
+            for b in range(w_x_bin - 25, w_x_bin + 26):
+                cand_v.extend(arrows_by_vx[b])
 
-            # Check triangle arrowhead dimensions and 45-degree architectural slash ticks (Task 027)
-            triangle_arrows = []
-            for idx, d in enumerate(drawings):
-                r_padded = fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5)
-                if not filter_rect.intersects(r_padded):
-                    continue
-                items = d.get("items", [])
-                if d.get("fill") is not None and len(items) == 3 and all(it[0] == "l" for it in items):
-                    pts = [it[1] for it in items]
-                    if len(pts) == 3:
-                        e0 = math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)
-                        e1 = math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y)
-                        e2 = math.hypot(pts[2].x - pts[0].x, pts[2].y - pts[0].y)
-                        tip = pts[2] if e0 <= e1 and e0 <= e2 else (pts[0] if e1 <= e0 and e1 <= e2 else pts[1])
-                        triangle_arrows.append({"idx": idx, "tip": tip, "rect": d["rect"], "kind": "arrow"})
-                elif len(items) == 1 and items[0][0] == "l":
-                    p1, p2 = items[0][1], items[0][2]
-                    tick_len = math.hypot(p1.x - p2.x, p1.y - p2.y)
-                    if 1.5 <= tick_len <= 7.0 and abs(abs(p1.x - p2.x) - abs(p1.y - p2.y)) < 0.6:
-                        mid_pt = fitz.Point((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0)
-                        triangle_arrows.append({"idx": idx, "tip": mid_pt, "rect": d["rect"], "kind": "tick"})
+            for i, a1 in enumerate(cand_v):
+                tv1 = a1["tip_vis"]
+                for j in range(i + 1, len(cand_v)):
+                    a2 = cand_v[j]
+                    tv2 = a2["tip_vis"]
+                    if abs(tv1.x - tv2.x) < 2.8 and abs(tv1.y - tv2.y) > 2.5:
+                        meas_mm = abs(tv1.y - tv2.y) * total_scale
+                        diff = abs(meas_mm - val)
+                        if diff < 0.35:
+                            dim_vx = (tv1.x + tv2.x) / 2.0
+                            dim_vy = (tv1.y + tv2.y) / 2.0
+                            dx = abs(w_vis.x - dim_vx)
+                            dy = abs(w_vis.y - dim_vy)
+                            if dx < 35.0 and dy < 45.0:
+                                score = diff * 10.0 + dx * 2.0 + dy
+                                if score < best_score:
+                                    best_score = score
+                                    cad_p1 = ((dim_vx - vis_origin_x) * total_scale, (vis_origin_y - min(tv1.y, tv2.y)) * total_scale)
+                                    cad_p2 = ((dim_vx - vis_origin_x) * total_scale, (vis_origin_y - max(tv1.y, tv2.y)) * total_scale)
+                                    cad_base = ((dim_vx - vis_origin_x) * total_scale, (vis_origin_y - dim_vy) * total_scale)
+                                    best_candidate = {
+                                        "nominal": txt,
+                                        "val": val,
+                                        "meas_mm": meas_mm,
+                                        "diff": diff,
+                                        "base": cad_base,
+                                        "p1": cad_p1,
+                                        "p2": cad_p2,
+                                        "angle": 90.0,
+                                        "a1_idx": a1["idx"],
+                                        "a2_idx": a2["idx"],
+                                        "is_horiz": False,
+                                        "dim_coord": dim_vx,
+                                        "min_val": min(tv1.y, tv2.y),
+                                        "max_val": max(tv1.y, tv2.y),
+                                    }
 
-            def find_witness_endpoint(x_or_y, dim_coord, is_horiz, drawings, filter_rect, prof_side):
-                best_coord = dim_coord
-                best_span = 0.0
-                witness_indices = set()
+            # 3. Fallback: Check 4-line dimension construct (standard catalog dimensions)
+            if not best_candidate:
                 for idx, d in enumerate(drawings):
-                    r_padded = fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5)
-                    if not filter_rect.intersects(r_padded):
-                        continue
-                    for it in d.get("items", []):
-                        if it[0] == "l":
-                            p1, p2 = it[1], it[2]
-                            if is_horiz:
-                                if abs(p1.x - p2.x) < 1.0 and abs(p1.x - x_or_y) < 2.0:
-                                    y_min, y_max = min(p1.y, p2.y), max(p1.y, p2.y)
-                                    if y_min - 25.0 <= dim_coord <= y_max + 25.0:
-                                        witness_indices.add(idx)
-                                        cand_y = y_min if prof_side < 0 else y_max
-                                        span = abs(cand_y - dim_coord)
-                                        if 1.0 <= span <= 35.0:
-                                            if span > best_span:
-                                                best_span = span
-                                                best_coord = cand_y
-                            else:
-                                if abs(p1.y - p2.y) < 1.0 and abs(p1.y - x_or_y) < 2.0:
-                                    x_min, x_max = min(p1.x, p2.x), max(p1.x, p2.x)
-                                    if x_min - 25.0 <= dim_coord <= x_max + 25.0:
-                                        witness_indices.add(idx)
-                                        cand_x = x_min if prof_side < 0 else x_max
-                                        span = abs(cand_x - dim_coord)
-                                        if 1.0 <= span <= 35.0:
-                                            if span > best_span:
-                                                best_span = span
-                                                best_coord = cand_x
-                return best_coord, best_span, witness_indices
+                    items = d.get("items", [])
+                    if len(items) == 4 and all(it[0] == "l" for it in items):
+                        lines = [(it[1], it[2]) for it in items]
+                        horiz = [l for l in lines if abs(l[0].y - l[1].y) < 0.2]
+                        vert = [l for l in lines if abs(l[0].x - l[1].x) < 0.2]
+                        if len(horiz) == 2 and len(vert) == 2:
+                            # Vertical dimension
+                            y1, y2 = horiz[0][0].y, horiz[1][0].y
+                            dim_x = vert[0][0].x
+                            meas_mm = abs(y2 - y1) * total_scale
+                            if abs(meas_mm - val) < 0.25:
+                                mid_y = (y1 + y2) / 2.0
+                                if math.hypot(w_phys.x - dim_x, w_phys.y - mid_y) < 25.0:
+                                    best_candidate = {
+                                        "nominal": txt, "val": val, "meas_mm": meas_mm, "diff": abs(meas_mm - val),
+                                        "base": to_cad((dim_x, mid_y)), "p1": to_cad((horiz[0][0].x, y1)),
+                                        "p2": to_cad((horiz[1][0].x, y2)), "angle": 90.0, "a1_idx": idx, "a2_idx": idx,
+                                    }
+                                    break
+                        elif len(vert) == 2 and len(horiz) == 2:
+                            # Horizontal dimension
+                            x1, x2 = vert[0][0].x, vert[1][0].x
+                            dim_y = horiz[0][0].y
+                            meas_mm = abs(x2 - x1) * total_scale
+                            if abs(meas_mm - val) < 0.25:
+                                mid_x = (x1 + x2) / 2.0
+                                if math.hypot(w_phys.x - mid_x, w_phys.y - dim_y) < 25.0:
+                                    best_candidate = {
+                                        "nominal": txt, "val": val, "meas_mm": meas_mm, "diff": abs(meas_mm - val),
+                                        "base": to_cad((mid_x, dim_y)), "p1": to_cad((x1, vert[0][0].y)),
+                                        "p2": to_cad((x2, vert[1][0].y)), "angle": 0.0, "a1_idx": idx, "a2_idx": idx,
+                                    }
+                                    break
 
-            # Word-driven matching for dimension nominals (chains and overarching dimensions)
-            num_words = []
-            for w_idx, w in enumerate(crop_words):
-                txt = str(w[4]).strip()
-                if re.match(r"^\d+(\.\d+)?$", txt):
-                    val = float(txt)
-                    if 2.0 <= val <= 3000.0:
-                        num_words.append((w_idx, txt, val, w))
-
-            # Match each numeric word to the best arrow or tick pair
-            for w_idx, txt, val, w in num_words:
-                w_mid_x = (w[0] + w[2]) / 2.0
-                w_mid_y = (w[1] + w[3]) / 2.0
-                best_candidate = None
-                best_score = 9999.0
-
-                for i, a1 in enumerate(triangle_arrows):
-                    t1 = a1["tip"]
-                    for j in range(i + 1, len(triangle_arrows)):
-                        a2 = triangle_arrows[j]
-                        t2 = a2["tip"]
-
-                        # Check horizontal dimension
-                        if abs(t1.y - t2.y) < 2.5 and abs(t1.x - t2.x) > 3.0:
-                            span_pt = abs(t1.x - t2.x)
-                            meas_mm = span_pt * total_scale
-                            diff = abs(meas_mm - val)
-                            if diff < 0.35:
-                                dim_y = (t1.y + t2.y) / 2.0
-                                dim_mid_x = (t1.x + t2.x) / 2.0
-                                dx = abs(w_mid_x - dim_mid_x)
-                                dy = abs(w_mid_y - dim_y)
-                                if dx < 25.0 and dy < 25.0:
-                                    score = diff * 10.0 + dy * 2.0 + dx
-                                    if score < best_score:
-                                        best_score = score
-                                        prof_side = -1 if dim_y > (filter_rect.y0 + filter_rect.y1) / 2.0 else +1
-                                        min_x, max_x = min(t1.x, t2.x), max(t1.x, t2.x)
-                                        face_y1, span1, w_idxs1 = find_witness_endpoint(min_x, dim_y, True, drawings, filter_rect, prof_side)
-                                        face_y2, span2, w_idxs2 = find_witness_endpoint(max_x, dim_y, True, drawings, filter_rect, prof_side)
-                                        face_y = face_y1 if span1 >= span2 else face_y2
-                                        best_candidate = {
-                                            "nominal": txt,
-                                            "val": val,
-                                            "meas_mm": meas_mm,
-                                            "diff": diff,
-                                            "base": to_cad((dim_mid_x, dim_y)),
-                                            "p1": to_cad((min_x, face_y)),
-                                            "p2": to_cad((max_x, face_y)),
-                                            "angle": 0.0,
-                                            "a1_idx": a1["idx"],
-                                            "a2_idx": a2["idx"],
-                                            "witness_idxs": w_idxs1 | w_idxs2,
-                                            "is_horiz": True,
-                                            "dim_coord": dim_y,
-                                            "min_val": min_x,
-                                            "max_val": max_x,
-                                        }
-
-                        # Check vertical dimension
-                        elif abs(t1.x - t2.x) < 2.5 and abs(t1.y - t2.y) > 3.0:
-                            span_pt = abs(t1.y - t2.y)
-                            meas_mm = span_pt * total_scale
-                            diff = abs(meas_mm - val)
-                            if diff < 0.35:
-                                dim_x = (t1.x + t2.x) / 2.0
-                                dim_mid_y = (t1.y + t2.y) / 2.0
-                                dx = abs(w_mid_x - dim_x)
-                                dy = abs(w_mid_y - dim_mid_y)
-                                if dx < 25.0 and dy < 25.0:
-                                    score = diff * 10.0 + dx * 2.0 + dy
-                                    if score < best_score:
-                                        best_score = score
-                                        prof_side = -1 if dim_x > (filter_rect.x0 + filter_rect.x1) / 2.0 else +1
-                                        min_y, max_y = min(t1.y, t2.y), max(t1.y, t2.y)
-                                        face_x1, span1, w_idxs1 = find_witness_endpoint(min_y, dim_x, False, drawings, filter_rect, prof_side)
-                                        face_x2, span2, w_idxs2 = find_witness_endpoint(max_y, dim_x, False, drawings, filter_rect, prof_side)
-                                        face_x = face_x1 if span1 >= span2 else face_x2
-                                        best_candidate = {
-                                            "nominal": txt,
-                                            "val": val,
-                                            "meas_mm": meas_mm,
-                                            "diff": diff,
-                                            "base": to_cad((dim_x, dim_mid_y)),
-                                            "p1": to_cad((face_x, min_y)),
-                                            "p2": to_cad((face_x, max_y)),
-                                            "angle": 90.0,
-                                            "a1_idx": a1["idx"],
-                                            "a2_idx": a2["idx"],
-                                            "witness_idxs": w_idxs1 | w_idxs2,
-                                            "is_horiz": False,
-                                            "dim_coord": dim_x,
-                                            "min_val": min_y,
-                                            "max_val": max_y,
-                                        }
-
-                if best_candidate:
-                    extracted_dims.append(best_candidate)
-                    dim_nominals.add(txt)
-                    dim_drawings_indices.add(best_candidate["a1_idx"])
-                    dim_drawings_indices.add(best_candidate["a2_idx"])
-                    dim_drawings_indices.update(best_candidate["witness_idxs"])
-                    # Suppress dimension line between markers
-                    for idx, d in enumerate(drawings):
-                        r_padded = fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5)
-                        if not filter_rect.intersects(r_padded):
-                            continue
-                        for it in d.get("items", []):
-                            if it[0] == "l":
-                                p1, p2 = it[1], it[2]
-                                if best_candidate["is_horiz"]:
-                                    if abs(p1.y - p2.y) < 0.5 and abs(p1.y - best_candidate["dim_coord"]) < 1.0:
-                                        if min(p1.x, p2.x) >= best_candidate["min_val"] - 15.0 and max(p1.x, p2.x) <= best_candidate["max_val"] + 15.0:
-                                            dim_drawings_indices.add(idx)
-                                else:
-                                    if abs(p1.x - p2.x) < 0.5 and abs(p1.x - best_candidate["dim_coord"]) < 1.0:
-                                        if min(p1.y, p2.y) >= best_candidate["min_val"] - 15.0 and max(p1.y, p2.y) <= best_candidate["max_val"] + 15.0:
-                                            dim_drawings_indices.add(idx)
+            if best_candidate:
+                extracted_dims.append(best_candidate)
+                dim_nominals.add(txt)
+                dim_drawings_indices.add(best_candidate["a1_idx"])
+                dim_drawings_indices.add(best_candidate["a2_idx"])
 
         for dim_data in extracted_dims:
             try:
@@ -1582,7 +1605,7 @@ class PDFCadExtractor:
             quad_boxes = []
             for d in drawings:
                 r_padded = fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5)
-                if not filter_rect.intersects(r_padded) or d.get("fill") is not None:
+                if not filter_rect.intersects(r_padded):
                     continue
                 for it in d.get("items", []):
                     if it[0] == "qu":
@@ -1603,8 +1626,10 @@ class PDFCadExtractor:
                 r_padded = fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5)
                 if not filter_rect.intersects(r_padded):
                     continue
-                if d.get("fill") is not None:
-                    continue
+                # In catalog mode: skip pure fills that have no stroke and are thin shading slices (< 0.45 pt)
+                if d.get("color") is None and d.get("fill") is not None:
+                    if min(d["rect"].width, d["rect"].height) <= 0.45:
+                        continue
                 for it in d.get("items", []):
                     if it[0] == "l":
                         p1 = (it[1].x, it[1].y)
@@ -1846,6 +1871,15 @@ class PDFCadExtractor:
             phase2_chains_cat = chain_xyb_segments(open_chains_cat, tol=0.50)
             final_catalog_chains = closed_chains_cat + phase2_chains_cat
 
+            all_cat_pts = [pt for poly, _ in final_catalog_chains for pt in poly]
+            sec_min_x = min((pt[0] for pt in all_cat_pts), default=0.0)
+            sec_max_x = max((pt[0] for pt in all_cat_pts), default=1.0)
+            sec_span_x = max(1.0, sec_max_x - sec_min_x)
+            sec_min_y = min((pt[1] for pt in all_cat_pts), default=0.0)
+            sec_max_y = max((pt[1] for pt in all_cat_pts), default=1.0)
+            sec_span_y = max(1.0, sec_max_y - sec_min_y)
+            is_vertical_profile = (sec_span_y > sec_span_x * 1.4)
+
             crop_max_x = (filter_rect.x1 - filter_rect.x0) * total_scale
             crop_max_y = (filter_rect.y1 - filter_rect.y0) * total_scale
 
@@ -1856,6 +1890,25 @@ class PDFCadExtractor:
                 )
 
             seen_signatures = set()
+
+            # Dynamic glass side detection from tall float glass pane geometry (Task 032)
+            glass_side = "unknown"
+            for p_pts, p_closed in final_catalog_chains:
+                p_xs = [pt[0] for pt in p_pts]
+                p_ys = [pt[1] for pt in p_pts]
+                p_w = max(p_xs) - min(p_xs)
+                p_h = max(p_ys) - min(p_ys)
+                p_asp = max(p_w, p_h) / max(0.1, min(p_w, p_h))
+                p_area = 0.5 * abs(sum(p_pts[j][0]*p_pts[(j+1)%len(p_pts)][1] - p_pts[(j+1)%len(p_pts)][0]*p_pts[j][1] for j in range(len(p_pts))))
+                if max(p_w, p_h) >= 22.0 and min(p_w, p_h) <= 8.5 and p_asp >= 4.0 and p_area >= 30.0:
+                    p_mid_x = (min(p_xs) + max(p_xs)) / 2.0
+                    rel_p_mid = (p_mid_x - sec_min_x) / sec_span_x
+                    if rel_p_mid <= 0.40:
+                        glass_side = "left"
+                        break
+                    elif rel_p_mid >= 0.60:
+                        glass_side = "right"
+                        break
 
             for poly_pts, is_closed in final_catalog_chains:
                 if len(poly_pts) < 2:
@@ -1916,59 +1969,59 @@ class PDFCadExtractor:
                 h_mm = max_py - min_py
                 diag_mm = math.hypot(w_mm, h_mm)
 
-                # Dashed / centerline / axis lines: short collinear line segments
-                if not is_closed and len(poly_pts) == 2 and (w_mm < 0.2 or h_mm < 0.2) and diag_mm <= 7.0:
+                aspect = max(w_mm, h_mm) / max(0.1, min(w_mm, h_mm))
+                area_mm2 = 0.5 * abs(sum(
+                    poly_pts[i][0] * poly_pts[(i + 1) % len(poly_pts)][1] -
+                    poly_pts[(i + 1) % len(poly_pts)][0] * poly_pts[i][1]
+                    for i in range(len(poly_pts))
+                ))
+                rel_mid_x = ((min_px + max_px) / 2.0 - sec_min_x) / sec_span_x
+                rel_mid_y = ((min_py + max_py) / 2.0 - sec_min_y) / sec_span_y
+                rel_min_x = (min_px - sec_min_x) / sec_span_x
+                rel_max_x = (max_px - sec_min_x) / sec_span_x
+                # 1. Break / axis lines: short collinear line segments
+                if not is_closed and len(poly_pts) == 2 and (w_mm < 0.25 or h_mm < 0.25) and diag_mm <= 8.0:
                     t_layer = "02_ЛИНИЯ_ОБРЫВА"
-                elif page_idx == 702 or (min_py >= 200.0 and max_py >= 400.0):
-                    # Vertical catalog detail classification (PIDI 2, page 703 and similar tall vertical sections)
-                    # 1. Glass unit zone: panes, spacer bars, silicone
-                    if min_py <= 340.0 and max_py <= 345.0 and 170.0 <= min_px and max_px <= 240.0 and (w_mm <= 4.0 or h_mm >= 30.0 or len(poly_pts) == 4):
-                        t_layer = "05_СТЕКЛОПАКЕТ"
-                    # 2. Thermal breaks (connecting bridge strips)
-                    elif ((365.0 <= min_py <= 385.0 or 315.0 <= min_py <= 335.0) and 195.0 <= min_px and max_px <= 235.0 and h_mm <= 8.5):
-                        t_layer = "03_ТЕРМОМОСТ"
-                    # 3. Gaskets / EPDM seals (small closed beads/loops)
-                    elif is_closed and diag_mm <= 16.0 and (w_mm <= 8.0 or h_mm <= 8.0) and ((min_px <= 175.0 or max_px >= 225.0) or (340.0 <= min_py <= 370.0)):
-                        t_layer = "04_УПЛОТНИТЕЛИ"
-                    # 4. Profile bowls (exterior left vs interior right)
-                    elif (min_px + max_px) / 2.0 <= 195.0:
+
+                # 2. Frame weatherstripping gaskets (at jamb rebate X ~ 170..195)
+                elif (170.0 <= min_px <= 195.0) and (w_mm <= 16.0 and h_mm <= 16.0) and (is_closed or len(poly_pts) >= 12):
+                    t_layer = "04_УПЛОТНИТЕЛИ"
+
+                # 3. Glass unit: long thin glass panes, spacer bars, and secondary silicone
+                elif is_closed and (min(w_mm, h_mm) <= 8.5 and max(w_mm, h_mm) >= 22.0 and aspect >= 4.0):
+                    t_layer = "05_СТЕКЛОПАКЕТ"
+                elif glass_side == "left" and rel_max_x <= 0.38 and is_closed and (
+                    (w_mm <= 16.0 and h_mm <= 16.0 and area_mm2 <= 180.0) or (min(w_mm, h_mm) <= 4.0 and max(w_mm, h_mm) >= 12.0)
+                ):
+                    t_layer = "05_СТЕКЛОПАКЕТ"
+                elif glass_side == "right" and rel_min_x >= 0.65 and is_closed and (
+                    (w_mm <= 16.0 and h_mm <= 16.0 and area_mm2 <= 180.0) or (min(w_mm, h_mm) <= 4.0 and max(w_mm, h_mm) >= 12.0)
+                ):
+                    t_layer = "05_СТЕКЛОПАКЕТ"
+
+                # 4. Thermal breaks: quad insulation boxes and connecting polyamide strips
+                elif is_closed and (12.0 <= w_mm <= 30.0) and (9.0 <= h_mm <= 26.0) and (0.35 <= rel_mid_x <= 0.75):
+                    t_layer = "03_ТЕРМОМОСТ"
+                elif (0.35 <= rel_mid_x <= 0.75) and (
+                    (is_closed and area_mm2 <= 60.0 and (w_mm <= 8.0 or h_mm <= 8.0)) or
+                    (not is_closed and 8.0 <= diag_mm <= 35.0 and (w_mm <= 8.0 or h_mm <= 8.0))
+                ):
+                    t_layer = "03_ТЕРМОМОСТ"
+
+                # 5. EPDM gaskets: flexible loops/strips at sealing interfaces
+                elif is_closed and diag_mm <= 18.0 and (w_mm <= 14.0 or h_mm <= 14.0) and area_mm2 <= 100.0:
+                    t_layer = "04_УПЛОТНИТЕЛИ"                # 6. Aluminum profile chambers & bowls
+                elif is_vertical_profile:
+                    if rel_mid_x <= 0.50:
                         t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
                     else:
                         t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
                 else:
-                    # Canonical horizontal/standard catalog taxonomy (Pages 525, 557, 810 - Task 029)
-                    mid_x = poly_pts[len(poly_pts) // 2][0]
-                    # 1. Glass unit zone: panes, spacer bars, silicone
-                    if max_px <= 75.0 and max_py > 60.0:
-                        t_layer = "05_СТЕКЛОПАКЕТ"
-                    # 2. EPDM gaskets: flexible loops/strips at sealing interfaces (do not merge metal and rubber)
-                    elif diag_mm <= 18.0 and (w_mm <= 14.0 or h_mm <= 14.0) and (
-                        (170.0 <= min_px <= 192.0) or (121.0 <= min_px <= 164.0 and min_py < 105.0) or (min_px <= 65.0)
-                    ):
-                        t_layer = "04_УПЛОТНИТЕЛИ"
-                    # 3. Thermal breaks: connecting strips, vertical bars, and insulation boxes
-                    elif (70.0 <= min_px and max_px <= 150.0 and min_py < 105.0) or (
-                        45.0 <= mid_x <= 75.0
-                    ) or (
-                        100.0 <= min_py < 126.0 and (160.0 <= min_px <= 202.0)
-                    ) or (
-                        is_closed and (12.0 <= w_mm <= 26.0) and (10.0 <= h_mm <= 24.0) and (75.0 <= min_px and max_px <= 150.0)
-                    ):
-                        t_layer = "03_ТЕРМОМОСТ"
-                    # 4. Aluminum profile bowls
-                    elif 70.0 <= min_px and max_px <= 128.0 and min_py >= 105.0:
-                        t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
-                    elif 121.0 <= min_px and max_px <= 155.0 and min_py >= 105.0:
-                        t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
-                    elif min_px >= 161.0:
-                        if min_py >= 126.0:
-                            t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
-                        else:
-                            t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
-                    elif mid_x < 45.0:
+                    if rel_mid_x <= 0.50:
                         t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
                     else:
                         t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
+
 
                 msp.add_lwpolyline(
                     poly_pts,
@@ -1980,11 +2033,16 @@ class PDFCadExtractor:
                 layer_stats[t_layer] += 1
 
         # 7. Save Output Files (DXF and DWG)
+        import hashlib
+        src_bytes = self.pdf_path.read_bytes()[:4096] if self.pdf_path.exists() else b""
+        src_hash = hashlib.sha256(src_bytes).hexdigest()[:8]
+        crop_sig = f"_{int(filter_rect.x0)}_{int(filter_rect.y0)}_{int(filter_rect.x1)}_{int(filter_rect.y1)}" if crop_box else "_full"
+
         if not output_path:
             out_dir = Path("runtime/cache/cad")
             out_dir.mkdir(parents=True, exist_ok=True)
             stem = self.pdf_path.stem.replace(" ", "_")
-            output_path = out_dir / f"{stem}_стр_{page_number}.dxf"
+            output_path = out_dir / f"{stem}_p{page_number}{crop_sig}_{src_hash}.dwg"
         else:
             output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1992,7 +2050,7 @@ class PDFCadExtractor:
         dxf_path = output_path.with_suffix(".dxf")
         dwg_path = output_path.with_suffix(".dwg")
 
-        # Assemble entities into native physical components (Task 024)
+        # Assemble entities into native physical components (Tasks 024 & 032)
         comp_summary = assemble_physical_components(dxf_doc)
 
         try:
@@ -2006,15 +2064,40 @@ class PDFCadExtractor:
                     dxf_path, entities_count, closed_loops_count, comp_summary.get("componentsCount", 0))
 
         dwg_success = False
+        dwg_err = None
         if compile_dwg:
             dwg_success = convert_dxf_to_dwg_via_accore(dxf_path, dwg_path)
+            if dwg_success:
+                try:
+                    with open(dwg_path, "rb") as f:
+                        hdr = f.read(6)
+                        if not hdr.startswith(b"AC"):
+                            dwg_success = False
+                            dwg_err = f"Invalid DWG binary signature: {hdr}"
+                except Exception as ex:
+                    dwg_success = False
+                    dwg_err = str(ex)
+
+        dwg_hash = ""
+        if dwg_success and dwg_path.exists():
+            dwg_hash = hashlib.sha256(dwg_path.read_bytes()).hexdigest()
+        logger.info(
+            "CAD Export Complete: src_hash=%s, page=%d, crop=%s, rot=%d, scale=%.2f, mode=%s, version=032, dwg_hash=%s",
+            src_hash, page_number, crop_box, rot, total_scale, mode, dwg_hash[:16]
+        )
+
+        final_file_path = str(dwg_path.resolve()) if dwg_success else str(dxf_path.resolve())
+        final_file_name = dwg_path.name if dwg_success else dxf_path.name
+        final_format = "dwg" if dwg_success else "dxf"
 
         scale_desc = f"1:{int(scale_factor)}" if scale_factor > 1.0 else "1:1"
 
         return {
-            "success": True,
-            "filePath": str(dxf_path.resolve()),
-            "fileName": dxf_path.name,
+            "success": True if (not compile_dwg or dwg_success) else False,
+            "error": dwg_err if (compile_dwg and not dwg_success) else None,
+            "filePath": final_file_path,
+            "fileName": final_file_name,
+            "format": final_format,
             "dxfPath": str(dxf_path.resolve()),
             "dwgPath": str(dwg_path.resolve()) if dwg_success else None,
             "dwgCompiled": dwg_success,
@@ -2055,10 +2138,13 @@ def export_pdf_page_to_cad(
     options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Convenience functional wrapper for PDFCadExtractor."""
+    opts = dict(options or {})
+    if "compile_dwg" not in opts:
+        opts["compile_dwg"] = True
     extractor = PDFCadExtractor(pdf_path)
     return extractor.extract_cad(
         page_number=page_number,
         crop_box=crop_box,
         output_path=output_path,
-        options=options,
+        options=opts,
     )

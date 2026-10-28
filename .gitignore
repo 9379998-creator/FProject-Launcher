@@ -64,3 +64,5 @@ REVIEW_BUNDLE_*.txt
 export_for_review/
 *.pyc
 runtime/
+
+output_cad/
