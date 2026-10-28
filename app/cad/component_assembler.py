@@ -203,7 +203,7 @@ def assemble_physical_components(doc: Drawing) -> Dict[str, Any]:
         if "РАЗМЕР" in lyr_up or "DIMENSION" in ent.dxftype().upper() or "DIMENSION" in lyr_up:
             continue
         # Never group general annotations / callouts / articles into parts
-        if "ВЫНОСКИ" in lyr_up or "НАДПИСИ" in lyr_up or "АРТИКУЛ" in lyr_up or "ARTICLE" in lyr_up or "АННОТАЦИИ" in lyr_up:
+        if "ВЫНОСКИ" in lyr_up or "НАДПИСИ" in lyr_up or "АРТИКУЛ" in lyr_up or "ARTICLE" in lyr_up or "АННОТАЦИИ" in lyr_up or "ОБОЗНАЧЕНИЯ" in lyr_up:
             continue
 
         b = get_entity_bbox(ent)
@@ -227,7 +227,7 @@ def assemble_physical_components(doc: Drawing) -> Dict[str, Any]:
             lyr_up = lyr.upper()
             if "РАЗМЕР" in lyr_up or "DIMENSION" in ent.dxftype().upper() or "DIMENSION" in lyr_up:
                 continue
-            if "ВЫНОСКИ" in lyr_up or "НАДПИСИ" in lyr_up or "АРТИКУЛ" in lyr_up or "ARTICLE" in lyr_up or "АННОТАЦИИ" in lyr_up:
+            if "ВЫНОСКИ" in lyr_up or "НАДПИСИ" in lyr_up or "АРТИКУЛ" in lyr_up or "ARTICLE" in lyr_up or "АННОТАЦИИ" in lyr_up or "ОБОЗНАЧЕНИЯ" in lyr_up:
                 continue
             if lyr in catalog_layer_map:
                 p_id, p_name = catalog_layer_map[lyr]

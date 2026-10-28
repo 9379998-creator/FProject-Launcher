@@ -889,6 +889,7 @@ class PDFCadExtractor:
             ("06_ШТРИХОВКА_СТЕНЫ", 251, 13),
             ("06_ШТРИХОВКА_ОБЩАЯ", 252, 13),
             ("Размерная линия", 3, 18),
+            ("Обозначения", 2, 20),
             ("07_РАЗМЕРЫ", 3, 18),
             ("DIMENSIONS", 3, 18),
             ("08_АРТИКУЛЫ", 2, 20),
@@ -1028,73 +1029,181 @@ class PDFCadExtractor:
                                 "nominal": closest_txt[0],
                             })
 
-            # Check triangle arrowhead dimensions (Reynaers MasterLine 8)
+            # Check triangle arrowhead dimensions and 45-degree architectural slash ticks (Task 027)
             triangle_arrows = []
             for idx, d in enumerate(drawings):
-                if filter_rect.intersects(d["rect"]) and d.get("fill") is not None and len(d.get("items", [])) == 3:
-                    pts = [it[1] for it in d.get("items", [])]
+                r_padded = fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5)
+                if not filter_rect.intersects(r_padded):
+                    continue
+                items = d.get("items", [])
+                if d.get("fill") is not None and len(items) == 3:
+                    pts = [it[1] for it in items]
                     if len(pts) == 3:
                         e0 = math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)
                         e1 = math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y)
                         e2 = math.hypot(pts[2].x - pts[0].x, pts[2].y - pts[0].y)
                         tip = pts[2] if e0 <= e1 and e0 <= e2 else (pts[0] if e1 <= e0 and e1 <= e2 else pts[1])
-                        triangle_arrows.append({"idx": idx, "tip": tip, "rect": d["rect"]})
+                        triangle_arrows.append({"idx": idx, "tip": tip, "rect": d["rect"], "kind": "arrow"})
+                elif len(items) == 1 and items[0][0] == "l":
+                    p1, p2 = items[0][1], items[0][2]
+                    tick_len = math.hypot(p1.x - p2.x, p1.y - p2.y)
+                    if 1.5 <= tick_len <= 7.0 and abs(abs(p1.x - p2.x) - abs(p1.y - p2.y)) < 0.6:
+                        mid_pt = fitz.Point((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0)
+                        triangle_arrows.append({"idx": idx, "tip": mid_pt, "rect": d["rect"], "kind": "tick"})
 
-            used_tri_arrows = set()
-            for i, a1 in enumerate(triangle_arrows):
-                if i in used_tri_arrows:
-                    continue
-                t1 = a1["tip"]
-                for j in range(i + 1, len(triangle_arrows)):
-                    if j in used_tri_arrows:
+            def find_witness_endpoint(x_or_y, dim_coord, is_horiz, drawings, filter_rect, prof_side):
+                best_coord = dim_coord
+                best_span = 0.0
+                witness_indices = set()
+                for idx, d in enumerate(drawings):
+                    r_padded = fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5)
+                    if not filter_rect.intersects(r_padded):
                         continue
-                    a2 = triangle_arrows[j]
-                    t2 = a2["tip"]
+                    for it in d.get("items", []):
+                        if it[0] == "l":
+                            p1, p2 = it[1], it[2]
+                            if is_horiz:
+                                if abs(p1.x - p2.x) < 1.0 and abs(p1.x - x_or_y) < 2.0:
+                                    y_min, y_max = min(p1.y, p2.y), max(p1.y, p2.y)
+                                    if y_min - 2.0 <= dim_coord <= y_max + 2.0:
+                                        cand_y = y_min if prof_side < 0 else y_max
+                                        span = abs(cand_y - dim_coord)
+                                        if 1.0 <= span <= 35.0:
+                                            witness_indices.add(idx)
+                                            if span > best_span:
+                                                best_span = span
+                                                best_coord = cand_y
+                            else:
+                                if abs(p1.y - p2.y) < 1.0 and abs(p1.y - x_or_y) < 2.0:
+                                    x_min, x_max = min(p1.x, p2.x), max(p1.x, p2.x)
+                                    if x_min - 2.0 <= dim_coord <= x_max + 2.0:
+                                        cand_x = x_min if prof_side < 0 else x_max
+                                        span = abs(cand_x - dim_coord)
+                                        if 1.0 <= span <= 35.0:
+                                            witness_indices.add(idx)
+                                            if span > best_span:
+                                                best_span = span
+                                                best_coord = cand_x
+                return best_coord, best_span, witness_indices
 
-                    if abs(t1.x - t2.x) < 3.0 and abs(t1.y - t2.y) > 3.0:
-                        span_pt = abs(t1.y - t2.y)
-                        meas_mm = span_pt * total_scale
-                        mid_y = (t1.y + t2.y) / 2.0
-                        for w in crop_words:
-                            txt = str(w[4]).strip()
-                            if re.match(r"^\d+(\.\d+)?$", txt):
-                                val = float(txt)
-                                if abs(meas_mm - val) < 0.4 and abs((w[1] + w[3]) / 2.0 - mid_y) < 25.0:
-                                    dim_drawings_indices.add(a1["idx"])
-                                    dim_drawings_indices.add(a2["idx"])
-                                    dim_nominals.add(txt)
-                                    used_tri_arrows.add(i)
-                                    used_tri_arrows.add(j)
-                                    extracted_dims.append({
-                                        "base": to_cad(((w[0] + w[2]) / 2.0, mid_y)),
-                                        "p1": to_cad((t1.x, t1.y)),
-                                        "p2": to_cad((t2.x, t2.y)),
-                                        "angle": 90.0,
-                                        "nominal": txt,
-                                    })
-                                    break
-                    elif abs(t1.y - t2.y) < 3.0 and abs(t1.x - t2.x) > 3.0:
-                        span_pt = abs(t1.x - t2.x)
-                        meas_mm = span_pt * total_scale
-                        mid_x = (t1.x + t2.x) / 2.0
-                        for w in crop_words:
-                            txt = str(w[4]).strip()
-                            if re.match(r"^\d+(\.\d+)?$", txt):
-                                val = float(txt)
-                                if abs(meas_mm - val) < 0.4 and abs((w[0] + w[2]) / 2.0 - mid_x) < 25.0:
-                                    dim_drawings_indices.add(a1["idx"])
-                                    dim_drawings_indices.add(a2["idx"])
-                                    dim_nominals.add(txt)
-                                    used_tri_arrows.add(i)
-                                    used_tri_arrows.add(j)
-                                    extracted_dims.append({
-                                        "base": to_cad((mid_x, (w[1] + w[3]) / 2.0)),
-                                        "p1": to_cad((t1.x, t1.y)),
-                                        "p2": to_cad((t2.x, t2.y)),
-                                        "angle": 0.0,
-                                        "nominal": txt,
-                                    })
-                                    break
+            # Word-driven matching for dimension nominals (chains and overarching dimensions)
+            num_words = []
+            for w_idx, w in enumerate(crop_words):
+                txt = str(w[4]).strip()
+                if re.match(r"^\d+(\.\d+)?$", txt):
+                    val = float(txt)
+                    if 2.0 <= val <= 3000.0:
+                        num_words.append((w_idx, txt, val, w))
+
+            # Match each numeric word to the best arrow or tick pair
+            for w_idx, txt, val, w in num_words:
+                w_mid_x = (w[0] + w[2]) / 2.0
+                w_mid_y = (w[1] + w[3]) / 2.0
+                best_candidate = None
+                best_score = 9999.0
+
+                for i, a1 in enumerate(triangle_arrows):
+                    t1 = a1["tip"]
+                    for j in range(i + 1, len(triangle_arrows)):
+                        a2 = triangle_arrows[j]
+                        t2 = a2["tip"]
+
+                        # Check horizontal dimension
+                        if abs(t1.y - t2.y) < 2.5 and abs(t1.x - t2.x) > 3.0:
+                            span_pt = abs(t1.x - t2.x)
+                            meas_mm = span_pt * total_scale
+                            diff = abs(meas_mm - val)
+                            if diff < 0.35:
+                                dim_y = (t1.y + t2.y) / 2.0
+                                dim_mid_x = (t1.x + t2.x) / 2.0
+                                dx = abs(w_mid_x - dim_mid_x)
+                                dy = abs(w_mid_y - dim_y)
+                                if dx < 25.0 and dy < 25.0:
+                                    score = diff * 10.0 + dy * 2.0 + dx
+                                    if score < best_score:
+                                        best_score = score
+                                        prof_side = -1 if dim_y > (filter_rect.y0 + filter_rect.y1) / 2.0 else +1
+                                        min_x, max_x = min(t1.x, t2.x), max(t1.x, t2.x)
+                                        face_y1, span1, w_idxs1 = find_witness_endpoint(min_x, dim_y, True, drawings, filter_rect, prof_side)
+                                        face_y2, span2, w_idxs2 = find_witness_endpoint(max_x, dim_y, True, drawings, filter_rect, prof_side)
+                                        face_y = face_y1 if span1 >= span2 else face_y2
+                                        best_candidate = {
+                                            "nominal": txt,
+                                            "val": val,
+                                            "meas_mm": meas_mm,
+                                            "diff": diff,
+                                            "base": to_cad((dim_mid_x, dim_y)),
+                                            "p1": to_cad((min_x, face_y)),
+                                            "p2": to_cad((max_x, face_y)),
+                                            "angle": 0.0,
+                                            "a1_idx": a1["idx"],
+                                            "a2_idx": a2["idx"],
+                                            "witness_idxs": w_idxs1 | w_idxs2,
+                                            "is_horiz": True,
+                                            "dim_coord": dim_y,
+                                            "min_val": min_x,
+                                            "max_val": max_x,
+                                        }
+
+                        # Check vertical dimension
+                        elif abs(t1.x - t2.x) < 2.5 and abs(t1.y - t2.y) > 3.0:
+                            span_pt = abs(t1.y - t2.y)
+                            meas_mm = span_pt * total_scale
+                            diff = abs(meas_mm - val)
+                            if diff < 0.35:
+                                dim_x = (t1.x + t2.x) / 2.0
+                                dim_mid_y = (t1.y + t2.y) / 2.0
+                                dx = abs(w_mid_x - dim_x)
+                                dy = abs(w_mid_y - dim_mid_y)
+                                if dx < 25.0 and dy < 25.0:
+                                    score = diff * 10.0 + dx * 2.0 + dy
+                                    if score < best_score:
+                                        best_score = score
+                                        prof_side = -1 if dim_x > (filter_rect.x0 + filter_rect.x1) / 2.0 else +1
+                                        min_y, max_y = min(t1.y, t2.y), max(t1.y, t2.y)
+                                        face_x1, span1, w_idxs1 = find_witness_endpoint(min_y, dim_x, False, drawings, filter_rect, prof_side)
+                                        face_x2, span2, w_idxs2 = find_witness_endpoint(max_y, dim_x, False, drawings, filter_rect, prof_side)
+                                        face_x = face_x1 if span1 >= span2 else face_x2
+                                        best_candidate = {
+                                            "nominal": txt,
+                                            "val": val,
+                                            "meas_mm": meas_mm,
+                                            "diff": diff,
+                                            "base": to_cad((dim_x, dim_mid_y)),
+                                            "p1": to_cad((face_x, min_y)),
+                                            "p2": to_cad((face_x, max_y)),
+                                            "angle": 90.0,
+                                            "a1_idx": a1["idx"],
+                                            "a2_idx": a2["idx"],
+                                            "witness_idxs": w_idxs1 | w_idxs2,
+                                            "is_horiz": False,
+                                            "dim_coord": dim_x,
+                                            "min_val": min_y,
+                                            "max_val": max_y,
+                                        }
+
+                if best_candidate:
+                    extracted_dims.append(best_candidate)
+                    dim_nominals.add(txt)
+                    dim_drawings_indices.add(best_candidate["a1_idx"])
+                    dim_drawings_indices.add(best_candidate["a2_idx"])
+                    dim_drawings_indices.update(best_candidate["witness_idxs"])
+                    # Suppress dimension line between markers
+                    for idx, d in enumerate(drawings):
+                        r_padded = fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5)
+                        if not filter_rect.intersects(r_padded):
+                            continue
+                        for it in d.get("items", []):
+                            if it[0] == "l":
+                                p1, p2 = it[1], it[2]
+                                if best_candidate["is_horiz"]:
+                                    if abs(p1.y - p2.y) < 0.5 and abs(p1.y - best_candidate["dim_coord"]) < 1.0:
+                                        if min(p1.x, p2.x) >= best_candidate["min_val"] - 2.0 and max(p1.x, p2.x) <= best_candidate["max_val"] + 2.0:
+                                            dim_drawings_indices.add(idx)
+                                else:
+                                    if abs(p1.x - p2.x) < 0.5 and abs(p1.x - best_candidate["dim_coord"]) < 1.0:
+                                        if min(p1.y, p2.y) >= best_candidate["min_val"] - 2.0 and max(p1.y, p2.y) <= best_candidate["max_val"] + 2.0:
+                                            dim_drawings_indices.add(idx)
 
         for dim_data in extracted_dims:
             try:
@@ -1114,7 +1223,8 @@ class PDFCadExtractor:
                 logger.debug("Error adding native dimension: %s", e)
 
         # 5. Extract Text Annotations
-        RE_ARTICLE = re.compile(r"\b(\d{3}\.[\w\d]{4}\.[\w\d]{2}|\d{3}\.[A-Z]\d{3}\.\d{2}|095\.[A-Z\d]{4}\.\d{2})\b")
+        RE_ARTICLE = re.compile(r"(\b\d{3}\.[\w\d]{4}\.[\w\d\-]{2}\b|\b\d{3}\.[A-Z\d]{4}\.[A-Z\d\-]{2}\b|\b095\.[A-Z\d]{4}\.[A-Z\d\-]{2}\b|\b\d{3}\.\d{4}\.\d{2}\b)")
+        RE_CALLOUT = re.compile(r"^(DSI\s*\d+|[A-ZА-Я]\s*-\s*[A-ZА-Я]|[A-ZА-Я]\s*\d*|[hH]|\d+/\d+mm)$")
         try:
             dict_blocks = page.get_text("dict")["blocks"]
             for b in dict_blocks:
@@ -1132,6 +1242,12 @@ class PDFCadExtractor:
                             if not text_str or text_str in dim_nominals:
                                 continue
 
+                            is_article = (
+                                RE_ARTICLE.search(text_str) is not None
+                                or any(text_str.startswith(pref) for pref in ("180.", "408.", "130.", "160.", "052.", "080.", "108.", "069.", "030.", "168.", "169."))
+                            )
+                            is_callout = RE_CALLOUT.search(text_str) is not None
+
                             orig = span.get("origin")
                             if rot == 270:
                                 cad_insert = to_cad((orig[0], orig[1]))
@@ -1141,6 +1257,11 @@ class PDFCadExtractor:
                                 if c_val == 65535:
                                     t_layer = "09_АННОТАЦИИ_ПРИМЕЧАНИЯ"
                                     t_color = 4
+                                elif is_article or is_callout:
+                                    t_layer = "Обозначения"
+                                    t_color = 2
+                                    if is_article:
+                                        layer_stats["08_АРТИКУЛЫ"] += 1
                                 else:
                                     t_layer = "09_АННОТАЦИИ_ТЕКСТ"
                                     t_color = 2
@@ -1150,9 +1271,11 @@ class PDFCadExtractor:
                                 cad_dir_y = -dir_y
                                 angle_deg = round(math.degrees(math.atan2(cad_dir_y, dir_x)), 1) % 360
                                 cad_insert = to_cad((orig[0], orig[1]))
-                                if RE_ARTICLE.search(text_str) or text_str.startswith("180.") or text_str.startswith("408.") or text_str.startswith("130."):
-                                    t_layer = "08_АРТИКУЛЫ"
+                                if is_article or is_callout:
+                                    t_layer = "Обозначения"
                                     t_color = 2
+                                    if is_article:
+                                        layer_stats["08_АРТИКУЛЫ"] += 1
                                 else:
                                     t_layer = "09_АННОТАЦИИ_ТЕКСТ"
                                     t_color = 7
@@ -1649,11 +1772,11 @@ class PDFCadExtractor:
                         ),
                     )
                     ratio = tot_len / diag
+                    # Task 027: Eliminate hatch zigzag strokes (ratio > 2.2) and microscopic fragments (< 1.0 mm)
+                    # Preserving all real profile walls, chambers, ribs, screw bosses, and flanges
                     if ratio > 2.2:
                         continue
-                    if not at_boundary and tot_len < 18.0:
-                        continue
-                    if tot_len < 3.0:
+                    if tot_len < 1.0:
                         continue
 
                 # Deduplicate coinciding polylines (stroke + fill duplicates)

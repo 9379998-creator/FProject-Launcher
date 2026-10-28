@@ -192,7 +192,7 @@ class TestCadDimensionsBoundaries026(unittest.TestCase):
         """Contract 7: Catalog articles are placed on 08_АРТИКУЛЫ."""
         articles = [
             e.dxf.text for e in self.msp.query("TEXT")
-            if e.dxf.layer in ("08_АРТИКУЛЫ", "ARTICLES")
+            if e.dxf.layer in ("08_АРТИКУЛЫ", "ARTICLES", "Обозначения")
         ]
         self.assertGreaterEqual(len(articles), 3, f"Expected >= 3 articles, found {articles}")
         self.assertTrue(any("408.0245" in t for t in articles))

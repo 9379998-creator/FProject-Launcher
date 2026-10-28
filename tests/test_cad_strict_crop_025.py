@@ -180,7 +180,7 @@ class TestCadStrictCrop025(unittest.TestCase):
         article_texts = [
             e.dxf.text
             for e in self.msp.query("TEXT")
-            if e.dxf.layer in ("08_АРТИКУЛЫ", "ARTICLES")
+            if e.dxf.layer in ("08_АРТИКУЛЫ", "ARTICLES", "Обозначения")
         ]
         self.assertGreaterEqual(
             len(article_texts), 3, f"Expected >= 3 articles on layer 08_АРТИКУЛЫ, found {article_texts}"
