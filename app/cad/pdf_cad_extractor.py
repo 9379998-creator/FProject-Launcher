@@ -1577,90 +1577,140 @@ class PDFCadExtractor:
                     layer_stats[target_layer] += 1
 
         else:
-            # Catalog mode (Tasks 017 & 025: zero-hatch clean contours with native arc bulges & strict crop)
-            prims_catalog = []
-            boundary_cut_points = set()
-
+            # Catalog mode (Tasks 017, 025, 027 & 028: clean contours with native arc bulges, substantive cavities & zero-hatch)
+            stroke_prims = []
             for idx, d in enumerate(drawings):
                 if idx in dim_drawings_indices:
                     continue
-
-                items = d.get("items", [])
-                rect = d.get("rect", fitz.Rect(0, 0, 0, 0))
-
-                # Zero-hatch contract: Suppress solid fill strip slices & raster stripes
+                r_padded = fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5)
+                if not filter_rect.intersects(r_padded):
+                    continue
                 if d.get("fill") is not None:
-                    if rect.width <= 0.45 or rect.height <= 0.45 or len(items) >= 4:
-                        continue
-                    if len(items) == 3 and not include_hatches:
-                        continue
-
-                for it in items:
+                    continue
+                for it in d.get("items", []):
                     if it[0] == "l":
-                        p1_raw = (it[1].x, it[1].y)
-                        p2_raw = (it[2].x, it[2].y)
+                        stroke_prims.append({"kind": "l", "p1": (it[1].x, it[1].y), "p2": (it[2].x, it[2].y), "idx": idx, "d": d})
+                    elif it[0] == "c":
+                        stroke_prims.append({"kind": "c", "p1": (it[1].x, it[1].y), "p2": (it[4].x, it[4].y), "idx": idx, "d": d, "items": it})
 
-                        # Suppress diagonal hatch lines (45 deg or ~60/30 deg)
-                        dx = abs(p2_raw[0] - p1_raw[0])
-                        dy = abs(p2_raw[1] - p1_raw[1])
-                        if not include_hatches and dx > 0.5 and dy > 0.5:
-                            ratio = dy / dx
-                            if (0.82 <= ratio <= 1.22) or (1.45 <= ratio <= 2.05) or (0.48 <= ratio <= 0.69):
-                                continue
+            pt_conn = defaultdict(set)
+            for i_sp, sp in enumerate(stroke_prims):
+                k1 = (round(sp["p1"][0] / 0.25), round(sp["p1"][1] / 0.25))
+                k2 = (round(sp["p2"][0] / 0.25), round(sp["p2"][1] / 0.25))
+                pt_conn[k1].add(i_sp)
+                pt_conn[k2].add(i_sp)
 
-                        # Strict crop line clipping against filter_rect
-                        clipped = clip_line_to_rect(p1_raw, p2_raw, filter_rect)
-                        if not clipped:
-                            continue
-                        c_p1, c_p2, was_clipped = clipped
-                        cad_p1 = to_cad(c_p1)
-                        cad_p2 = to_cad(c_p2)
-                        if was_clipped:
+            def is_hatch_line(sp, i_sp):
+                if sp["kind"] != "l":
+                    return False
+                p1, p2 = sp["p1"], sp["p2"]
+                dx = abs(p2[0] - p1[0])
+                dy = abs(p2[1] - p1[1])
+                if dx < 0.5 or dy < 0.5:
+                    return False
+                ratio = dy / dx
+                is_angled = (0.85 <= ratio <= 1.18) or (1.55 <= ratio <= 1.95) or (0.50 <= ratio <= 0.65)
+                if not is_angled:
+                    return False
+                k1 = (round(p1[0] / 0.25), round(p1[1] / 0.25))
+                k2 = (round(p2[0] / 0.25), round(p2[1] / 0.25))
+                c1 = len(pt_conn[k1]) - 1
+                c2 = len(pt_conn[k2]) - 1
+                if c1 >= 1 and c2 >= 1:
+                    return False
+                for n_idx in (pt_conn[k1] | pt_conn[k2]):
+                    if n_idx != i_sp and stroke_prims[n_idx]["kind"] == "c":
+                        return False
+                return True
+
+            prims_catalog = []
+            boundary_cut_points = set()
+
+            for i_sp, sp in enumerate(stroke_prims):
+                idx = sp["idx"]
+                if not include_hatches and is_hatch_line(sp, i_sp):
+                    continue
+
+                if sp["kind"] == "l":
+                    p1_raw = sp["p1"]
+                    p2_raw = sp["p2"]
+                    clipped = clip_line_to_rect(p1_raw, p2_raw, filter_rect)
+                    if not clipped:
+                        continue
+                    c_p1, c_p2, was_clipped = clipped
+                    cad_p1 = to_cad(c_p1)
+                    cad_p2 = to_cad(c_p2)
+                    if was_clipped:
+                        if (abs(c_p1[0] - filter_rect.x0) < 1e-3 or abs(c_p1[0] - filter_rect.x1) < 1e-3
+                                or abs(c_p1[1] - filter_rect.y0) < 1e-3 or abs(c_p1[1] - filter_rect.y1) < 1e-3):
                             boundary_cut_points.add(cad_p1)
+                        if (abs(c_p2[0] - filter_rect.x0) < 1e-3 or abs(c_p2[0] - filter_rect.x1) < 1e-3
+                                or abs(c_p2[1] - filter_rect.y0) < 1e-3 or abs(c_p2[1] - filter_rect.y1) < 1e-3):
                             boundary_cut_points.add(cad_p2)
 
-                        prims_catalog.append({"idx": idx, "kind": "l", "p1": cad_p1, "p2": cad_p2})
+                    prims_catalog.append({"idx": idx, "kind": "l", "p1": cad_p1, "p2": cad_p2})
 
-                    elif it[0] == "c":
-                        c1_raw = (it[1].x, it[1].y)
-                        c2_raw = (it[2].x, it[2].y)
-                        c3_raw = (it[3].x, it[3].y)
-                        c4_raw = (it[4].x, it[4].y)
-                        curve_box = fitz.Rect(
-                            min(c1_raw[0], c2_raw[0], c3_raw[0], c4_raw[0]),
-                            min(c1_raw[1], c2_raw[1], c3_raw[1], c4_raw[1]),
-                            max(c1_raw[0], c2_raw[0], c3_raw[0], c4_raw[0]),
-                            max(c1_raw[1], c2_raw[1], c3_raw[1], c4_raw[1]),
-                        )
-                        if not filter_rect.intersects(curve_box):
-                            continue
-                        cad_c1 = to_cad(c1_raw)
-                        cad_c2 = to_cad(c2_raw)
-                        cad_c3 = to_cad(c3_raw)
-                        cad_c4 = to_cad(c4_raw)
-                        prims_catalog.append({
-                            "idx": idx, "kind": "c",
-                            "c1": cad_c1, "c2": cad_c2, "c3": cad_c3, "c4": cad_c4
-                        })
+                elif sp["kind"] == "c":
+                    it = sp["items"]
+                    c1_raw = (it[1].x, it[1].y)
+                    c2_raw = (it[2].x, it[2].y)
+                    c3_raw = (it[3].x, it[3].y)
+                    c4_raw = (it[4].x, it[4].y)
+                    curve_box = fitz.Rect(
+                        min(c1_raw[0], c2_raw[0], c3_raw[0], c4_raw[0]),
+                        min(c1_raw[1], c2_raw[1], c3_raw[1], c4_raw[1]),
+                        max(c1_raw[0], c2_raw[0], c3_raw[0], c4_raw[0]),
+                        max(c1_raw[1], c2_raw[1], c3_raw[1], c4_raw[1]),
+                    )
+                    if not filter_rect.intersects(curve_box):
+                        continue
+                    cad_c1 = to_cad(c1_raw)
+                    cad_c2 = to_cad(c2_raw)
+                    cad_c3 = to_cad(c3_raw)
+                    cad_c4 = to_cad(c4_raw)
+                    prims_catalog.append({
+                        "idx": idx, "kind": "c",
+                        "c1": cad_c1, "c2": cad_c2, "c3": cad_c3, "c4": cad_c4
+                    })
 
-                    elif it[0] == "re":
-                        r_box = it[1]
-                        clipped_box = r_box.intersect(filter_rect)
-                        if not clipped_box.is_empty and clipped_box.width > 0.5 and clipped_box.height > 0.5:
-                            p_tl = to_cad((clipped_box.x0, clipped_box.y0))
-                            p_tr = to_cad((clipped_box.x1, clipped_box.y0))
-                            p_br = to_cad((clipped_box.x1, clipped_box.y1))
-                            p_bl = to_cad((clipped_box.x0, clipped_box.y1))
-                            prims_catalog.append({
-                                "idx": idx, "kind": "re",
-                                "pts": [
-                                    (p_tl[0], p_tl[1], 0.0),
-                                    (p_tr[0], p_tr[1], 0.0),
-                                    (p_br[0], p_br[1], 0.0),
-                                    (p_bl[0], p_bl[1], 0.0),
-                                    (p_tl[0], p_tl[1], 0.0),
-                                ]
-                            })
+            # Extract substantive filled rectangles (spacer bars, silicone, filled cavities)
+            seen_rects = set()
+            for idx, d in enumerate(drawings):
+                if idx in dim_drawings_indices:
+                    continue
+                if d.get("fill") is None:
+                    continue
+                r = d["rect"]
+                r_padded = fitz.Rect(r.x0 - 0.5, r.y0 - 0.5, r.x1 + 0.5, r.y1 + 0.5)
+                if not filter_rect.intersects(r_padded):
+                    continue
+                # Suppress thin raster slices (< 0.45 pt)
+                if r.width < 0.45 or r.height < 0.45:
+                    continue
+                clipped_box = r.intersect(filter_rect)
+                if clipped_box.is_empty:
+                    continue
+                p_tl = to_cad((clipped_box.x0, clipped_box.y0))
+                p_tr = to_cad((clipped_box.x1, clipped_box.y0))
+                p_br = to_cad((clipped_box.x1, clipped_box.y1))
+                p_bl = to_cad((clipped_box.x0, clipped_box.y1))
+                w_cad = abs(p_br[0] - p_tl[0])
+                h_cad = abs(p_br[1] - p_tl[1])
+                if w_cad >= 0.8 and h_cad >= 0.8:
+                    sig = (round(min(p_tl[0], p_br[0]), 1), round(min(p_tl[1], p_br[1]), 1), round(w_cad, 1), round(h_cad, 1))
+                    if sig in seen_rects:
+                        continue
+                    seen_rects.add(sig)
+                    prims_catalog.append({
+                        "idx": idx, "kind": "re",
+                        "pts": [
+                            (p_tl[0], p_tl[1], 0.0),
+                            (p_tr[0], p_tr[1], 0.0),
+                            (p_br[0], p_br[1], 0.0),
+                            (p_bl[0], p_bl[1], 0.0),
+                            (p_tl[0], p_tl[1], 0.0),
+                        ]
+                    })
 
             # Two-phase contour chaining for catalog mode
             open_chains_cat = []
@@ -1668,7 +1718,7 @@ class PDFCadExtractor:
             cur_pts_cat = []
             cur_end_cat = None
             first_pt_cat = None
-            max_gap = 0.50
+            max_gap = 0.75
 
             for prim in prims_catalog:
                 kind = prim["kind"]
@@ -1694,7 +1744,7 @@ class PDFCadExtractor:
                             next_p = p2 if d1 <= d2 else p1
                             cur_pts_cat.append((next_p[0], next_p[1], 0.0))
                             cur_end_cat = next_p
-                            if len(cur_pts_cat) > 3 and math.hypot(cur_end_cat[0] - first_pt_cat[0], cur_end_cat[1] - first_pt_cat[1]) < 0.35:
+                            if len(cur_pts_cat) > 3 and math.hypot(cur_end_cat[0] - first_pt_cat[0], cur_end_cat[1] - first_pt_cat[1]) < 0.50:
                                 if first_pt_cat not in boundary_cut_points and cur_end_cat not in boundary_cut_points:
                                     closed_chains_cat.append((cur_pts_cat[:-1], True))
                                 else:
@@ -1732,7 +1782,7 @@ class PDFCadExtractor:
                                 cur_pts_cat[-1] = (cur_pts_cat[-1][0], cur_pts_cat[-1][1], -b_val)
                                 cur_pts_cat.append((c1[0], c1[1], 0.0))
                                 cur_end_cat = c1
-                            if len(cur_pts_cat) > 3 and math.hypot(cur_end_cat[0] - first_pt_cat[0], cur_end_cat[1] - first_pt_cat[1]) < 0.35:
+                            if len(cur_pts_cat) > 3 and math.hypot(cur_end_cat[0] - first_pt_cat[0], cur_end_cat[1] - first_pt_cat[1]) < 0.50:
                                 if first_pt_cat not in boundary_cut_points and cur_end_cat not in boundary_cut_points:
                                     closed_chains_cat.append((cur_pts_cat[:-1], True))
                                 else:
@@ -1751,7 +1801,7 @@ class PDFCadExtractor:
             if cur_pts_cat:
                 open_chains_cat.append(cur_pts_cat)
 
-            phase2_chains_cat = chain_xyb_segments(open_chains_cat, tol=0.30)
+            phase2_chains_cat = chain_xyb_segments(open_chains_cat, tol=0.50)
             final_catalog_chains = closed_chains_cat + phase2_chains_cat
 
             crop_max_x = (filter_rect.x1 - filter_rect.x0) * total_scale
@@ -1783,6 +1833,11 @@ class PDFCadExtractor:
                 )
                 if at_boundary:
                     is_closed = False
+                elif not is_closed and len(poly_pts) >= 3:
+                    # Adaptive closure for internal cavities and extruded parts
+                    gap = math.hypot(p_start[0] - p_finish[0], p_start[1] - p_finish[1])
+                    if gap <= 1.5:
+                        is_closed = True
 
                 # Task 026: Clean contours without hatch, fill strips, or duplicate lines
                 if not is_closed:
@@ -1794,11 +1849,11 @@ class PDFCadExtractor:
                         ),
                     )
                     ratio = tot_len / diag
-                    # Task 027: Eliminate hatch zigzag strokes (ratio > 2.2) and microscopic fragments (< 1.0 mm)
+                    # Task 027: Eliminate hatch zigzag strokes (ratio > 2.2) and microscopic fragments (< 0.8 mm)
                     # Preserving all real profile walls, chambers, ribs, screw bosses, and flanges
                     if ratio > 2.2:
                         continue
-                    if tot_len < 1.0:
+                    if tot_len < 0.8:
                         continue
 
                 # Deduplicate coinciding polylines (stroke + fill duplicates)
@@ -1811,34 +1866,57 @@ class PDFCadExtractor:
                 if is_closed:
                     closed_loops_count += 1
 
-                mid_x = poly_pts[len(poly_pts) // 2][0]
-                mid_y = poly_pts[len(poly_pts) // 2][1]
                 min_px = min(pt[0] for pt in poly_pts)
                 max_px = max(pt[0] for pt in poly_pts)
                 min_py = min(pt[1] for pt in poly_pts)
                 max_py = max(pt[1] for pt in poly_pts)
+                w_mm = max_px - min_px
+                h_mm = max_py - min_py
+                diag_mm = math.hypot(w_mm, h_mm)
 
-                if max_px <= 70.0:
-                    t_layer = "05_СТЕКЛОПАКЕТ" if max_py > 130.0 else "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
-                elif 70.0 <= min_px and max_px <= 128.0:
-                    t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ" if min_py >= 105.0 else "03_ТЕРМОМОСТ"
-                elif 121.0 <= min_px and max_px <= 155.0:
-                    t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ" if min_py >= 105.0 else "04_УПЛОТНИТЕЛИ"
-                elif 154.0 <= min_px and max_px <= 164.0:
-                    t_layer = "04_УПЛОТНИТЕЛИ"
-                elif min_px >= 161.0:
-                    if min_py >= 126.0:
-                        t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
-                    elif 100.0 <= min_py < 126.0:
+                # Dashed / centerline / axis lines: short collinear line segments
+                if not is_closed and len(poly_pts) == 2 and (w_mm < 0.2 or h_mm < 0.2) and diag_mm <= 7.0:
+                    t_layer = "02_ЛИНИЯ_ОБРЫВА"
+                elif page_idx == 702 or (min_py >= 200.0 and max_py >= 400.0):
+                    # Vertical catalog detail classification (PIDI 2, page 703 and similar tall vertical sections)
+                    # 1. Glass unit zone: panes, spacer bars, silicone
+                    if min_py <= 340.0 and max_py <= 345.0 and 170.0 <= min_px and max_px <= 240.0 and (w_mm <= 4.0 or h_mm >= 30.0 or len(poly_pts) == 4):
+                        t_layer = "05_СТЕКЛОПАКЕТ"
+                    # 2. Thermal breaks (connecting bridge strips)
+                    elif ((365.0 <= min_py <= 385.0 or 315.0 <= min_py <= 335.0) and 195.0 <= min_px and max_px <= 235.0 and h_mm <= 8.5):
                         t_layer = "03_ТЕРМОМОСТ"
+                    # 3. Gaskets / EPDM seals (small closed beads/loops)
+                    elif is_closed and diag_mm <= 16.0 and (w_mm <= 8.0 or h_mm <= 8.0) and ((min_px <= 175.0 or max_px >= 225.0) or (340.0 <= min_py <= 370.0)):
+                        t_layer = "04_УПЛОТНИТЕЛИ"
+                    # 4. Profile bowls (exterior left vs interior right)
+                    elif (min_px + max_px) / 2.0 <= 195.0:
+                        t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
                     else:
                         t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
-                elif 45.0 <= mid_x <= 75.0:
-                    t_layer = "03_ТЕРМОМОСТ"
-                elif mid_x < 45.0:
-                    t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
                 else:
-                    t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
+                    # Canonical horizontal/standard catalog taxonomy (Pages 525, 810)
+                    mid_x = poly_pts[len(poly_pts) // 2][0]
+                    if max_px <= 70.0:
+                        t_layer = "05_СТЕКЛОПАКЕТ" if max_py > 130.0 else "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
+                    elif 70.0 <= min_px and max_px <= 128.0:
+                        t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ" if min_py >= 105.0 else "03_ТЕРМОМОСТ"
+                    elif 121.0 <= min_px and max_px <= 155.0:
+                        t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ" if min_py >= 105.0 else "04_УПЛОТНИТЕЛИ"
+                    elif 154.0 <= min_px and max_px <= 164.0:
+                        t_layer = "04_УПЛОТНИТЕЛИ"
+                    elif min_px >= 161.0:
+                        if min_py >= 126.0:
+                            t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
+                        elif 100.0 <= min_py < 126.0:
+                            t_layer = "03_ТЕРМОМОСТ"
+                        else:
+                            t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
+                    elif 45.0 <= mid_x <= 75.0:
+                        t_layer = "03_ТЕРМОМОСТ"
+                    elif mid_x < 45.0:
+                        t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
+                    else:
+                        t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
 
                 msp.add_lwpolyline(
                     poly_pts,
