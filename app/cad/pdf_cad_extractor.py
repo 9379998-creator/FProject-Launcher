@@ -22,6 +22,8 @@ import math
 import re
 import logging
 import subprocess
+import shutil
+import uuid
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
 from collections import defaultdict, Counter
@@ -525,14 +527,32 @@ def convert_dxf_to_dwg_via_accore(dxf_path: Path, dwg_path: Path) -> bool:
                 except OSError:
                     pass
 
-    dwg_abs = str(dwg_path.resolve()).replace("\\", "/")
-    scr_path = dxf_path.parent / f"_convert_{dxf_path.stem}.scr"
+        # AutoCAD accoreconsole requires pure ASCII paths in command script
+    has_non_ascii = any(ord(c) > 127 for c in str(dxf_path.resolve()) + str(dwg_path.resolve()))
+    if has_non_ascii:
+        import uuid
+        tmp_id = uuid.uuid4().hex[:8]
+        tmp_dxf = dxf_path.parent / f"_acad_in_{tmp_id}.dxf"
+        tmp_dwg = dxf_path.parent / f"_acad_out_{tmp_id}.dwg"
+        shutil.copy2(dxf_path, tmp_dxf)
+        actual_in = tmp_dxf
+        actual_out = tmp_dwg
+    else:
+        actual_in = dxf_path
+        actual_out = dwg_path
+        tmp_dxf = None
+        tmp_dwg = None
+
+    dwg_abs = str(actual_out.resolve()).replace("\\", "/")
+    scr_path = dxf_path.parent / f"_convert_{actual_in.stem}.scr"
     scr_content = f'(setvar "FILEDIA" 0)\n(setvar "CMDDIA" 0)\n(setvar "EXPERT" 5)\n_SAVEAS 2018 "{dwg_abs}"\n_QUIT\n'
     scr_path.write_text(scr_content, encoding="utf-8")
 
     try:
-        cmd = [str(accore_exe), "/i", str(dxf_path.resolve()), "/s", str(scr_path.resolve()), "/l", "en-US"]
+        cmd = [str(accore_exe), "/i", str(actual_in.resolve()), "/s", str(scr_path.resolve()), "/l", "en-US"]
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        if tmp_dwg and tmp_dwg.exists() and tmp_dwg.stat().st_size > 0:
+            shutil.copy2(tmp_dwg, dwg_path)
         success = dwg_path.exists() and dwg_path.stat().st_size > 0
         if success:
             logger.info("Successfully compiled DWG via AutoCAD accoreconsole: %s", dwg_path)
@@ -541,12 +561,12 @@ def convert_dxf_to_dwg_via_accore(dxf_path: Path, dwg_path: Path) -> bool:
         logger.warning("AutoCAD accoreconsole conversion failed: %s", ex)
         return False
     finally:
-        if scr_path.exists():
-            try:
-                scr_path.unlink()
-            except OSError:
-                pass
-
+        for p in (scr_path, tmp_dxf, tmp_dwg):
+            if p and p.exists():
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
 
 def detect_catalog_scale(page: fitz.Page, crop_box: Optional[fitz.Rect] = None) -> float:
     """
@@ -640,8 +660,9 @@ def detect_catalog_scale(page: fitz.Page, crop_box: Optional[fitz.Rect] = None) 
     # Case C: Triangle arrowhead dimension constructs (Reynaers MasterLine 8)
     triangle_arrow_tips = []
     for d in drawings:
-        if d.get("fill") is not None and len(d.get("items", [])) == 3:
-            pts = [it[1] for it in d.get("items", [])]
+        items = d.get("items", [])
+        if d.get("fill") is not None and len(items) == 3 and all(it[0] == "l" for it in items):
+            pts = [it[1] for it in items]
             if len(pts) == 3:
                 e0 = math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)
                 e1 = math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y)
@@ -866,7 +887,8 @@ class PDFCadExtractor:
         dimstyle.dxf.dimlfac = 1.0     # Critical: factor 1.0, NOT 100.0!
         dimstyle.dxf.dimtxt = 3.5      # 3.5 mm text height
         dimstyle.dxf.dimasz = 2.5      # 2.5 mm arrow size
-        dimstyle.dxf.dimdec = 0        # integer precision for nominals
+        dimstyle.dxf.dimdec = 1        # allow 1 decimal place (51.5, 89.5)
+        dimstyle.dxf.dimzin = 8        # suppress trailing zeros (5.0 -> 5, 23.0 -> 23, 33.0 -> 33)
         dimstyle.dxf.dimtxsty = "Standard"
         dimstyle.dxf.dimclrd = 3       # Green dimension line
         dimstyle.dxf.dimclre = 3       # Green extension lines
@@ -1036,7 +1058,7 @@ class PDFCadExtractor:
                 if not filter_rect.intersects(r_padded):
                     continue
                 items = d.get("items", [])
-                if d.get("fill") is not None and len(items) == 3:
+                if d.get("fill") is not None and len(items) == 3 and all(it[0] == "l" for it in items):
                     pts = [it[1] for it in items]
                     if len(pts) == 3:
                         e0 = math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y)
@@ -1065,22 +1087,22 @@ class PDFCadExtractor:
                             if is_horiz:
                                 if abs(p1.x - p2.x) < 1.0 and abs(p1.x - x_or_y) < 2.0:
                                     y_min, y_max = min(p1.y, p2.y), max(p1.y, p2.y)
-                                    if y_min - 2.0 <= dim_coord <= y_max + 2.0:
+                                    if y_min - 25.0 <= dim_coord <= y_max + 25.0:
+                                        witness_indices.add(idx)
                                         cand_y = y_min if prof_side < 0 else y_max
                                         span = abs(cand_y - dim_coord)
                                         if 1.0 <= span <= 35.0:
-                                            witness_indices.add(idx)
                                             if span > best_span:
                                                 best_span = span
                                                 best_coord = cand_y
                             else:
                                 if abs(p1.y - p2.y) < 1.0 and abs(p1.y - x_or_y) < 2.0:
                                     x_min, x_max = min(p1.x, p2.x), max(p1.x, p2.x)
-                                    if x_min - 2.0 <= dim_coord <= x_max + 2.0:
+                                    if x_min - 25.0 <= dim_coord <= x_max + 25.0:
+                                        witness_indices.add(idx)
                                         cand_x = x_min if prof_side < 0 else x_max
                                         span = abs(cand_x - dim_coord)
                                         if 1.0 <= span <= 35.0:
-                                            witness_indices.add(idx)
                                             if span > best_span:
                                                 best_span = span
                                                 best_coord = cand_x
@@ -1198,11 +1220,11 @@ class PDFCadExtractor:
                                 p1, p2 = it[1], it[2]
                                 if best_candidate["is_horiz"]:
                                     if abs(p1.y - p2.y) < 0.5 and abs(p1.y - best_candidate["dim_coord"]) < 1.0:
-                                        if min(p1.x, p2.x) >= best_candidate["min_val"] - 2.0 and max(p1.x, p2.x) <= best_candidate["max_val"] + 2.0:
+                                        if min(p1.x, p2.x) >= best_candidate["min_val"] - 15.0 and max(p1.x, p2.x) <= best_candidate["max_val"] + 15.0:
                                             dim_drawings_indices.add(idx)
                                 else:
                                     if abs(p1.x - p2.x) < 0.5 and abs(p1.x - best_candidate["dim_coord"]) < 1.0:
-                                        if min(p1.y, p2.y) >= best_candidate["min_val"] - 2.0 and max(p1.y, p2.y) <= best_candidate["max_val"] + 2.0:
+                                        if min(p1.y, p2.y) >= best_candidate["min_val"] - 15.0 and max(p1.y, p2.y) <= best_candidate["max_val"] + 15.0:
                                             dim_drawings_indices.add(idx)
 
         for dim_data in extracted_dims:
@@ -1212,6 +1234,7 @@ class PDFCadExtractor:
                     p1=dim_data["p1"],
                     p2=dim_data["p2"],
                     angle=dim_data["angle"],
+                    text=dim_data.get("nominal", ""),
                     dimstyle="FERO_MM",
                     dxfattribs={"layer": "Размерная линия", "color": 3},
                 )
@@ -1577,14 +1600,13 @@ class PDFCadExtractor:
                         p1_raw = (it[1].x, it[1].y)
                         p2_raw = (it[2].x, it[2].y)
 
-                        # Suppress diagonal hatch lines (45 deg or ~60 deg with short length)
+                        # Suppress diagonal hatch lines (45 deg or ~60/30 deg)
                         dx = abs(p2_raw[0] - p1_raw[0])
                         dy = abs(p2_raw[1] - p1_raw[1])
-                        l_raw = math.hypot(dx, dy)
-                        if not include_hatches and l_raw < 4.5 and (
-                            abs(dx - dy) < 0.25 or abs(dy - 1.8 * dx) < 0.25 or abs(dx - 1.8 * dy) < 0.25
-                        ):
-                            continue
+                        if not include_hatches and dx > 0.5 and dy > 0.5:
+                            ratio = dy / dx
+                            if (0.82 <= ratio <= 1.22) or (1.45 <= ratio <= 2.05) or (0.48 <= ratio <= 0.69):
+                                continue
 
                         # Strict crop line clipping against filter_rect
                         clipped = clip_line_to_rect(p1_raw, p2_raw, filter_rect)
@@ -1791,14 +1813,30 @@ class PDFCadExtractor:
 
                 mid_x = poly_pts[len(poly_pts) // 2][0]
                 mid_y = poly_pts[len(poly_pts) // 2][1]
-                if 120.0 <= mid_x <= 145.0 and mid_y < 140.0:
+                min_px = min(pt[0] for pt in poly_pts)
+                max_px = max(pt[0] for pt in poly_pts)
+                min_py = min(pt[1] for pt in poly_pts)
+                max_py = max(pt[1] for pt in poly_pts)
+
+                if max_px <= 70.0:
+                    t_layer = "05_СТЕКЛОПАКЕТ" if max_py > 130.0 else "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
+                elif 70.0 <= min_px and max_px <= 128.0:
+                    t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ" if min_py >= 105.0 else "03_ТЕРМОМОСТ"
+                elif 121.0 <= min_px and max_px <= 155.0:
+                    t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ" if min_py >= 105.0 else "04_УПЛОТНИТЕЛИ"
+                elif 154.0 <= min_px and max_px <= 164.0:
                     t_layer = "04_УПЛОТНИТЕЛИ"
+                elif min_px >= 161.0:
+                    if min_py >= 126.0:
+                        t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
+                    elif 100.0 <= min_py < 126.0:
+                        t_layer = "03_ТЕРМОМОСТ"
+                    else:
+                        t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
                 elif 45.0 <= mid_x <= 75.0:
                     t_layer = "03_ТЕРМОМОСТ"
                 elif mid_x < 45.0:
                     t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
-                elif mid_x > 115.0:
-                    t_layer = "05_СТЕКЛОПАКЕТ"
                 else:
                     t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
 

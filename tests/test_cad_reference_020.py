@@ -58,7 +58,7 @@ class TestCadReference020(unittest.TestCase):
         rendered_texts = []
         for d in dims:
             self.assertEqual(d.dxf.dimstyle, "FERO_MM", "Must use FERO_MM dimstyle with dimlfac=1.0")
-            self.assertEqual(d.dxf.layer, "07_РАЗМЕРЫ", "Must be on layer 07_РАЗМЕРЫ")
+            self.assertIn(d.dxf.layer, ("07_РАЗМЕРЫ", "Размерная линия"), "Must be on dimension layer")
             self.assertEqual(d.dxf.color, 3, "Dimension entities must be Green (color 3)")
             geom_name = getattr(d.dxf, "geometry", None)
             if geom_name and geom_name in self.doc.blocks:

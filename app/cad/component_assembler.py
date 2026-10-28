@@ -216,18 +216,18 @@ def assemble_physical_components(doc: Drawing) -> Dict[str, Any]:
     # Pass 1b: Catalog mode fallback for extruded products
     if not component_entities:
         catalog_layer_map = {
-            "01_АЛЮМИНИЙ_НАРУЖНЫЙ": ("PART_ALU_SASH_OUTER", "Наружная чаша профиля створки (алюминий)"),
-            "01_АЛЮМИНИЙ_ВНУТРЕННИЙ": ("PART_ALU_SASH_INNER", "Внутренняя чаша профиля створки (алюминий)"),
-            "03_ТЕРМОМОСТ": ("PART_THERMAL_BREAKS", "Полиамидные термомосты"),
-            "04_УПЛОТНИТЕЛИ": ("PART_SEALS_EPDM", "Уплотнители резиновые / EPDM"),
-            "05_СТЕКЛОПАКЕТ": ("PART_GLASS_UNIT", "Стеклопакет и дистанционные рамки"),
+            "01_АЛЮМИНИЙ_НАРУЖНЫЙ": ("PART_ALU_SASH_OUTER", "Профиль наружной чаши (алюминий)"),
+            "01_АЛЮМИНИЙ_ВНУТРЕННИЙ": ("PART_ALU_SASH_INNER", "Профиль внутренней чаши (алюминий)"),
+            "03_ТЕРМОМОСТ": ("PART_THERMAL_BREAKS", "Термоизоляционные мосты"),
+            "04_УПЛОТНИТЕЛИ": ("PART_SEALS_EPDM", "Уплотнители фальца / EPDM"),
+            "05_СТЕКЛОПАКЕТ": ("PART_GLASS_UNIT", "Заполнение / стеклопакет"),
         }
         for ent in all_entities:
             lyr = ent.dxf.layer
             lyr_up = lyr.upper()
             if "РАЗМЕР" in lyr_up or "DIMENSION" in ent.dxftype().upper() or "DIMENSION" in lyr_up:
                 continue
-            if "ВЫНОСКИ" in lyr_up or "НАДПИСИ" in lyr_up or "АРТИКУЛ" in lyr_up or "ARTICLE" in lyr_up or "АННОТАЦИИ" in lyr_up or "ОБОЗНАЧЕНИЯ" in lyr_up:
+            if "ОБОЗНАЧ" in lyr_up or "АРТИКУЛ" in lyr_up or "ВЫНОСК" in lyr_up or "ARTICLE" in lyr_up or "CALLOUT" in lyr_up:
                 continue
             if lyr in catalog_layer_map:
                 p_id, p_name = catalog_layer_map[lyr]
