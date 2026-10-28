@@ -1577,7 +1577,25 @@ class PDFCadExtractor:
                     layer_stats[target_layer] += 1
 
         else:
-            # Catalog mode (Tasks 017, 025, 027 & 028: clean contours with native arc bulges, substantive cavities & zero-hatch)
+            # Catalog mode (Tasks 017, 025, 027, 028 & 029: clean contours with quads, native arc bulges, substantive cavities & zero-hatch)
+            # Pre-scan quad boxes for cross-diagonal insulation hatch classification (Task 029)
+            quad_boxes = []
+            for d in drawings:
+                r_padded = fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5)
+                if not filter_rect.intersects(r_padded) or d.get("fill") is not None:
+                    continue
+                for it in d.get("items", []):
+                    if it[0] == "qu":
+                        q = it[1]
+                        q_rect = fitz.Rect(
+                            min(p.x for p in [q.ul, q.ur, q.lr, q.ll]),
+                            min(p.y for p in [q.ul, q.ur, q.lr, q.ll]),
+                            max(p.x for p in [q.ul, q.ur, q.lr, q.ll]),
+                            max(p.y for p in [q.ul, q.ur, q.lr, q.ll]),
+                        )
+                        if q_rect.width >= 8.0 and q_rect.height >= 8.0:
+                            quad_boxes.append(q_rect)
+
             stroke_prims = []
             for idx, d in enumerate(drawings):
                 if idx in dim_drawings_indices:
@@ -1589,9 +1607,33 @@ class PDFCadExtractor:
                     continue
                 for it in d.get("items", []):
                     if it[0] == "l":
-                        stroke_prims.append({"kind": "l", "p1": (it[1].x, it[1].y), "p2": (it[2].x, it[2].y), "idx": idx, "d": d})
+                        p1 = (it[1].x, it[1].y)
+                        p2 = (it[2].x, it[2].y)
+                        # Check if this line is an interior diagonal cross line of an insulation quad box (Task 029)
+                        is_box_cross = False
+                        if not include_hatches and quad_boxes:
+                            dx = abs(p2[0] - p1[0])
+                            dy = abs(p2[1] - p1[1])
+                            if dx >= 8.0 and dy >= 8.0:
+                                for q_rect in quad_boxes:
+                                    if (abs(p1[0] - q_rect.x0) < 0.6 or abs(p1[0] - q_rect.x1) < 0.6) and                                        (abs(p2[0] - q_rect.x0) < 0.6 or abs(p2[0] - q_rect.x1) < 0.6) and                                        (abs(p1[1] - q_rect.y0) < 0.6 or abs(p1[1] - q_rect.y1) < 0.6) and                                        (abs(p2[1] - q_rect.y0) < 0.6 or abs(p2[1] - q_rect.y1) < 0.6):
+                                        is_box_cross = True
+                                        break
+                        if is_box_cross:
+                            continue
+                        stroke_prims.append({"kind": "l", "p1": p1, "p2": p2, "idx": idx, "d": d})
                     elif it[0] == "c":
                         stroke_prims.append({"kind": "c", "p1": (it[1].x, it[1].y), "p2": (it[4].x, it[4].y), "idx": idx, "d": d, "items": it})
+                    elif it[0] == "qu":
+                        q = it[1]
+                        pts = [(q.ul.x, q.ul.y), (q.ur.x, q.ur.y), (q.lr.x, q.lr.y), (q.ll.x, q.ll.y)]
+                        for i in range(4):
+                            stroke_prims.append({"kind": "l", "p1": pts[i], "p2": pts[(i+1)%4], "idx": idx, "d": d, "is_quad": True})
+                    elif it[0] == "re":
+                        r = it[1]
+                        pts = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)]
+                        for i in range(4):
+                            stroke_prims.append({"kind": "l", "p1": pts[i], "p2": pts[(i+1)%4], "idx": idx, "d": d, "is_rect": True})
 
             pt_conn = defaultdict(set)
             for i_sp, sp in enumerate(stroke_prims):
@@ -1894,25 +1936,35 @@ class PDFCadExtractor:
                     else:
                         t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
                 else:
-                    # Canonical horizontal/standard catalog taxonomy (Pages 525, 810)
+                    # Canonical horizontal/standard catalog taxonomy (Pages 525, 557, 810 - Task 029)
                     mid_x = poly_pts[len(poly_pts) // 2][0]
-                    if max_px <= 70.0:
-                        t_layer = "05_СТЕКЛОПАКЕТ" if max_py > 130.0 else "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
-                    elif 70.0 <= min_px and max_px <= 128.0:
-                        t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ" if min_py >= 105.0 else "03_ТЕРМОМОСТ"
-                    elif 121.0 <= min_px and max_px <= 155.0:
-                        t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ" if min_py >= 105.0 else "04_УПЛОТНИТЕЛИ"
-                    elif 154.0 <= min_px and max_px <= 164.0:
+                    # 1. Glass unit zone: panes, spacer bars, silicone
+                    if max_px <= 75.0 and max_py > 60.0:
+                        t_layer = "05_СТЕКЛОПАКЕТ"
+                    # 2. EPDM gaskets: flexible loops/strips at sealing interfaces (do not merge metal and rubber)
+                    elif diag_mm <= 18.0 and (w_mm <= 14.0 or h_mm <= 14.0) and (
+                        (170.0 <= min_px <= 192.0) or (121.0 <= min_px <= 164.0 and min_py < 105.0) or (min_px <= 65.0)
+                    ):
                         t_layer = "04_УПЛОТНИТЕЛИ"
+                    # 3. Thermal breaks: connecting strips, vertical bars, and insulation boxes
+                    elif (70.0 <= min_px and max_px <= 150.0 and min_py < 105.0) or (
+                        45.0 <= mid_x <= 75.0
+                    ) or (
+                        100.0 <= min_py < 126.0 and (160.0 <= min_px <= 202.0)
+                    ) or (
+                        is_closed and (12.0 <= w_mm <= 26.0) and (10.0 <= h_mm <= 24.0) and (75.0 <= min_px and max_px <= 150.0)
+                    ):
+                        t_layer = "03_ТЕРМОМОСТ"
+                    # 4. Aluminum profile bowls
+                    elif 70.0 <= min_px and max_px <= 128.0 and min_py >= 105.0:
+                        t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
+                    elif 121.0 <= min_px and max_px <= 155.0 and min_py >= 105.0:
+                        t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
                     elif min_px >= 161.0:
                         if min_py >= 126.0:
                             t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
-                        elif 100.0 <= min_py < 126.0:
-                            t_layer = "03_ТЕРМОМОСТ"
                         else:
                             t_layer = "01_АЛЮМИНИЙ_ВНУТРЕННИЙ"
-                    elif 45.0 <= mid_x <= 75.0:
-                        t_layer = "03_ТЕРМОМОСТ"
                     elif mid_x < 45.0:
                         t_layer = "01_АЛЮМИНИЙ_НАРУЖНЫЙ"
                     else:
