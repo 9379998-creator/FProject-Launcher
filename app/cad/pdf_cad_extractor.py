@@ -1030,8 +1030,8 @@ class PDFCadExtractor:
             ("09_АННОТАЦИИ_ТЕКСТ", 2, 20),
             ("09_АННОТАЦИИ_ПРИМЕЧАНИЯ", 4, 20),
             ("01_АЛЮМИНИЙ_НАРУЖНЫЙ", 7, 35),
-            ("01_АЛЮМИНИЙ_ВНУТРЕННИЙ", 3, 35),
-            ("03_ТЕРМОМОСТ", 8, 25),
+            ("01_АЛЮМИНИЙ_ВНУТРЕННИЙ", 7, 35),
+            ("03_ТЕРМОМОСТ", 9, 25),
             ("04_УПЛОТНИТЕЛИ", 4, 25),
         ]
         for name, col, lw in layers_def:
@@ -1071,10 +1071,10 @@ class PDFCadExtractor:
             if not filter_rect.intersects(r_padded):
                 continue
             items = d.get("items", [])
-            # Triangle arrowheads (filled lines, chunked in groups of 3)
+            # Triangle arrowheads (filled lines, strictly 1 or 2 small triangles: 3 or 6 lines, edge <= 12 pt)
             if d.get("fill") is not None:
                 lines = [it for it in items if it[0] == "l"]
-                if len(lines) >= 3 and len(lines) % 3 == 0:
+                if len(lines) in (3, 6):
                     for k in range(0, len(lines), 3):
                         p0 = lines[k][1]
                         p1 = lines[k+1][1]
@@ -1082,11 +1082,12 @@ class PDFCadExtractor:
                         e0 = math.hypot(p0.x - p1.x, p0.y - p1.y)
                         e1 = math.hypot(p1.x - p2.x, p1.y - p2.y)
                         e2 = math.hypot(p2.x - p0.x, p2.y - p0.y)
-                        tip_phys = p2 if e0 <= e1 and e0 <= e2 else (p0 if e1 <= e0 and e1 <= e2 else p1)
-                        tip_vis = fitz.Point(tip_phys.x, tip_phys.y) * rot_m
-                        arrow_candidates.append({
-                            "idx": idx, "tip_phys": tip_phys, "tip_vis": tip_vis, "kind": "arrow", "rect": d["rect"]
-                        })
+                        if max(e0, e1, e2) <= 12.0:
+                            tip_phys = p2 if e0 <= e1 and e0 <= e2 else (p0 if e1 <= e0 and e1 <= e2 else p1)
+                            tip_vis = fitz.Point(tip_phys.x, tip_phys.y) * rot_m
+                            arrow_candidates.append({
+                                "idx": idx, "tip_phys": tip_phys, "tip_vis": tip_vis, "kind": "arrow", "rect": d["rect"]
+                            })
             # 45-degree architectural slash ticks
             elif len(items) == 1 and items[0][0] == "l":
                 p1_phys, p2_phys = items[0][1], items[0][2]
@@ -1105,9 +1106,23 @@ class PDFCadExtractor:
             arrows_by_vy[round(a["tip_vis"].y / 2.0)].append(a)
             arrows_by_vx[round(a["tip_vis"].x / 2.0)].append(a)
 
+        # Identify 3+3 digit split article numbers (e.g. Schuco "358 150", "245 755") so they are never treated as dimensions
+        article_word_indices = set()
+        three_digit_words = [
+            (wi, w) for wi, w in enumerate(crop_words)
+            if re.match(r"^\d{3}$", str(w[4]).strip())
+        ]
+        for i_td, (wi1, w1) in enumerate(three_digit_words):
+            for wi2, w2 in three_digit_words[i_td + 1:]:
+                if abs(w1[1] - w2[1]) < 3.0 and (0.0 <= (w2[0] - w1[2]) <= 12.0 or 0.0 <= (w1[0] - w2[2]) <= 12.0):
+                    article_word_indices.add(wi1)
+                    article_word_indices.add(wi2)
+
         # Transform numeric words to visual coordinates
         num_words = []
-        for w in crop_words:
+        for wi, w in enumerate(crop_words):
+            if wi in article_word_indices:
+                continue
             txt = str(w[4]).strip()
             if re.match(r"^\d+(\.\d+)?$", txt):
                 val = float(txt)
@@ -1247,8 +1262,13 @@ class PDFCadExtractor:
             if best_candidate:
                 extracted_dims.append(best_candidate)
                 dim_nominals.add(txt)
-                dim_drawings_indices.add(best_candidate["a1_idx"])
-                dim_drawings_indices.add(best_candidate["a2_idx"])
+                for a_idx in (best_candidate["a1_idx"], best_candidate["a2_idx"]):
+                    dim_drawings_indices.add(a_idx)
+                    if a_idx > 0 and len(drawings[a_idx].get("items", [])) == 6:
+                        prev_d = drawings[a_idx - 1]
+                        prev_items = prev_d.get("items", [])
+                        if prev_d.get("fill") is None and len(prev_items) in (3, 4, 5) and all(it[0] == "l" for it in prev_items):
+                            dim_drawings_indices.add(a_idx - 1)
 
         for dim_data in extracted_dims:
             try:
@@ -1269,7 +1289,7 @@ class PDFCadExtractor:
                 logger.debug("Error adding native dimension: %s", e)
 
         # 5. Extract Text Annotations
-        RE_ARTICLE = re.compile(r"(\b\d{3}\.[\w\d]{4}\.[\w\d\-]{2}\b|\b\d{3}\.[A-Z\d]{4}\.[A-Z\d\-]{2}\b|\b095\.[A-Z\d]{4}\.[A-Z\d\-]{2}\b|\b\d{3}\.\d{4}\.\d{2}\b)")
+        RE_ARTICLE = re.compile(r"(\b\d{3}\.[\w\d]{4}\.[\w\d\-]{2}\b|\b\d{3}\.[A-Z\d]{4}\.[A-Z\d\-]{2}\b|\b095\.[A-Z\d]{4}\.[A-Z\d\-]{2}\b|\b\d{3}\.\d{4}\.\d{2}\b|\b\d{3}\s+\d{3}\b)")
         RE_CALLOUT = re.compile(r"^(DSI\s*\d+|[A-ZА-Я]\s*-\s*[A-ZА-Я]|[A-ZА-Я]\s*\d*|[hH]|\d+/\d+mm)$")
         try:
             dict_blocks = page.get_text("dict")["blocks"]
@@ -1626,10 +1646,9 @@ class PDFCadExtractor:
                 r_padded = fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5)
                 if not filter_rect.intersects(r_padded):
                     continue
-                # In catalog mode: skip pure fills that have no stroke and are thin shading slices (< 0.45 pt)
+                # In catalog mode: skip pure scanline fill bands that have no stroke
                 if d.get("color") is None and d.get("fill") is not None:
-                    if min(d["rect"].width, d["rect"].height) <= 0.45:
-                        continue
+                    continue
                 for it in d.get("items", []):
                     if it[0] == "l":
                         p1 = (it[1].x, it[1].y)
@@ -1695,8 +1714,6 @@ class PDFCadExtractor:
 
             for i_sp, sp in enumerate(stroke_prims):
                 idx = sp["idx"]
-                if not include_hatches and is_hatch_line(sp, i_sp):
-                    continue
 
                 if sp["kind"] == "l":
                     p1_raw = sp["p1"]
@@ -1738,45 +1755,6 @@ class PDFCadExtractor:
                     prims_catalog.append({
                         "idx": idx, "kind": "c",
                         "c1": cad_c1, "c2": cad_c2, "c3": cad_c3, "c4": cad_c4
-                    })
-
-            # Extract substantive filled rectangles (spacer bars, silicone, filled cavities)
-            seen_rects = set()
-            for idx, d in enumerate(drawings):
-                if idx in dim_drawings_indices:
-                    continue
-                if d.get("fill") is None:
-                    continue
-                r = d["rect"]
-                r_padded = fitz.Rect(r.x0 - 0.5, r.y0 - 0.5, r.x1 + 0.5, r.y1 + 0.5)
-                if not filter_rect.intersects(r_padded):
-                    continue
-                # Suppress thin raster slices (< 0.45 pt)
-                if r.width < 0.45 or r.height < 0.45:
-                    continue
-                clipped_box = r.intersect(filter_rect)
-                if clipped_box.is_empty:
-                    continue
-                p_tl = to_cad((clipped_box.x0, clipped_box.y0))
-                p_tr = to_cad((clipped_box.x1, clipped_box.y0))
-                p_br = to_cad((clipped_box.x1, clipped_box.y1))
-                p_bl = to_cad((clipped_box.x0, clipped_box.y1))
-                w_cad = abs(p_br[0] - p_tl[0])
-                h_cad = abs(p_br[1] - p_tl[1])
-                if w_cad >= 0.8 and h_cad >= 0.8:
-                    sig = (round(min(p_tl[0], p_br[0]), 1), round(min(p_tl[1], p_br[1]), 1), round(w_cad, 1), round(h_cad, 1))
-                    if sig in seen_rects:
-                        continue
-                    seen_rects.add(sig)
-                    prims_catalog.append({
-                        "idx": idx, "kind": "re",
-                        "pts": [
-                            (p_tl[0], p_tl[1], 0.0),
-                            (p_tr[0], p_tr[1], 0.0),
-                            (p_br[0], p_br[1], 0.0),
-                            (p_bl[0], p_bl[1], 0.0),
-                            (p_tl[0], p_tl[1], 0.0),
-                        ]
                     })
 
             # Two-phase contour chaining for catalog mode
@@ -1934,23 +1912,6 @@ class PDFCadExtractor:
                     if gap <= 1.5:
                         is_closed = True
 
-                # Task 026: Clean contours without hatch, fill strips, or duplicate lines
-                if not is_closed:
-                    diag = max(
-                        0.1,
-                        math.hypot(
-                            max(pt[0] for pt in poly_pts) - min(pt[0] for pt in poly_pts),
-                            max(pt[1] for pt in poly_pts) - min(pt[1] for pt in poly_pts),
-                        ),
-                    )
-                    ratio = tot_len / diag
-                    # Task 027: Eliminate hatch zigzag strokes (ratio > 2.2) and microscopic fragments (< 0.8 mm)
-                    # Preserving all real profile walls, chambers, ribs, screw bosses, and flanges
-                    if ratio > 2.2:
-                        continue
-                    if tot_len < 0.8:
-                        continue
-
                 # Deduplicate coinciding polylines (stroke + fill duplicates)
                 sig_forward = tuple((round(pt[0], 2), round(pt[1], 2)) for pt in poly_pts)
                 sig_reverse = tuple((round(pt[0], 2), round(pt[1], 2)) for pt in reversed(poly_pts))
@@ -2049,6 +2010,23 @@ class PDFCadExtractor:
 
         dxf_path = output_path.with_suffix(".dxf")
         dwg_path = output_path.with_suffix(".dwg")
+        if dwg_path.exists():
+            try:
+                dwg_path.unlink()
+            except OSError:
+                for v_idx in range(2, 100):
+                    cand_dwg = output_path.with_name(f"{output_path.stem}_v{v_idx}.dwg")
+                    if not cand_dwg.exists():
+                        dwg_path = cand_dwg
+                        dxf_path = cand_dwg.with_suffix(".dxf")
+                        break
+                    try:
+                        cand_dwg.unlink()
+                        dwg_path = cand_dwg
+                        dxf_path = cand_dwg.with_suffix(".dxf")
+                        break
+                    except OSError:
+                        continue
 
         # Assemble entities into native physical components (Tasks 024 & 032)
         comp_summary = assemble_physical_components(dxf_doc)
