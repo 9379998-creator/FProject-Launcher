@@ -28,8 +28,14 @@ _MANIFEST_FILENAME = "version.json"
 
 def _candidate_paths() -> list[Path]:
     """Вернуть пути к version.json в порядке приоритета."""
+    if getattr(sys, "frozen", False):
+        exe_root = Path(sys.executable).resolve().parent
+        return [exe_root / _MANIFEST_FILENAME, exe_root / "app" / _MANIFEST_FILENAME]
     here = Path(__file__).resolve()
-    # app/shared/version_info.py -> app/ -> repo root
+    if "_internal" in here.parts:
+        idx = here.parts.index("_internal")
+        repo_root = Path(*here.parts[:idx])
+        return [repo_root / _MANIFEST_FILENAME, repo_root / "app" / _MANIFEST_FILENAME]
     app_dir = here.parents[1]
     repo_root = here.parents[2]
     return [repo_root / _MANIFEST_FILENAME, app_dir / _MANIFEST_FILENAME]

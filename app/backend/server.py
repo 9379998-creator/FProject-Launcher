@@ -3920,8 +3920,9 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 import importlib
                 import app.cad.component_assembler as _ca_mod
                 import app.cad.pdf_cad_extractor as _pce_mod
-                importlib.reload(_ca_mod)
-                importlib.reload(_pce_mod)
+                if not getattr(sys, "frozen", False):
+                    importlib.reload(_ca_mod)
+                    importlib.reload(_pce_mod)
                 from app.cad.pdf_cad_extractor import export_pdf_page_to_cad
                 res = export_pdf_page_to_cad(
                     pdf_path=pdf_file,

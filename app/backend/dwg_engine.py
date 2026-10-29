@@ -27,7 +27,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+if getattr(sys, "frozen", False):
+    REPO_ROOT = Path(sys.executable).resolve().parent
+else:
+    _p_here = Path(__file__).resolve()
+    REPO_ROOT = Path(*_p_here.parts[: _p_here.parts.index("_internal")]) if "_internal" in _p_here.parts else _p_here.parents[2]
 logger = logging.getLogger("dwg_engine")
 
 # Глобальный семафор для предотвращения параллельного запуска accoreconsole.exe

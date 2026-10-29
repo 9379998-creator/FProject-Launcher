@@ -1,9 +1,16 @@
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Optional, List, Dict
 import time
 
-RUNTIME_DIR = Path("runtime")
+if getattr(sys, "frozen", False):
+    _REPO_ROOT = Path(sys.executable).resolve().parent
+else:
+    _p_db = Path(__file__).resolve()
+    _REPO_ROOT = Path(*_p_db.parts[: _p_db.parts.index("_internal")]) if "_internal" in _p_db.parts else _p_db.parents[2]
+
+RUNTIME_DIR = _REPO_ROOT / "runtime" 
 DB_DIR = RUNTIME_DIR / "db"
 DB_PATH = DB_DIR / "launcher.sqlite"
 

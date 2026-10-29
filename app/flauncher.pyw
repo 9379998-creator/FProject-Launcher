@@ -51,18 +51,12 @@ def _resource_path(*relative: str) -> str:
 def _backend_python() -> str:
     """Интерпретатор для запуска backend-сервера (server.py).
 
-    Приоритет: встроенный runtime/python/pythonw.exe, затем (только
-    в frozen-режиме без embedded runtime) pythonw/python из PATH.
-    В обычном режиме — текущий интерпретатор. Никогда не возвращаем
-    сам EXE: иначе frozen-процесс породил бы каскад копий GUI.
+    Приоритет: встроенный runtime/python/pythonw.exe, затем сам текущий
+    интерпретатор / frozen EXE (который напрямую обрабатывает запуск
+    server.py и вспомогательных .py скриптов через встроенную среду).
     """
     if os.path.exists(EMBEDDED_PYTHON):
         return EMBEDDED_PYTHON
-    if getattr(sys, 'frozen', False):
-        for candidate in ("pythonw.exe", "python.exe"):
-            found = shutil.which(candidate)
-            if found:
-                return found
     return sys.executable
 
 
@@ -379,9 +373,9 @@ def reap_stale_server(port: int = 8780) -> None:
                 if p.pid == my_pid:
                     continue
                 name = (p.info.get("name") or "").lower()
-                if "python" in name:
+                if "python" in name or "fengineeringlauncher" in name or "fprojectlauncher" in name:
                     cmdline = " ".join(p.info.get("cmdline") or []).lower()
-                    if "server.py" in cmdline:
+                    if "server.py" in cmdline or "--backend-server" in cmdline:
                         log(f"Reaped stale server.py process pid {p.pid}")
                         kill_process_tree_silent(p.pid)
             except Exception:
@@ -716,4 +710,21 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) >= 2 and (sys.argv[1].lower().endswith(".py") or sys.argv[1] == "--backend-server"):
+        _target_arg = sys.argv[1]
+        if _target_arg == "--backend-server" or os.path.basename(_target_arg).lower() == "server.py":
+            sys.argv = [_target_arg] + sys.argv[2:]
+            if REPO_ROOT not in sys.path:
+                sys.path.insert(0, REPO_ROOT)
+            _meipass = getattr(sys, "_MEIPASS", "")
+            if _meipass and _meipass not in sys.path:
+                sys.path.insert(0, str(_meipass))
+            from app.backend.server import main as _server_main
+            _server_main()
+            sys.exit(0)
+        elif os.path.isfile(_target_arg):
+            import runpy
+            sys.argv = sys.argv[1:]
+            runpy.run_path(_target_arg, run_name="__main__")
+            sys.exit(0)
     main()
