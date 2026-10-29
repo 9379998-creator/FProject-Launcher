@@ -91,7 +91,10 @@ function Invoke-NativeDwgPdfExport {
   if ($LayoutName) {
     $safeLayout = ($LayoutName -replace '[\x00-\x1F\x7F]', '').Replace('\', '\\').Replace('"', '\"')
   }
-  if ($safeLayout -and $safeLayout -ne "Model" -and $safeLayout -ne "Layout1") {
+  if ($safeLayout -eq "Model") {
+    $scriptLines += '(setvar "CTAB" "Model")'
+    $scriptLines += ('(command "_.-EXPORT" "_PDF" "_E" "_N" "{0}")' -f $normalizedOut)
+  } elseif ($safeLayout -and $safeLayout -ne "Layout1") {
     $scriptLines += ('(setvar "CTAB" "{0}")' -f $safeLayout)
     $scriptLines += ('(command "_.-EXPORT" "_PDF" "_C" "_N" "{0}")' -f $normalizedOut)
   } else {
@@ -101,8 +104,7 @@ function Invoke-NativeDwgPdfExport {
     $scriptLines += ')'
   }
 
-  $scriptLines += '_.QUIT'
-  $scriptLines += '_N'
+  $scriptLines += '(command "_.QUIT" "_Y")'
 
   $cp1251 = [System.Text.Encoding]::GetEncoding(1251)
   [System.IO.File]::WriteAllLines($scrFile, $scriptLines, $cp1251)

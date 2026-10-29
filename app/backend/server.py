@@ -4073,9 +4073,27 @@ class LauncherHandler(BaseHTTPRequestHandler):
 
                 if target_dir.exists():
                     try:
-                        from app.backend.dwg_engine import _rasterize_pdf_page, check_image_is_empty_sheet, DwgOnDemandManager
+                        from app.backend.dwg_engine import (
+                            _is_pdf_complete,
+                            _parse_layouts_txt,
+                            _rasterize_pdf_page,
+                            check_image_is_empty_sheet,
+                            DwgOnDemandManager,
+                        )
                     except ImportError:
-                        from dwg_engine import _rasterize_pdf_page, check_image_is_empty_sheet, DwgOnDemandManager
+                        from dwg_engine import (
+                            _is_pdf_complete,
+                            _parse_layouts_txt,
+                            _rasterize_pdf_page,
+                            check_image_is_empty_sheet,
+                            DwgOnDemandManager,
+                        )
+
+                    if total_layouts <= 0 and (target_dir / "layouts.txt").is_file():
+                        parsed_lays = _parse_layouts_txt(target_dir / "layouts.txt")
+                        if parsed_lays:
+                            manifest_data["layouts"] = parsed_lays
+                            total_layouts = len(parsed_lays)
 
                     if is_complete:
                         completed_dict = manifest_data.get("completedPages", {})
@@ -4090,7 +4108,7 @@ class LauncherHandler(BaseHTTPRequestHandler):
                         # На лету проверяем готовые PDF от AutoCAD и нарезаем недостающие PNG
                         for pdf_file in target_dir.glob("page_*.pdf"):
                             m_pdf = re.match(r"^page_(\d+)\.pdf$", pdf_file.name)
-                            if m_pdf and pdf_file.stat().st_size > 4096:
+                            if m_pdf and _is_pdf_complete(pdf_file):
                                 tab = int(m_pdf.group(1))
                                 png_p = target_dir / f"page-{tab}.png"
                                 need_raster = (not png_p.exists()) or (png_p.stat().st_size == 0) or (png_p.stat().st_mtime < pdf_file.stat().st_mtime)
@@ -4141,6 +4159,7 @@ class LauncherHandler(BaseHTTPRequestHandler):
                         "firstContentPage": first_content_page,
                         "isComplete": is_complete,
                         "totalLayouts": total_layouts,
+                        "layouts": manifest_data.get("layouts", []),
                         "readyCount": len(ready_pages),
                         "workerActive": worker_active,
                     },

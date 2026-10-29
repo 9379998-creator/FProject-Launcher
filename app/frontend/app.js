@@ -595,6 +595,53 @@ function startDwgStatusPolling(filePath, totalPages, epoch) {
       const emptyPages = data.emptyPages || [];
       const emptySet = new Set(emptyPages);
 
+      // Если многостраничный DWG открывался дольше 8 с и изначально вернул 1 плейсхолдер,
+      // а теперь стал известен полный список листов (data.layouts) — динамически добавляем
+      // все остальные листы в ленту и state.renderedPages.
+      if (Array.isArray(data.layouts) && data.layouts.length > 0 && state.renderedPages?.length) {
+        const docPages = state.renderedPages.filter((p) => {
+          const docPath = p.documentPath || p.sourcePath || p.previewFor?.path || p.path || "";
+          return docPath === filePath;
+        });
+        if (docPages.length > 0 && docPages.length < data.layouts.length) {
+          const templatePage = docPages[0];
+          const existingNums = new Set(docPages.map((p) => Number(p.page)));
+          const baseName = templatePage.sourceName || (templatePage.name || "").split(" · ")[0] || "Чертёж";
+          docPages.forEach((p) => {
+            p.totalPages = data.layouts.length;
+            const layInfo = data.layouts.find((l) => Number(l.tabOrder) === Number(p.page));
+            if (layInfo && layInfo.name) {
+              p.name = `${baseName} · ${layInfo.name}`;
+              const thumbSpan = els.pdfThumbs?.querySelector(`.pdf-thumb[data-doc-path="${CSS.escape(filePath)}"][data-page-number="${p.page}"] span`);
+              if (thumbSpan) thumbSpan.textContent = p.name;
+            }
+          });
+          const newPages = [];
+          for (const lay of data.layouts) {
+            const tab = Number(lay.tabOrder) || 1;
+            if (existingNums.has(tab)) continue;
+            const isReady = readySet.has(tab);
+            newPages.push({
+              ...templatePage,
+              page: tab,
+              name: `${baseName} · ${lay.name || `стр. ${tab}`}`,
+              url: isReady
+                ? `/cache/dwg/${data.cacheKey}/page-${tab}.png`
+                : `/cache/dwg/${data.cacheKey}/header_thumb.png`,
+              bytes: isReady ? 1024 : 0,
+              isEmpty: emptySet.has(tab),
+              totalPages: data.layouts.length,
+            });
+          }
+          if (newPages.length > 0) {
+            const lastExisting = docPages[docPages.length - 1];
+            let afterKey = null;
+            try { afterKey = pageKey(lastExisting); } catch (_) {}
+            await appendPagesToViewer(newPages, afterKey, epoch);
+          }
+        }
+      }
+
       // Обновляем миниатюры в ленте (сопоставляем по cacheKey и номеру листа)
       const thumbs = els.pdfThumbs?.querySelectorAll(".pdf-thumb") || [];
       thumbs.forEach((thumb) => {
@@ -679,7 +726,7 @@ function startDwgStatusPolling(filePath, totalPages, epoch) {
       }
 
       // Если все листы отрендерены — завершаем опрос и скрываем прогресс
-      if (data.isComplete || (total > 0 && readyPages.length >= total)) {
+      if (data.isComplete || (data.totalLayouts > 0 && readyPages.length >= data.totalLayouts)) {
         finishProgress(`Готово: все ${total} листов чертежа отрендерены`);
         stopDwgStatusPolling();
       }
