@@ -803,7 +803,33 @@
       }
     }
 
-    function showSelectionContextMenu(clientX, clientY, snapshotText, canCadExport) {
+    function getCurrentZoneCrop() {
+      const app = window.PDFViewerApplication;
+      if (!app || !zoneBox || zoneBox.style.display === "none") return null;
+      const pageNum = app.page || 1;
+      const pageView = app.pdfViewer?.getPageView(pageNum - 1);
+      const boxRect = zoneBox.getBoundingClientRect();
+      const pageEl = (zoneBox.parentElement && zoneBox.parentElement.classList.contains("page"))
+        ? zoneBox.parentElement
+        : (document.querySelector(`.page[data-page-number="${pageNum}"]`) || zoneBox.closest(".page"));
+      if (pageEl && pageView) {
+        const pRect = pageEl.getBoundingClientRect();
+        const rx0 = boxRect.left - pRect.left;
+        const ry0 = boxRect.top - pRect.top;
+        const rx1 = boxRect.right - pRect.left;
+        const ry1 = boxRect.bottom - pRect.top;
+        const scale = (pageView.viewport && pageView.viewport.scale) || (pRect.width / (pageView.width || pRect.width)) || 1.0;
+        return [
+          Math.min(rx0, rx1) / scale,
+          Math.min(ry0, ry1) / scale,
+          Math.max(rx0, rx1) / scale,
+          Math.max(ry0, ry1) / scale
+        ];
+      }
+      return null;
+    }
+
+    function showSelectionContextMenu(clientX, clientY, snapshotText, canCadExport, hasZone) {
       if (!selectionMenu) {
         selectionMenu = document.createElement("div");
         selectionMenu.id = "launcherSelectionContextMenu";
@@ -824,6 +850,8 @@
       selectionMenu.innerHTML = "";
       const textToRun = String(snapshotText || "").trim();
       const hasText = Boolean(textToRun);
+      const canTranslate = Boolean(hasText || hasZone);
+      const zoneCropSnapshot = hasZone ? getCurrentZoneCrop() : null;
 
       const items = [
         {
@@ -840,11 +868,11 @@
           icon: "🌐",
           label: "Перевести",
           hint: "",
-          disabled: !hasText,
+          disabled: !canTranslate,
           run: () => {
-            if (!hasText) return;
+            if (!canTranslate) return;
             if (typeof window.launcherTranslateText === "function") {
-              window.launcherTranslateText(textToRun);
+              window.launcherTranslateText(textToRun, zoneCropSnapshot);
             }
           }
         },
@@ -961,9 +989,9 @@
       const sel = window.getSelection();
       const liveSelText = (sel && !sel.isCollapsed) ? sel.toString().trim() : "";
       const textSnapshot = currentZoneText || liveSelText || activeSelectionSnapshot || "";
-      const canCadExport = hasZone;
+      const canCadExport = true;
 
-      showSelectionContextMenu(event.clientX, event.clientY, textSnapshot, canCadExport);
+      showSelectionContextMenu(event.clientX, event.clientY, textSnapshot, canCadExport, hasZone);
     });
 
     document.addEventListener("mousedown", (e) => {
@@ -990,20 +1018,26 @@
     window.addEventListener("scroll", dismissParentContextMenu, true);
     window.addEventListener("blur", dismissParentContextMenu);
 
-    window.launcherTranslateText = function(text) {
-      if (!text) return;
+    window.launcherTranslateText = function(text, cropOverride) {
+      const crop = cropOverride || getCurrentZoneCrop();
+      const pdfFile = getCurrentPdfPath();
+      const pageNum = (window.PDFViewerApplication && window.PDFViewerApplication.page) || 1;
+      if (!text && !crop) return;
       popover.style.display = "block";
-      document.getElementById("launcherTransOrig").textContent = text;
+      document.getElementById("launcherTransOrig").textContent = text || "Извлечение текста из выделенной зоны…";
       document.getElementById("launcherTransRes").textContent = "Переводим…";
 
       fetch("/api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, target: "ru" }),
+        body: JSON.stringify({ text: text || "", file: pdfFile, page: pageNum, crop: crop, target: "ru" }),
       })
         .then((r) => r.json())
         .then((data) => {
-          document.getElementById("launcherTransRes").textContent = data.translated || "—";
+          if (data.original) {
+            document.getElementById("launcherTransOrig").textContent = data.original;
+          }
+          document.getElementById("launcherTransRes").textContent = data.translated || "Текст в выделенной области не обнаружен";
         })
         .catch((err) => {
           document.getElementById("launcherTransRes").textContent = "Ошибка: " + err.message;

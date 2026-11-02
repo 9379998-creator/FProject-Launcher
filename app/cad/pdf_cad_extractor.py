@@ -1319,7 +1319,7 @@ class PDFCadExtractor:
                                 cad_insert = to_cad((orig[0], orig[1]))
                                 height_mm = 3.5
                                 angle_deg = 0.0
-                                c_val = span.get("color", 0)
+                                c_val = span.get("color") or 0
                                 if c_val == 65535:
                                     t_layer = "09_АННОТАЦИИ_ПРИМЕЧАНИЯ"
                                     t_color = 4
@@ -1332,7 +1332,7 @@ class PDFCadExtractor:
                                     t_layer = "09_АННОТАЦИИ_ТЕКСТ"
                                     t_color = 2
                             else:
-                                font_size_pt = span.get("size", 7.0)
+                                font_size_pt = float(span.get("size") or 7.0)
                                 height_mm = max(2.2, min(4.5, round(font_size_pt * total_scale, 2)))
                                 cad_dir_y = -dir_y
                                 angle_deg = round(math.degrees(math.atan2(cad_dir_y, dir_x)), 1) % 360
@@ -1415,7 +1415,7 @@ class PDFCadExtractor:
                     t_color = 4
                 elif not c or all(x < 0.1 for x in c):
                     r = d["rect"]
-                    w = round(d.get("width", 0.0), 3)
+                    w = round(float(d.get("width") or 0.0), 3)
                     if 210 <= r.x0 <= 350 and 190 <= r.y0 <= 285 and w >= 0.4:
                         t_layer = "06_УТЕПЛИТЕЛЬ_ВОЛНА"
                         t_color = 7
@@ -1431,11 +1431,31 @@ class PDFCadExtractor:
 
                 for it in items:
                     if it[0] == "l":
-                        c1 = to_cad(it[1])
-                        c2 = to_cad(it[2])
+                        p1_raw = (it[1].x, it[1].y)
+                        p2_raw = (it[2].x, it[2].y)
+                        if crop_box:
+                            clipped = clip_line_to_rect(p1_raw, p2_raw, filter_rect)
+                            if not clipped:
+                                continue
+                            p1_raw, p2_raw, _ = clipped
+                        c1 = to_cad(p1_raw)
+                        c2 = to_cad(p2_raw)
                         prims_by_layer[(t_layer, t_color)].append({
                             "idx": idx, "kind": "l", "p1": c1, "p2": c2
                         })
+                    elif it[0] == "qu":
+                        q = it[1]
+                        q_pts = [(q.ul.x, q.ul.y), (q.ur.x, q.ur.y), (q.lr.x, q.lr.y), (q.ll.x, q.ll.y)]
+                        for qi in range(4):
+                            qp1, qp2 = q_pts[qi], q_pts[(qi + 1) % 4]
+                            if crop_box:
+                                clipped = clip_line_to_rect(qp1, qp2, filter_rect)
+                                if not clipped:
+                                    continue
+                                qp1, qp2, _ = clipped
+                            prims_by_layer[(t_layer, t_color)].append({
+                                "idx": idx, "kind": "l", "p1": to_cad(qp1), "p2": to_cad(qp2)
+                            })
                     elif it[0] == "c":
                         c1 = to_cad(it[1])
                         c2 = to_cad(it[2])
@@ -2000,7 +2020,9 @@ class PDFCadExtractor:
         crop_sig = f"_{int(filter_rect.x0)}_{int(filter_rect.y0)}_{int(filter_rect.x1)}_{int(filter_rect.y1)}" if crop_box else "_full"
 
         if not output_path:
-            out_dir = Path("runtime/cache/cad")
+            import sys
+            _base_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[2]
+            out_dir = _base_dir / "runtime" / "cache" / "cad"
             out_dir.mkdir(parents=True, exist_ok=True)
             stem = self.pdf_path.stem.replace(" ", "_")
             output_path = out_dir / f"{stem}_p{page_number}{crop_sig}_{src_hash}.dwg"

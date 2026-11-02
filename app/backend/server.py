@@ -3103,20 +3103,54 @@ def translate_text(text: str, target_lang: str = "ru") -> dict:
         _TRANSLATION_CACHE[cache_key] = res
         return res
 
-    # 3. Онлайн-каскад перевода без блокировок (HTTP 429)
-    # Провайдер 1: Google Clients5 Dictionary (Chrome extension endpoint — стабильный, быстрый, без 429)
+    # Sanitize control characters that cause HTTP 400 in translation gateways
+    text_sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", text_clean).strip()
+    if not text_sanitized:
+        return {"original": text_clean, "translated": "", "source": "none"}
+
+    # 3. Онлайн-каскад перевода через POST (без ограничения длины URL и ошибок HTTP 400)
+    # Провайдер 1: Google GTX (POST form-urlencoded)
     try:
-        url = f"https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl={target_lang}&q=" + urllib.parse.quote(text_clean)
-        req = urllib.request.Request(url, headers={
+        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target_lang}&dt=t"
+        post_data = urllib.parse.urlencode({"q": text_sanitized[:4500]}).encode("utf-8")
+        req = urllib.request.Request(url, data=post_data, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+            "Referer": "https://translate.google.com/",
+            "Accept": "*/*"
+        }, method="POST")
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            translated = "".join([part[0] for part in (data[0] or []) if part and part[0]])
+            detected_sl = data[2] if len(data) > 2 else "auto"
+            if translated:
+                res = {
+                    "original": text_clean,
+                    "translated": translated,
+                    "detectedSource": detected_sl,
+                    "source": "google-gtx"
+                }
+                _TRANSLATION_CACHE[cache_key] = res
+                return res
+    except Exception as e:
+        logger.debug("Translation gtx POST failed: %s", e)
+
+    # Провайдер 2: Google Clients5 Dictionary (POST form-urlencoded)
+    try:
+        url = f"https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl={target_lang}"
+        post_data = urllib.parse.urlencode({"q": text_sanitized[:4500]}).encode("utf-8")
+        req = urllib.request.Request(url, data=post_data, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
             "Accept": "*/*",
-        })
-        with urllib.request.urlopen(req, timeout=6) as r:
+        }, method="POST")
+        with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode("utf-8"))
             if data and isinstance(data, list) and len(data) > 0:
-                if isinstance(data[0], list) and len(data[0]) > 0:
-                    translated = data[0][0]
-                    detected_sl = data[0][1] if len(data[0]) > 1 else "auto"
+                first = data[0]
+                translated = first[0] if isinstance(first, list) and len(first) > 0 else (first if isinstance(first, str) else "")
+                detected_sl = first[1] if isinstance(first, list) and len(first) > 1 else "auto"
+                if translated:
                     res = {
                         "original": text_clean,
                         "translated": translated,
@@ -3126,11 +3160,12 @@ def translate_text(text: str, target_lang: str = "ru") -> dict:
                     _TRANSLATION_CACHE[cache_key] = res
                     return res
     except Exception as e:
-        logger.debug("Translation clients5 failed: %s", e)
+        logger.debug("Translation clients5 POST failed: %s", e)
 
-    # Провайдер 2: MyMemory API (резервный надежный шлюз)
+    # Провайдер 3: MyMemory API (до 450 байт)
     try:
-        url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(text_clean)}&langpair=autodetect|{target_lang}"
+        q_short = text_sanitized[:400]
+        url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(q_short)}&langpair=autodetect|{target_lang}"
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json"
@@ -3148,30 +3183,7 @@ def translate_text(text: str, target_lang: str = "ru") -> dict:
                 _TRANSLATION_CACHE[cache_key] = res
                 return res
     except Exception as e:
-        logger.debug("Translation mymemory failed: %s", e)
-
-    # Провайдер 3: Google GTX с браузерными заголовками
-    try:
-        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={target_lang}&dt=t&q=" + urllib.parse.quote(text_clean)
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Referer": "https://translate.google.com/",
-            "Accept": "*/*"
-        })
-        with urllib.request.urlopen(req, timeout=6) as r:
-            data = json.loads(r.read().decode("utf-8"))
-            translated = "".join([part[0] for part in data[0] if part and part[0]])
-            detected_sl = data[2] if len(data) > 2 else "auto"
-            res = {
-                "original": text_clean,
-                "translated": translated,
-                "detectedSource": detected_sl,
-                "source": "google-gtx"
-            }
-            _TRANSLATION_CACHE[cache_key] = res
-            return res
-    except Exception as e:
-        logger.warning("Translation gtx failed: %s", e)
+        logger.warning("Translation fallback failed: %s", e)
 
     # Если все сервисы недоступны
     return {
@@ -3898,6 +3910,26 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 body = self.read_json()
                 text_to_translate = str(body.get("text", "")).strip()
                 target_lang = str(body.get("target", "ru")).strip()
+                if not text_to_translate and body.get("file"):
+                    try:
+                        import fitz
+                        pdf_p = Path(str(body.get("file"))).resolve()
+                        if pdf_p.exists():
+                            with fitz.open(str(pdf_p)) as doc:
+                                p_idx = max(0, min(int(body.get("page", 1)) - 1, len(doc) - 1))
+                                pg = doc[p_idx]
+                                crop = body.get("crop")
+                                if crop and len(crop) == 4:
+                                    vx0, vy0 = min(float(crop[0]), float(crop[2])), min(float(crop[1]), float(crop[3]))
+                                    vx1, vy1 = max(float(crop[0]), float(crop[2])), max(float(crop[1]), float(crop[3]))
+                                    inv_m = ~pg.rotation_matrix
+                                    pts = [fitz.Point(vx0, vy0) * inv_m, fitz.Point(vx1, vy0) * inv_m, fitz.Point(vx1, vy1) * inv_m, fitz.Point(vx0, vy1) * inv_m]
+                                    clip_r = fitz.Rect(min(p.x for p in pts), min(p.y for p in pts), max(p.x for p in pts), max(p.y for p in pts))
+                                    text_to_translate = pg.get_text("text", clip=clip_r).strip()
+                                else:
+                                    text_to_translate = pg.get_text("text").strip()
+                    except Exception as ex:
+                        logger.debug("Fallback PDF text extraction for translate failed: %s", ex)
                 res = translate_text(text_to_translate, target_lang=target_lang)
                 self.send_json(HTTPStatus.OK, res)
             except Exception as error:
