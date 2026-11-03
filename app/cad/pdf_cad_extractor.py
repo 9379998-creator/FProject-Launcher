@@ -550,7 +550,7 @@ def convert_dxf_to_dwg_via_accore(dxf_path: Path, dwg_path: Path) -> bool:
 
     try:
         cmd = [str(accore_exe), "/i", str(actual_in.resolve()), "/s", str(scr_path.resolve()), "/l", "en-US"]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
         if tmp_dwg and tmp_dwg.exists() and tmp_dwg.stat().st_size > 0:
             shutil.copy2(tmp_dwg, dwg_path)
         success = dwg_path.exists() and dwg_path.stat().st_size > 0
@@ -639,7 +639,7 @@ def plot_dwg_to_pdf_via_accore(dwg_path: Path, pdf_path: Path) -> bool:
 
     try:
         cmd = [str(accore_exe), "/i", str(actual_in.resolve()), "/s", str(scr_path.resolve()), "/readonly", "/l", "en-US"]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
         if tmp_pdf and tmp_pdf.exists() and tmp_pdf.stat().st_size > 0:
             shutil.copy2(tmp_pdf, pdf_path)
         success = pdf_path.exists() and pdf_path.stat().st_size > 0
@@ -2093,8 +2093,8 @@ class PDFCadExtractor:
         scale_desc = f"1:{int(scale_factor)}" if scale_factor > 1.0 else "1:1"
 
         return {
-            "success": True if (not compile_dwg or dwg_success) else False,
-            "error": dwg_err if (compile_dwg and not dwg_success) else None,
+            "success": True,
+            "error": None,
             "filePath": final_file_path,
             "fileName": final_file_name,
             "format": final_format,

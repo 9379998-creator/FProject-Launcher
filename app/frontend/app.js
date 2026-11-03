@@ -4884,10 +4884,12 @@ async function renderSelectedPdfFiles(previewItems = collectPreviewFilesForDispl
           payload = { documents: excelDocs, totalPages: excelDocs.length, renderedPages: excelDocs.length, dpi: PDF_PREVIEW_DPI, errors: [] };
         } else {
           const endpoint = isDwg ? "/api/dwg/model-render" : "/api/pdf/render";
-          const requestBody = {
+          const _totalItems = itemsToFetch.reduce((s, f) => s + (f.pages || 1), 0);
+            const _autoFirstOnly = _totalItems > 50;
+            const requestBody = {
             files: itemsToFetch.map((file) => file.path),
             dpi: PDF_PREVIEW_DPI,
-            firstPageOnly: false,
+            firstPageOnly: _autoFirstOnly,
             force: Boolean(options?.force),
           };
 
@@ -5138,7 +5140,7 @@ async function loadMorePdfFiles(itemsToRender) {
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files: itemsToFetch.map((file) => file.path), dpi: PDF_PREVIEW_DPI, firstPageOnly: false }),
+        body: JSON.stringify({ files: itemsToFetch.map((file) => file.path), dpi: PDF_PREVIEW_DPI, firstPageOnly: (itemsToFetch.reduce((s, f) => s + (f.pages || 1), 0) > 50) }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);

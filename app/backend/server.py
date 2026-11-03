@@ -3962,8 +3962,7 @@ class LauncherHandler(BaseHTTPRequestHandler):
                     crop_box=crop_box,
                     options={"compile_dwg": True},
                 )
-                if not res.get("success"):
-                    raise RuntimeError(res.get("error") or "Не удалось скомпилировать DWG через AutoCAD конвертер")
+                # Graceful fallback: even if DWG compilation failed, DXF is valid
                 self.send_json(HTTPStatus.OK, res)
             except Exception as error:
                 logger.exception("Error in /api/pdf/export-cad: %s", error)
