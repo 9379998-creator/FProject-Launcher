@@ -913,7 +913,7 @@ class PDFCadExtractor:
 
         # Determine whether to compile to native DWG (Task 032 default: True for CAD exports)
         is_dwg_target = bool(output_path and str(output_path).lower().endswith(".dwg"))
-        compile_dwg = opts.get("compile_dwg", True)
+        compile_dwg = opts.get("compile_dwg", False)
 
         doc = fitz.open(self.pdf_path)
         page_idx = max(0, min(page_number - 1, len(doc) - 1))
@@ -1192,10 +1192,11 @@ class PDFCadExtractor:
         entities_count = 0
         closed_loops_count = 0
 
-        # 4. Extract Native AutoCAD DIMENSION Entities (Pass 2: Continuous Chains, Intermediate Ticks & Invariant Angles)
+        # 4. Extract Native AutoCAD DIMENSION Entities (Clean 1-to-1 Word Binding, Baseline Validation & Deduplication)
         extracted_dims = []
         dim_drawings_indices = set()
         dim_nominals = set()
+        used_word_indices = set()
 
         # Fast O(N) Spatial Grid Deduplication of candidate ticks
         tick_grid = {}
@@ -1216,7 +1217,25 @@ class PDFCadExtractor:
                 tick_grid[(gx, gy)] = t
                 unique_ticks.append(t)
 
-        # 4A. Horizontal Continuous Chains (handles multi-tier: 6600, 5600, 500, 500...)
+        def has_h_baseline(x0, x1, y, tol=2.5):
+            span = x1 - x0
+            for hl in h_lines:
+                if abs(hl["y"] - y) < tol:
+                    overlap = min(x1, hl["x1"]) - max(x0, hl["x0"])
+                    if overlap > 0.4 * span or (hl["x0"] <= x0 + 3.0 and hl["x1"] >= x1 - 3.0):
+                        return True
+            return False
+
+        def has_v_baseline(y0, y1, x, tol=2.5):
+            span = y1 - y0
+            for vl in v_lines:
+                if abs(vl["x"] - x) < tol:
+                    overlap = min(y1, vl["y1"]) - max(y0, vl["y0"])
+                    if overlap > 0.4 * span or (vl["y0"] <= y0 + 3.0 and vl["y1"] >= y1 - 3.0):
+                        return True
+            return False
+
+        # 4A. Horizontal Continuous Chains (1-to-1 Word Binding + Baseline Validation)
         h_clusters = defaultdict(list)
         for t in unique_ticks:
             y_key = round(t["mid"].y / 2.0) * 2.0
@@ -1237,21 +1256,29 @@ class PDFCadExtractor:
                 span_pt = t2["mid"].x - t1["mid"].x
                 if span_pt < 2.0:
                     continue
-                meas_mm = span_pt * total_scale
                 mid_x = (t1["mid"].x + t2["mid"].x) / 2.0
                 mid_y = (t1["mid"].y + t2["mid"].y) / 2.0
 
+                if not has_h_baseline(t1["mid"].x, t2["mid"].x, mid_y):
+                    continue
+
+                meas_mm = span_pt * total_scale
                 best_w = None
+                best_w_idx = None
                 best_diff = 999.0
-                for nw in num_words:
+                for nw_idx, nw in enumerate(num_words):
+                    if nw_idx in used_word_indices:
+                        continue
                     diff = abs(nw["val"] - meas_mm)
                     if diff <= max(2.0, meas_mm * 0.04):
-                        if abs(nw["mid"].y - mid_y) < 25.0 and t1["mid"].x - 12 <= nw["mid"].x <= t2["mid"].x + 12:
+                        if abs(nw["mid"].y - mid_y) < 20.0 and t1["mid"].x - 10 <= nw["mid"].x <= t2["mid"].x + 10:
                             if diff < best_diff:
                                 best_diff = diff
                                 best_w = nw
+                                best_w_idx = nw_idx
 
                 if best_w:
+                    used_word_indices.add(best_w_idx)
                     extracted_dims.append({
                         "nominal": best_w["txt"], "val": best_w["val"], "meas_mm": meas_mm,
                         "p1": vis_to_cad(fitz.Point(t1["mid"].x, mid_y)),
@@ -1266,7 +1293,7 @@ class PDFCadExtractor:
                     dim_drawings_indices.add(t2["idx"])
                     dim_nominals.add(best_w["txt"])
 
-        # 4B. Vertical Continuous Chains (handles vertical multi-tier dimensions)
+        # 4B. Vertical Continuous Chains (1-to-1 Word Binding + Baseline Validation)
         v_clusters = defaultdict(list)
         for t in unique_ticks:
             x_key = round(t["mid"].x / 2.0) * 2.0
@@ -1287,21 +1314,29 @@ class PDFCadExtractor:
                 span_pt = t2["mid"].y - t1["mid"].y
                 if span_pt < 2.0:
                     continue
-                meas_mm = span_pt * total_scale
                 mid_x = (t1["mid"].x + t2["mid"].x) / 2.0
                 mid_y = (t1["mid"].y + t2["mid"].y) / 2.0
 
+                if not has_v_baseline(t1["mid"].y, t2["mid"].y, mid_x):
+                    continue
+
+                meas_mm = span_pt * total_scale
                 best_w = None
+                best_w_idx = None
                 best_diff = 999.0
-                for nw in num_words:
+                for nw_idx, nw in enumerate(num_words):
+                    if nw_idx in used_word_indices:
+                        continue
                     diff = abs(nw["val"] - meas_mm)
                     if diff <= max(2.0, meas_mm * 0.04):
-                        if abs(nw["mid"].x - mid_x) < 25.0 and t1["mid"].y - 12 <= nw["mid"].y <= t2["mid"].y + 12:
+                        if abs(nw["mid"].x - mid_x) < 20.0 and t1["mid"].y - 10 <= nw["mid"].y <= t2["mid"].y + 10:
                             if diff < best_diff:
                                 best_diff = diff
                                 best_w = nw
+                                best_w_idx = nw_idx
 
                 if best_w:
+                    used_word_indices.add(best_w_idx)
                     extracted_dims.append({
                         "nominal": best_w["txt"], "val": best_w["val"], "meas_mm": meas_mm,
                         "p1": vis_to_cad(fitz.Point(mid_x, t1["mid"].y)),
@@ -1316,77 +1351,21 @@ class PDFCadExtractor:
                     dim_drawings_indices.add(t2["idx"])
                     dim_nominals.add(best_w["txt"])
 
-        # 4C. Isolated Horizontal Lines bounded by two ticks (fallback)
-        for hl in h_lines:
-            if hl["idx"] in dim_drawings_indices:
-                continue
-            x0, x1, y = hl["x0"], hl["x1"], hl["y"]
-            t_left = [t for t in unique_ticks if abs(t["mid"].x - x0) < 3.5 and abs(t["mid"].y - y) < 3.5]
-            t_right = [t for t in unique_ticks if abs(t["mid"].x - x1) < 3.5 and abs(t["mid"].y - y) < 3.5]
-            if t_left and t_right:
-                meas_mm = hl["len"] * total_scale
-                best_w = None
-                best_diff = 999.0
-                for nw in num_words:
-                    if nw["txt"] in dim_nominals:
-                        continue
-                    diff = abs(nw["val"] - meas_mm)
-                    if diff <= max(1.5, meas_mm * 0.03):
-                        if abs(nw["mid"].y - y) < 25.0 and x0 - 15 <= nw["mid"].x <= x1 + 15:
-                            if diff < best_diff:
-                                best_diff = diff
-                                best_w = nw
-                if best_w:
-                    extracted_dims.append({
-                        "nominal": best_w["txt"], "val": best_w["val"], "meas_mm": meas_mm,
-                        "p1": vis_to_cad(fitz.Point(x0, y)),
-                        "p2": vis_to_cad(fitz.Point(x1, y)),
-                        "base": vis_to_cad(fitz.Point((x0 + x1) / 2.0, y)),
-                        "angle": 0.0,
-                        "raw_p1": fitz.Point(x0, y),
-                        "raw_p2": fitz.Point(x1, y),
-                        "is_h": True,
-                    })
-                    dim_drawings_indices.add(hl["idx"])
-                    dim_drawings_indices.add(t_left[0]["idx"])
-                    dim_drawings_indices.add(t_right[0]["idx"])
-                    dim_nominals.add(best_w["txt"])
-
-        # 4D. Isolated Vertical Lines bounded by two ticks (fallback)
-        for vl in v_lines:
-            if vl["idx"] in dim_drawings_indices:
-                continue
-            y0, y1, x = vl["y0"], vl["y1"], vl["x"]
-            t_top = [t for t in unique_ticks if abs(t["mid"].y - y0) < 3.5 and abs(t["mid"].x - x) < 3.5]
-            t_bot = [t for t in unique_ticks if abs(t["mid"].y - y1) < 3.5 and abs(t["mid"].x - x) < 3.5]
-            if t_top and t_bot:
-                meas_mm = vl["len"] * total_scale
-                best_w = None
-                best_diff = 999.0
-                for nw in num_words:
-                    if nw["txt"] in dim_nominals:
-                        continue
-                    diff = abs(nw["val"] - meas_mm)
-                    if diff <= max(1.5, meas_mm * 0.03):
-                        if abs(nw["mid"].x - x) < 25.0 and y0 - 15 <= nw["mid"].y <= y1 + 15:
-                            if diff < best_diff:
-                                best_diff = diff
-                                best_w = nw
-                if best_w:
-                    extracted_dims.append({
-                        "nominal": best_w["txt"], "val": best_w["val"], "meas_mm": meas_mm,
-                        "p1": vis_to_cad(fitz.Point(x, y0)),
-                        "p2": vis_to_cad(fitz.Point(x, y1)),
-                        "base": vis_to_cad(fitz.Point(x, (y0 + y1) / 2.0)),
-                        "angle": 90.0,
-                        "raw_p1": fitz.Point(x, y0),
-                        "raw_p2": fitz.Point(x, y1),
-                        "is_h": False,
-                    })
-                    dim_drawings_indices.add(vl["idx"])
-                    dim_drawings_indices.add(t_top[0]["idx"])
-                    dim_drawings_indices.add(t_bot[0]["idx"])
-                    dim_nominals.add(best_w["txt"])
+        # Spatial Deduplication of Extracted Dimensions (removes duplicate parallel or overlapping dims)
+        clean_dims = []
+        for d in extracted_dims:
+            d_mid = ((d["raw_p1"].x + d["raw_p2"].x) / 2.0, (d["raw_p1"].y + d["raw_p2"].y) / 2.0)
+            is_dup = False
+            for cd in clean_dims:
+                if d["nominal"] == cd["nominal"] and abs(d["angle"] - cd["angle"]) < 1.0:
+                    cd_mid = ((cd["raw_p1"].x + cd["raw_p2"].x) / 2.0, (cd["raw_p1"].y + cd["raw_p2"].y) / 2.0)
+                    dist_pt = math.hypot(d_mid[0] - cd_mid[0], d_mid[1] - cd_mid[1])
+                    if dist_pt < 15.0:
+                        is_dup = True
+                        break
+            if not is_dup:
+                clean_dims.append(d)
+        extracted_dims = clean_dims
 
         # 4E. Fast Spatially-Indexed Baseline and Extension Line Suppression
         h_dim_bins = defaultdict(list)
@@ -2343,7 +2322,7 @@ def export_pdf_page_to_cad(
     """Convenience functional wrapper for PDFCadExtractor."""
     opts = dict(options or {})
     if "compile_dwg" not in opts:
-        opts["compile_dwg"] = True
+        opts["compile_dwg"] = False
     extractor = PDFCadExtractor(pdf_path)
     return extractor.extract_cad(
         page_number=page_number,
