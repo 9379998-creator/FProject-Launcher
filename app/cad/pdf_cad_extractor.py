@@ -1047,10 +1047,25 @@ class PDFCadExtractor:
             scale_factor = float(scale_opt)
         elif crop_box:
             scale_votes = []
+            # Fast O(N) Spatial Grid for candidate ticks lookup
+            tick_grid = defaultdict(list)
+            for t in ticks:
+                tick_grid[(int(t["mid"].x / 4.0), int(t["mid"].y / 4.0))].append(t)
+
+            def get_ticks_near(x, y, radius=3.5):
+                gx, gy = int(x / 4.0), int(y / 4.0)
+                res = []
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        for t in tick_grid.get((gx + dx, gy + dy), []):
+                            if abs(t["mid"].x - x) < radius and abs(t["mid"].y - y) < radius:
+                                res.append(t)
+                return res
+
             for hl in h_lines:
                 x0, x1, y = hl["x0"], hl["x1"], hl["y"]
-                t_left = [t for t in ticks if abs(t["mid"].x - x0) < 3.5 and abs(t["mid"].y - y) < 3.5]
-                t_right = [t for t in ticks if abs(t["mid"].x - x1) < 3.5 and abs(t["mid"].y - y) < 3.5]
+                t_left = get_ticks_near(x0, y, 3.5)
+                t_right = get_ticks_near(x1, y, 3.5)
                 if t_left and t_right:
                     for nw in num_words:
                         if abs(nw["mid"].y - y) < 20.0 and x0 - 10 <= nw["mid"].x <= x1 + 10:
@@ -1058,40 +1073,37 @@ class PDFCadExtractor:
                             snapped_k = snap_scale(raw_k)
                             if abs(raw_k - snapped_k) / snapped_k < 0.05:
                                 scale_votes.append(snapped_k)
+
             for vl in v_lines:
                 y0, y1, x = vl["y0"], vl["y1"], vl["x"]
-                t_top = [t for t in ticks if abs(t["mid"].y - y0) < 3.5 and abs(t["mid"].x - x) < 3.5]
-                t_bot = [t for t in ticks if abs(t["mid"].y - y1) < 3.5 and abs(t["mid"].x - x) < 3.5]
-                if t_top and t_bot:
+                t_top = get_ticks_near(x, y0, 3.5)
+                t_bottom = get_ticks_near(x, y1, 3.5)
+                if t_top and t_bottom:
                     for nw in num_words:
                         if abs(nw["mid"].x - x) < 20.0 and y0 - 10 <= nw["mid"].y <= y1 + 10:
                             raw_k = nw["val"] / (vl["len"] * PT_TO_MM)
                             snapped_k = snap_scale(raw_k)
                             if abs(raw_k - snapped_k) / snapped_k < 0.05:
                                 scale_votes.append(snapped_k)
-            for i, t1 in enumerate(ticks):
-                for j in range(i + 1, min(i + 30, len(ticks))):
-                    t2 = ticks[j]
-                    if abs(t1["mid"].y - t2["mid"].y) < 1.5:
-                        L_pt = abs(t1["mid"].x - t2["mid"].x)
-                        if L_pt > 3.0:
-                            y = (t1["mid"].y + t2["mid"].y) / 2.0
-                            for nw in num_words:
-                                if abs(nw["mid"].y - y) < 20.0 and min(t1["mid"].x, t2["mid"].x) - 15 <= nw["mid"].x <= max(t1["mid"].x, t2["mid"].x) + 15:
-                                    raw_k = nw["val"] / (L_pt * PT_TO_MM)
-                                    snapped_k = snap_scale(raw_k)
-                                    if abs(raw_k - snapped_k) / snapped_k < 0.05:
-                                        scale_votes.append(snapped_k)
-                    elif abs(t1["mid"].x - t2["mid"].x) < 1.5:
-                        L_pt = abs(t1["mid"].y - t2["mid"].y)
-                        if L_pt > 3.0:
-                            x = (t1["mid"].x + t2["mid"].x) / 2.0
-                            for nw in num_words:
-                                if abs(nw["mid"].x - x) < 20.0 and min(t1["mid"].y, t2["mid"].y) - 15 <= nw["mid"].y <= max(t1["mid"].y, t2["mid"].y) + 15:
-                                    raw_k = nw["val"] / (L_pt * PT_TO_MM)
-                                    snapped_k = snap_scale(raw_k)
-                                    if abs(raw_k - snapped_k) / snapped_k < 0.05:
-                                        scale_votes.append(snapped_k)
+
+            if not scale_votes:
+                # Fast cluster span check
+                y_clusters = defaultdict(list)
+                for t in ticks:
+                    y_clusters[round(t["mid"].y / 2.0) * 2.0].append(t)
+                for y_k, cluster in y_clusters.items():
+                    if len(cluster) >= 2:
+                        sorted_c = sorted(cluster, key=lambda t: t["mid"].x)
+                        for i in range(len(sorted_c) - 1):
+                            L_pt = sorted_c[i+1]["mid"].x - sorted_c[i]["mid"].x
+                            if L_pt > 3.0:
+                                mid_x = (sorted_c[i]["mid"].x + sorted_c[i+1]["mid"].x) / 2.0
+                                for nw in num_words:
+                                    if abs(nw["mid"].y - y_k) < 20.0 and abs(nw["mid"].x - mid_x) < 20.0:
+                                        raw_k = nw["val"] / (L_pt * PT_TO_MM)
+                                        snapped_k = snap_scale(raw_k)
+                                        if abs(raw_k - snapped_k) / snapped_k < 0.05:
+                                            scale_votes.append(snapped_k)
             scale_factor = Counter(scale_votes).most_common(1)[0][0] if scale_votes else 1.0
         else:
             scale_factor = detect_catalog_scale(page)
@@ -1185,10 +1197,23 @@ class PDFCadExtractor:
         dim_drawings_indices = set()
         dim_nominals = set()
 
-        # Deduplicate candidate ticks
+        # Fast O(N) Spatial Grid Deduplication of candidate ticks
+        tick_grid = {}
         unique_ticks = []
         for t in ticks:
-            if not any(abs(t["mid"].x - ot["mid"].x) < 0.6 and abs(t["mid"].y - ot["mid"].y) < 0.6 for ot in unique_ticks):
+            gx = int(t["mid"].x / 0.6)
+            gy = int(t["mid"].y / 0.6)
+            found = False
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    neighbor = tick_grid.get((gx + dx, gy + dy))
+                    if neighbor and abs(t["mid"].x - neighbor["mid"].x) < 0.6 and abs(t["mid"].y - neighbor["mid"].y) < 0.6:
+                        found = True
+                        break
+                if found:
+                    break
+            if not found:
+                tick_grid[(gx, gy)] = t
                 unique_ticks.append(t)
 
         # 4A. Horizontal Continuous Chains (handles multi-tier: 6600, 5600, 500, 500...)
@@ -1363,7 +1388,26 @@ class PDFCadExtractor:
                     dim_drawings_indices.add(t_bot[0]["idx"])
                     dim_nominals.add(best_w["txt"])
 
-        # 4E. Suppress collinear dimension baseline lines and extension lines from drawing layers
+        # 4E. Fast Spatially-Indexed Baseline and Extension Line Suppression
+        h_dim_bins = defaultdict(list)
+        v_dim_bins = defaultdict(list)
+        h_ext_x_bins = defaultdict(list)
+        v_ext_y_bins = defaultdict(list)
+
+        for ed in extracted_dims:
+            if ed.get("is_h"):
+                y_bin = round(ed["raw_p1"].y)
+                h_dim_bins[y_bin].append(ed)
+                for end_pt in (ed["raw_p1"], ed["raw_p2"]):
+                    x_bin = round(end_pt.x)
+                    h_ext_x_bins[x_bin].append(end_pt.y)
+            else:
+                x_bin = round(ed["raw_p1"].x)
+                v_dim_bins[x_bin].append(ed)
+                for end_pt in (ed["raw_p1"], ed["raw_p2"]):
+                    y_bin = round(end_pt.y)
+                    v_ext_y_bins[y_bin].append(end_pt.x)
+
         for d_idx, d in enumerate(drawings):
             if d_idx in dim_drawings_indices:
                 continue
@@ -1373,50 +1417,58 @@ class PDFCadExtractor:
                     p2_vis = it[2] * rot_m
                     dx = abs(p1_vis.x - p2_vis.x)
                     dy = abs(p1_vis.y - p2_vis.y)
+
                     # Horizontal baseline segment suppression
                     if dy < 0.35 and dx > 3.0:
                         y = (p1_vis.y + p2_vis.y) / 2.0
+                        y_round = round(y)
                         min_x = min(p1_vis.x, p2_vis.x)
                         max_x = max(p1_vis.x, p2_vis.x)
-                        for ed in extracted_dims:
-                            if ed.get("is_h") and abs(ed["raw_p1"].y - y) < 1.5:
+                        candidates = h_dim_bins.get(y_round, []) + h_dim_bins.get(y_round - 1, []) + h_dim_bins.get(y_round + 1, [])
+                        for ed in candidates:
+                            if abs(ed["raw_p1"].y - y) < 1.5:
                                 d_x0 = min(ed["raw_p1"].x, ed["raw_p2"].x)
                                 d_x1 = max(ed["raw_p1"].x, ed["raw_p2"].x)
                                 if min_x <= d_x1 + 3.0 and max_x >= d_x0 - 3.0:
                                     dim_drawings_indices.add(d_idx)
                                     break
+
                     # Vertical baseline segment suppression
                     elif dx < 0.35 and dy > 3.0:
                         x = (p1_vis.x + p2_vis.x) / 2.0
+                        x_round = round(x)
                         min_y = min(p1_vis.y, p2_vis.y)
                         max_y = max(p1_vis.y, p2_vis.y)
-                        for ed in extracted_dims:
-                            if (not ed.get("is_h")) and abs(ed["raw_p1"].x - x) < 1.5:
+                        candidates = v_dim_bins.get(x_round, []) + v_dim_bins.get(x_round - 1, []) + v_dim_bins.get(x_round + 1, [])
+                        for ed in candidates:
+                            if abs(ed["raw_p1"].x - x) < 1.5:
                                 d_y0 = min(ed["raw_p1"].y, ed["raw_p2"].y)
                                 d_y1 = max(ed["raw_p1"].y, ed["raw_p2"].y)
                                 if min_y <= d_y1 + 3.0 and max_y >= d_y0 - 3.0:
                                     dim_drawings_indices.add(d_idx)
                                     break
+
                     # Vertical extension line suppression at horizontal dimension ticks
                     elif dx < 0.35 and 2.0 <= dy <= 30.0:
                         x = (p1_vis.x + p2_vis.x) / 2.0
+                        x_round = round(x)
                         y_span = (min(p1_vis.y, p2_vis.y), max(p1_vis.y, p2_vis.y))
-                        for ed in extracted_dims:
-                            if ed.get("is_h"):
-                                for end_pt in (ed["raw_p1"], ed["raw_p2"]):
-                                    if abs(end_pt.x - x) < 1.5 and y_span[0] - 2 <= end_pt.y <= y_span[1] + 2:
-                                        dim_drawings_indices.add(d_idx)
-                                        break
+                        candidates = h_ext_x_bins.get(x_round, []) + h_ext_x_bins.get(x_round - 1, []) + h_ext_x_bins.get(x_round + 1, [])
+                        for end_y in candidates:
+                            if y_span[0] - 2 <= end_y <= y_span[1] + 2:
+                                dim_drawings_indices.add(d_idx)
+                                break
+
                     # Horizontal extension line suppression at vertical dimension ticks
                     elif dy < 0.35 and 2.0 <= dx <= 30.0:
                         y = (p1_vis.y + p2_vis.y) / 2.0
+                        y_round = round(y)
                         x_span = (min(p1_vis.x, p2_vis.x), max(p1_vis.x, p2_vis.x))
-                        for ed in extracted_dims:
-                            if not ed.get("is_h"):
-                                for end_pt in (ed["raw_p1"], ed["raw_p2"]):
-                                    if abs(end_pt.y - y) < 1.5 and x_span[0] - 2 <= end_pt.x <= x_span[1] + 2:
-                                        dim_drawings_indices.add(d_idx)
-                                        break
+                        candidates = v_ext_y_bins.get(y_round, []) + v_ext_y_bins.get(y_round - 1, []) + v_ext_y_bins.get(y_round + 1, [])
+                        for end_x in candidates:
+                            if x_span[0] - 2 <= end_x <= x_span[1] + 2:
+                                dim_drawings_indices.add(d_idx)
+                                break
         for dim_data in extracted_dims:
             try:
                 dim = msp.add_linear_dim(

@@ -4075,7 +4075,7 @@ class LauncherHandler(BaseHTTPRequestHandler):
                     pdf_path=pdf_file,
                     page_number=page_num,
                     crop_box=crop_box,
-                    options={"compile_dwg": True},
+                    options={"compile_dwg": bool(body.get("compile_dwg", False))},
                 )
                 # Graceful fallback: even if DWG compilation failed, DXF is valid
                 self.send_json(HTTPStatus.OK, res)

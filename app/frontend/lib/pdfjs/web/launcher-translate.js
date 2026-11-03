@@ -642,13 +642,23 @@
       }
     });
 
+    let isCadExportRunning = false;
     async function exportCurrentZoneToCad() {
+      if (isCadExportRunning) {
+        console.warn("CAD export is already running, ignoring duplicate call.");
+        return;
+      }
+      isCadExportRunning = true;
+
       const app = window.PDFViewerApplication;
-      if (!app) return;
+      if (!app) {
+        isCadExportRunning = false;
+        return;
+      }
 
       const cadBtn = document.getElementById("launcherPillCadBtn");
       if (cadBtn) {
-        cadBtn.textContent = "⏳ Экспорт…";
+        cadBtn.textContent = "⏳ Экспорт...";
         cadBtn.disabled = true;
       }
 
@@ -682,7 +692,7 @@
 
         const pdfFile = getCurrentPdfPath();
         if (!pdfFile) {
-          alert("Не удалось определить путь к открытому файлу PDF.");
+          alert("Не удалось определить путь к текущему файлу PDF.");
           return;
         }
 
@@ -703,9 +713,11 @@
 
         lastExportedCadPath = data.filePath;
         if (cadCard) cadCard.style.display = "none";
-        // Прямое открытие файла DWG без промежуточных карточек
+        if (cadBtn) {
+          cadBtn.textContent = "🚀 Запуск CAD...";
+        }
         if (lastExportedCadPath) {
-          fetch("/api/cad/open", {
+          await fetch("/api/cad/open", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ path: lastExportedCadPath })
@@ -714,6 +726,7 @@
       } catch (err) {
         alert("Ошибка экспорта в CAD: " + err.message);
       } finally {
+        isCadExportRunning = false;
         if (cadBtn) {
           cadBtn.textContent = "📐 В DWG";
           cadBtn.disabled = false;
@@ -722,7 +735,6 @@
       }
     }
 
-    // Expose CAD export function inside initUI scope for context menu reuse
     window.exportCurrentZoneToCad = exportCurrentZoneToCad;
 
     const pillCadBtn = document.getElementById("launcherPillCadBtn");
