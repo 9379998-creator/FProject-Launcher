@@ -993,6 +993,22 @@ class PDFCadExtractor:
         ticks = []
 
         for d_idx, d in enumerate(drawings):
+            r = d.get("rect")
+            if r is not None:
+                p_tl = fitz.Point(r.x0, r.y0) * rot_m
+                p_br = fitz.Point(r.x1, r.y1) * rot_m
+                w_box = abs(p_br.x - p_tl.x)
+                h_box = abs(p_br.y - p_tl.y)
+                diag = math.hypot(w_box, h_box)
+                if 1.2 <= diag <= 16.0:
+                    if d.get("fill") is not None or abs(w_box - h_box) < 0.75 * max(w_box, h_box):
+                        ticks.append({
+                            "idx": d_idx,
+                            "mid": fitz.Point((p_tl.x + p_br.x) / 2.0, (p_tl.y + p_br.y) / 2.0),
+                            "p1": p_tl,
+                            "p2": p_br,
+                        })
+
             for it in d.get("items", []):
                 if it[0] == "l":
                     p1_vis = it[1] * rot_m
@@ -1164,21 +1180,131 @@ class PDFCadExtractor:
         entities_count = 0
         closed_loops_count = 0
 
-        # 4. Extract Native AutoCAD DIMENSION Entities (Pass 2: Precise Matching & Geometry Separation)
+        # 4. Extract Native AutoCAD DIMENSION Entities (Pass 2: Continuous Chains, Intermediate Ticks & Invariant Angles)
         extracted_dims = []
         dim_drawings_indices = set()
         dim_nominals = set()
 
-        # Match Horizontal lines bounded by two ticks
+        # Deduplicate candidate ticks
+        unique_ticks = []
+        for t in ticks:
+            if not any(abs(t["mid"].x - ot["mid"].x) < 0.6 and abs(t["mid"].y - ot["mid"].y) < 0.6 for ot in unique_ticks):
+                unique_ticks.append(t)
+
+        # 4A. Horizontal Continuous Chains (handles multi-tier: 6600, 5600, 500, 500...)
+        h_clusters = defaultdict(list)
+        for t in unique_ticks:
+            y_key = round(t["mid"].y / 2.0) * 2.0
+            h_clusters[y_key].append(t)
+
+        for y_key, cluster in h_clusters.items():
+            if len(cluster) < 2:
+                continue
+            sorted_ticks = sorted(cluster, key=lambda t: t["mid"].x)
+            cluster_dedup = [sorted_ticks[0]]
+            for t in sorted_ticks[1:]:
+                if abs(t["mid"].x - cluster_dedup[-1]["mid"].x) > 1.5:
+                    cluster_dedup.append(t)
+
+            for i in range(len(cluster_dedup) - 1):
+                t1 = cluster_dedup[i]
+                t2 = cluster_dedup[i+1]
+                span_pt = t2["mid"].x - t1["mid"].x
+                if span_pt < 2.0:
+                    continue
+                meas_mm = span_pt * total_scale
+                mid_x = (t1["mid"].x + t2["mid"].x) / 2.0
+                mid_y = (t1["mid"].y + t2["mid"].y) / 2.0
+
+                best_w = None
+                best_diff = 999.0
+                for nw in num_words:
+                    diff = abs(nw["val"] - meas_mm)
+                    if diff <= max(2.0, meas_mm * 0.04):
+                        if abs(nw["mid"].y - mid_y) < 25.0 and t1["mid"].x - 12 <= nw["mid"].x <= t2["mid"].x + 12:
+                            if diff < best_diff:
+                                best_diff = diff
+                                best_w = nw
+
+                if best_w:
+                    extracted_dims.append({
+                        "nominal": best_w["txt"], "val": best_w["val"], "meas_mm": meas_mm,
+                        "p1": vis_to_cad(fitz.Point(t1["mid"].x, mid_y)),
+                        "p2": vis_to_cad(fitz.Point(t2["mid"].x, mid_y)),
+                        "base": vis_to_cad(fitz.Point(mid_x, mid_y)),
+                        "angle": 0.0,
+                        "raw_p1": fitz.Point(t1["mid"].x, mid_y),
+                        "raw_p2": fitz.Point(t2["mid"].x, mid_y),
+                        "is_h": True,
+                    })
+                    dim_drawings_indices.add(t1["idx"])
+                    dim_drawings_indices.add(t2["idx"])
+                    dim_nominals.add(best_w["txt"])
+
+        # 4B. Vertical Continuous Chains (handles vertical multi-tier dimensions)
+        v_clusters = defaultdict(list)
+        for t in unique_ticks:
+            x_key = round(t["mid"].x / 2.0) * 2.0
+            v_clusters[x_key].append(t)
+
+        for x_key, cluster in v_clusters.items():
+            if len(cluster) < 2:
+                continue
+            sorted_ticks = sorted(cluster, key=lambda t: t["mid"].y)
+            cluster_dedup = [sorted_ticks[0]]
+            for t in sorted_ticks[1:]:
+                if abs(t["mid"].y - cluster_dedup[-1]["mid"].y) > 1.5:
+                    cluster_dedup.append(t)
+
+            for i in range(len(cluster_dedup) - 1):
+                t1 = cluster_dedup[i]
+                t2 = cluster_dedup[i+1]
+                span_pt = t2["mid"].y - t1["mid"].y
+                if span_pt < 2.0:
+                    continue
+                meas_mm = span_pt * total_scale
+                mid_x = (t1["mid"].x + t2["mid"].x) / 2.0
+                mid_y = (t1["mid"].y + t2["mid"].y) / 2.0
+
+                best_w = None
+                best_diff = 999.0
+                for nw in num_words:
+                    diff = abs(nw["val"] - meas_mm)
+                    if diff <= max(2.0, meas_mm * 0.04):
+                        if abs(nw["mid"].x - mid_x) < 25.0 and t1["mid"].y - 12 <= nw["mid"].y <= t2["mid"].y + 12:
+                            if diff < best_diff:
+                                best_diff = diff
+                                best_w = nw
+
+                if best_w:
+                    extracted_dims.append({
+                        "nominal": best_w["txt"], "val": best_w["val"], "meas_mm": meas_mm,
+                        "p1": vis_to_cad(fitz.Point(mid_x, t1["mid"].y)),
+                        "p2": vis_to_cad(fitz.Point(mid_x, t2["mid"].y)),
+                        "base": vis_to_cad(fitz.Point(mid_x, mid_y)),
+                        "angle": 90.0,
+                        "raw_p1": fitz.Point(mid_x, t1["mid"].y),
+                        "raw_p2": fitz.Point(mid_x, t2["mid"].y),
+                        "is_h": False,
+                    })
+                    dim_drawings_indices.add(t1["idx"])
+                    dim_drawings_indices.add(t2["idx"])
+                    dim_nominals.add(best_w["txt"])
+
+        # 4C. Isolated Horizontal Lines bounded by two ticks (fallback)
         for hl in h_lines:
+            if hl["idx"] in dim_drawings_indices:
+                continue
             x0, x1, y = hl["x0"], hl["x1"], hl["y"]
-            t_left = [t for t in ticks if abs(t["mid"].x - x0) < 3.5 and abs(t["mid"].y - y) < 3.5]
-            t_right = [t for t in ticks if abs(t["mid"].x - x1) < 3.5 and abs(t["mid"].y - y) < 3.5]
+            t_left = [t for t in unique_ticks if abs(t["mid"].x - x0) < 3.5 and abs(t["mid"].y - y) < 3.5]
+            t_right = [t for t in unique_ticks if abs(t["mid"].x - x1) < 3.5 and abs(t["mid"].y - y) < 3.5]
             if t_left and t_right:
                 meas_mm = hl["len"] * total_scale
                 best_w = None
                 best_diff = 999.0
                 for nw in num_words:
+                    if nw["txt"] in dim_nominals:
+                        continue
                     diff = abs(nw["val"] - meas_mm)
                     if diff <= max(1.5, meas_mm * 0.03):
                         if abs(nw["mid"].y - y) < 25.0 and x0 - 15 <= nw["mid"].x <= x1 + 15:
@@ -1192,22 +1318,29 @@ class PDFCadExtractor:
                         "p2": vis_to_cad(fitz.Point(x1, y)),
                         "base": vis_to_cad(fitz.Point((x0 + x1) / 2.0, y)),
                         "angle": 0.0,
+                        "raw_p1": fitz.Point(x0, y),
+                        "raw_p2": fitz.Point(x1, y),
+                        "is_h": True,
                     })
                     dim_drawings_indices.add(hl["idx"])
                     dim_drawings_indices.add(t_left[0]["idx"])
                     dim_drawings_indices.add(t_right[0]["idx"])
                     dim_nominals.add(best_w["txt"])
 
-        # Match Vertical lines bounded by two ticks
+        # 4D. Isolated Vertical Lines bounded by two ticks (fallback)
         for vl in v_lines:
+            if vl["idx"] in dim_drawings_indices:
+                continue
             y0, y1, x = vl["y0"], vl["y1"], vl["x"]
-            t_top = [t for t in ticks if abs(t["mid"].y - y0) < 3.5 and abs(t["mid"].x - x) < 3.5]
-            t_bot = [t for t in ticks if abs(t["mid"].y - y1) < 3.5 and abs(t["mid"].x - x) < 3.5]
+            t_top = [t for t in unique_ticks if abs(t["mid"].y - y0) < 3.5 and abs(t["mid"].x - x) < 3.5]
+            t_bot = [t for t in unique_ticks if abs(t["mid"].y - y1) < 3.5 and abs(t["mid"].x - x) < 3.5]
             if t_top and t_bot:
                 meas_mm = vl["len"] * total_scale
                 best_w = None
                 best_diff = 999.0
                 for nw in num_words:
+                    if nw["txt"] in dim_nominals:
+                        continue
                     diff = abs(nw["val"] - meas_mm)
                     if diff <= max(1.5, meas_mm * 0.03):
                         if abs(nw["mid"].x - x) < 25.0 and y0 - 15 <= nw["mid"].y <= y1 + 15:
@@ -1221,59 +1354,69 @@ class PDFCadExtractor:
                         "p2": vis_to_cad(fitz.Point(x, y1)),
                         "base": vis_to_cad(fitz.Point(x, (y0 + y1) / 2.0)),
                         "angle": 90.0,
+                        "raw_p1": fitz.Point(x, y0),
+                        "raw_p2": fitz.Point(x, y1),
+                        "is_h": False,
                     })
                     dim_drawings_indices.add(vl["idx"])
                     dim_drawings_indices.add(t_top[0]["idx"])
                     dim_drawings_indices.add(t_bot[0]["idx"])
                     dim_nominals.add(best_w["txt"])
 
-        # Match Tick pairs (chain dimensions without separate line segment)
-        for i, t1 in enumerate(ticks):
-            if t1["idx"] in dim_drawings_indices:
+        # 4E. Suppress collinear dimension baseline lines and extension lines from drawing layers
+        for d_idx, d in enumerate(drawings):
+            if d_idx in dim_drawings_indices:
                 continue
-            for j in range(i + 1, min(i + 30, len(ticks))):
-                t2 = ticks[j]
-                if t2["idx"] in dim_drawings_indices:
-                    continue
-                if abs(t1["mid"].y - t2["mid"].y) < 1.5:
-                    L_pt = abs(t1["mid"].x - t2["mid"].x)
-                    meas_mm = L_pt * total_scale
-                    y = (t1["mid"].y + t2["mid"].y) / 2.0
-                    for nw in num_words:
-                        diff = abs(nw["val"] - meas_mm)
-                        if diff <= max(1.0, meas_mm * 0.03):
-                            if abs(nw["mid"].y - y) < 25.0 and min(t1["mid"].x, t2["mid"].x) - 15 <= nw["mid"].x <= max(t1["mid"].x, t2["mid"].x) + 15:
-                                extracted_dims.append({
-                                    "nominal": nw["txt"], "val": nw["val"], "meas_mm": meas_mm,
-                                    "p1": vis_to_cad(fitz.Point(min(t1["mid"].x, t2["mid"].x), y)),
-                                    "p2": vis_to_cad(fitz.Point(max(t1["mid"].x, t2["mid"].x), y)),
-                                    "base": vis_to_cad(fitz.Point((t1["mid"].x + t2["mid"].x) / 2.0, y)),
-                                    "angle": 0.0,
-                                })
-                                dim_drawings_indices.add(t1["idx"])
-                                dim_drawings_indices.add(t2["idx"])
-                                dim_nominals.add(nw["txt"])
-                                break
-                elif abs(t1["mid"].x - t2["mid"].x) < 1.5:
-                    L_pt = abs(t1["mid"].y - t2["mid"].y)
-                    meas_mm = L_pt * total_scale
-                    x = (t1["mid"].x + t2["mid"].x) / 2.0
-                    for nw in num_words:
-                        diff = abs(nw["val"] - meas_mm)
-                        if diff <= max(1.0, meas_mm * 0.03):
-                            if abs(nw["mid"].x - x) < 25.0 and min(t1["mid"].y, t2["mid"].y) - 15 <= nw["mid"].y <= max(t1["mid"].y, t2["mid"].y) + 15:
-                                extracted_dims.append({
-                                    "nominal": nw["txt"], "val": nw["val"], "meas_mm": meas_mm,
-                                    "p1": vis_to_cad(fitz.Point(x, min(t1["mid"].y, t2["mid"].y))),
-                                    "p2": vis_to_cad(fitz.Point(x, max(t1["mid"].y, t2["mid"].y))),
-                                    "base": vis_to_cad(fitz.Point(x, (t1["mid"].y + t2["mid"].y) / 2.0)),
-                                    "angle": 90.0,
-                                })
-                                dim_drawings_indices.add(t1["idx"])
-                                dim_drawings_indices.add(t2["idx"])
-                                dim_nominals.add(nw["txt"])
-                                break
-
+            for it in d.get("items", []):
+                if it[0] == "l":
+                    p1_vis = it[1] * rot_m
+                    p2_vis = it[2] * rot_m
+                    dx = abs(p1_vis.x - p2_vis.x)
+                    dy = abs(p1_vis.y - p2_vis.y)
+                    # Horizontal baseline segment suppression
+                    if dy < 0.35 and dx > 3.0:
+                        y = (p1_vis.y + p2_vis.y) / 2.0
+                        min_x = min(p1_vis.x, p2_vis.x)
+                        max_x = max(p1_vis.x, p2_vis.x)
+                        for ed in extracted_dims:
+                            if ed.get("is_h") and abs(ed["raw_p1"].y - y) < 1.5:
+                                d_x0 = min(ed["raw_p1"].x, ed["raw_p2"].x)
+                                d_x1 = max(ed["raw_p1"].x, ed["raw_p2"].x)
+                                if min_x <= d_x1 + 3.0 and max_x >= d_x0 - 3.0:
+                                    dim_drawings_indices.add(d_idx)
+                                    break
+                    # Vertical baseline segment suppression
+                    elif dx < 0.35 and dy > 3.0:
+                        x = (p1_vis.x + p2_vis.x) / 2.0
+                        min_y = min(p1_vis.y, p2_vis.y)
+                        max_y = max(p1_vis.y, p2_vis.y)
+                        for ed in extracted_dims:
+                            if (not ed.get("is_h")) and abs(ed["raw_p1"].x - x) < 1.5:
+                                d_y0 = min(ed["raw_p1"].y, ed["raw_p2"].y)
+                                d_y1 = max(ed["raw_p1"].y, ed["raw_p2"].y)
+                                if min_y <= d_y1 + 3.0 and max_y >= d_y0 - 3.0:
+                                    dim_drawings_indices.add(d_idx)
+                                    break
+                    # Vertical extension line suppression at horizontal dimension ticks
+                    elif dx < 0.35 and 2.0 <= dy <= 30.0:
+                        x = (p1_vis.x + p2_vis.x) / 2.0
+                        y_span = (min(p1_vis.y, p2_vis.y), max(p1_vis.y, p2_vis.y))
+                        for ed in extracted_dims:
+                            if ed.get("is_h"):
+                                for end_pt in (ed["raw_p1"], ed["raw_p2"]):
+                                    if abs(end_pt.x - x) < 1.5 and y_span[0] - 2 <= end_pt.y <= y_span[1] + 2:
+                                        dim_drawings_indices.add(d_idx)
+                                        break
+                    # Horizontal extension line suppression at vertical dimension ticks
+                    elif dy < 0.35 and 2.0 <= dx <= 30.0:
+                        y = (p1_vis.y + p2_vis.y) / 2.0
+                        x_span = (min(p1_vis.x, p2_vis.x), max(p1_vis.x, p2_vis.x))
+                        for ed in extracted_dims:
+                            if not ed.get("is_h"):
+                                for end_pt in (ed["raw_p1"], ed["raw_p2"]):
+                                    if abs(end_pt.y - y) < 1.5 and x_span[0] - 2 <= end_pt.x <= x_span[1] + 2:
+                                        dim_drawings_indices.add(d_idx)
+                                        break
         for dim_data in extracted_dims:
             try:
                 dim = msp.add_linear_dim(
