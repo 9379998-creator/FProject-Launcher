@@ -1111,11 +1111,11 @@ class PDFCadExtractor:
 
         # Configure architectural dimension style FERO_MM with DIMLFAC = 1.0 (exact millimeters)
         dimstyle = dxf_doc.dimstyles.new("FERO_MM")
-        dimstyle.dxf.dimscale = 1.0
+        dimstyle.dxf.dimscale = max(1.0, float(scale_factor))
         dimstyle.dxf.dimlfac = 1.0     # Factor 1.0 for true ModelSpace millimeters
-        dimstyle.dxf.dimtsz = 1.5      # Architectural tick marks ("две палочки")
-        dimstyle.dxf.dimtxt = 3.5      # 3.5 mm text height
-        dimstyle.dxf.dimasz = 2.5      # 2.5 mm arrow/tick size
+        dimstyle.dxf.dimtsz = 2.0      # Architectural tick marks ("две палочки")
+        dimstyle.dxf.dimtxt = 2.5      # 2.5 mm text height (scaled by dimscale to 500 mm at 1:200)
+        dimstyle.dxf.dimasz = 2.0      # 2.0 mm tick size
         dimstyle.dxf.dimdec = 1        # allow 1 decimal place (51.5, 89.5)
         dimstyle.dxf.dimzin = 8        # suppress trailing zeros (40.0 -> 40, 800.0 -> 800)
         dimstyle.dxf.dimtxsty = "Standard"
@@ -1319,9 +1319,15 @@ class PDFCadExtractor:
                             is_callout = RE_CALLOUT.search(text_str) is not None
 
                             orig = span.get("origin")
+                            font_size_pt = float(span.get("size") or 7.0)
+                            model_text_h = round(font_size_pt * total_scale, 2)
+                            if scale_factor > 1.5:
+                                height_mm = max(1.8 * scale_factor, model_text_h)
+                            else:
+                                height_mm = max(2.2, min(5.0, model_text_h))
+
                             if rot == 270:
                                 cad_insert = to_cad((orig[0], orig[1]))
-                                height_mm = 3.5
                                 angle_deg = 0.0
                                 c_val = span.get("color") or 0
                                 if c_val == 65535:
@@ -1336,8 +1342,6 @@ class PDFCadExtractor:
                                     t_layer = "09_АННОТАЦИИ_ТЕКСТ"
                                     t_color = 2
                             else:
-                                font_size_pt = float(span.get("size") or 7.0)
-                                height_mm = max(2.2, min(4.5, round(font_size_pt * total_scale, 2)))
                                 cad_dir_y = -dir_y
                                 angle_deg = round(math.degrees(math.atan2(cad_dir_y, dir_x)), 1) % 360
                                 cad_insert = to_cad((orig[0], orig[1]))
