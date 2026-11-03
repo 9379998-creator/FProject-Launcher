@@ -11,7 +11,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 if not exist "app\backend\folder_picker.exe" (
     echo [INFO] Компиляция нативного проводника folder_picker.exe...
-    C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:exe /optimize+ /out:"app\backend\folder_picker.exe" "app\backend\folder_picker.cs"
+    C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ /out:"app\backend\folder_picker.exe" "app\backend\folder_picker.cs"
 )
 
 if exist build rmdir /s /q build

@@ -653,18 +653,6 @@ def hidden_process_kwargs() -> dict:
         return {}
 
 
-def get_folder_picker_exe() -> Optional[Path]:
-    candidates = [
-        Path(__file__).resolve().parent / "folder_picker.exe",
-        REPO_ROOT / "app" / "backend" / "folder_picker.exe",
-        REPO_ROOT / "folder_picker.exe",
-    ]
-    for c in candidates:
-        if c.is_file():
-            return c
-    return None
-
-
 def decode_folder_dialog_output(raw: bytes | None) -> str:
     """Последняя непустая строка stdout диалога выбора папки -> путь.
 
@@ -694,6 +682,27 @@ def decode_folder_dialog_output(raw: bytes | None) -> str:
         except (OSError, ValueError):
             continue
     return lines[-1] if lines else ""
+
+
+def get_folder_picker_exe() -> Path | None:
+    """Find native Windows GUI folder picker executable."""
+    candidates = [
+        Path(__file__).resolve().parent / "folder_picker.exe",
+        REPO_ROOT / "app" / "backend" / "folder_picker.exe",
+    ]
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        candidates.extend([
+            exe_dir / "app" / "backend" / "folder_picker.exe",
+            exe_dir / "folder_picker.exe",
+        ])
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "app" / "backend" / "folder_picker.exe")
+    for cand in candidates:
+        if cand.is_file():
+            return cand
+    return None
 
 
 def run_poppler(args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
@@ -3668,99 +3677,86 @@ class LauncherHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/choose-folder":
-            # Контракт docs/LOAD_BUTTON_CONTRACT.md: современный системный проводник
-            # Windows IFileOpenDialog с адресной строкой (FOS_PICKFOLDERS), строго JSON в ответе.
-            try:
-                creation_flags = 0
-                if os.name == "nt":
-                    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-
-                picker_exe = get_folder_picker_exe()
-                proc = None
-
-                if picker_exe and picker_exe.is_file():
-                    _bring_window_to_front(None, "#32770", 115.0, "")
+            # Native IFileDialog GUI picker (has address bar for network paths).
+            # Fallback to legacy PowerShell FolderBrowserDialog if exe unavailable.
+            picker_exe = get_folder_picker_exe()
+            if picker_exe:
+                try:
                     proc = subprocess.run(
                         [str(picker_exe)],
                         capture_output=True,
                         text=False,
-                        timeout=180,
-                        creationflags=creation_flags,
+                        timeout=120,
+                        creationflags=0,
                     )
-                else:
-                    # Резервный вызов через PowerShell с компиляцией IFileOpenDialog
-                    ps_command = (
-                        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
-                        "$csharp = @'\n"
-                        "using System;\n"
-                        "using System.Runtime.InteropServices;\n"
-                        "public class NativePicker {\n"
-                        "    [DllImport(\"user32.dll\")] private static extern IntPtr GetForegroundWindow();\n"
-                        "    [ComImport, Guid(\"DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7\")] private class FileOpenDialogInternal {}\n"
-                        "    [ComImport, Guid(\"d57c7288-d4a4-47e3-8021-2d880149e466\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]\n"
-                        "    private interface IFileOpenDialog {\n"
-                        "        [PreserveSig] int Show(IntPtr parent);\n"
-                        "        void SetFileTypes(); void SetFileTypeIndex(); void GetFileTypeIndex(); void Advise(); void Unadvise();\n"
-                        "        void SetOptions(uint fos); void GetOptions(out uint pfos); void SetDefaultFolder(object psi);\n"
-                        "        void SetFolder(object psi); void GetFolder(out object ppsi); void GetCurrentSelection(out object ppsi);\n"
-                        "        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName); void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string pszName);\n"
-                        "        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle); void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);\n"
-                        "        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel); void GetResult(out IShellItem ppsi);\n"
-                        "    }\n"
-                        "    [ComImport, Guid(\"43826d1e-e718-42ee-bc55-a1e261c37bfe\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]\n"
-                        "    public interface IShellItem { void BindToHandler(); void GetParent(); void GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName); void GetAttributes(); void Compare(); }\n"
-                        "    public static string Pick() {\n"
-                        "        var dlg = (IFileOpenDialog)new FileOpenDialogInternal();\n"
-                        "        try {\n"
-                        "            dlg.SetOptions(0x20 | 0x40 | 0x800);\n"
-                        "            dlg.SetTitle(\"Выберите папку объекта - FERO Launcher\");\n"
-                        "            if (dlg.Show(GetForegroundWindow()) == 0) {\n"
-                        "                IShellItem item; dlg.GetResult(out item);\n"
-                        "                string p; item.GetDisplayName(0x80058000, out p);\n"
-                        "                return p;\n"
-                        "            }\n"
-                        "            return \"\";\n"
-                        "        } finally { Marshal.ReleaseComObject(dlg); }\n"
-                        "    }\n"
-                        "}\n"
-                        "'@; "
-                        "Add-Type -TypeDefinition $csharp; "
-                        "$res = [NativePicker]::Pick(); "
-                        "if ($res) { [Console]::WriteLine($res) }"
-                    )
-                    _bring_window_to_front(None, "#32770", 115.0, "")
-                    proc = subprocess.run(
-                        [
-                            "powershell.exe",
-                            "-STA",
-                            "-NoProfile",
-                            "-ExecutionPolicy",
-                            "Bypass",
-                            "-Command",
-                            ps_command,
-                        ],
-                        capture_output=True,
-                        text=False,
-                        timeout=180,
-                        creationflags=creation_flags,
-                    )
-
-                if proc.returncode == 1:
-                    logger.info("Folder dialog cancelled by user")
-                    self.send_json(HTTPStatus.OK, {"path": ""})
+                    if proc.returncode == 0:
+                        selected = decode_folder_dialog_output(proc.stdout)
+                        if selected:
+                            logger.info("Native folder dialog selected: %s", selected)
+                            self.send_json(HTTPStatus.OK, {"path": selected})
+                        else:
+                            logger.info("Native folder dialog empty selection")
+                            self.send_json(HTTPStatus.OK, {"path": ""})
+                        return
+                    elif proc.returncode == 1:
+                        logger.info("Native folder dialog cancelled by user")
+                        self.send_json(HTTPStatus.OK, {"path": ""})
+                        return
+                    else:
+                        err_msg = proc.stderr.decode("utf-8", errors="replace").strip() if proc.stderr else ""
+                        logger.warning("folder_picker.exe exited with code %s: %s, falling back to PowerShell", proc.returncode, err_msg)
+                except subprocess.TimeoutExpired:
+                    logger.warning("folder_picker.exe timed out after 120s")
+                    self.send_json(HTTPStatus.OK, {"path": "", "error": "Таймаут выбора папки (120с)."})
                     return
-                elif proc.returncode != 0:
+                except Exception as exc:
+                    logger.warning("folder_picker.exe failed (%s), falling back to PowerShell", exc)
+
+            # Fallback: legacy PowerShell FolderBrowserDialog
+            try:
+                ps_command = (
+                    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+                    "Add-Type -AssemblyName System.Windows.Forms; "
+                    "$dlg = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                    '$dlg.Description = "Select object folder - FLauncher"; '
+                    "$dlg.ShowNewFolderButton = $false; "
+                    "$owner = New-Object System.Windows.Forms.Form; "
+                    "$owner.TopMost = $true; $owner.ShowInTaskbar = $false; "
+                    "$null = $owner.Handle; "
+                    "try { if ($dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) "
+                    "{ [Console]::WriteLine($dlg.SelectedPath) } } "
+                    "finally { $owner.Dispose(); $dlg.Dispose() }"
+                )
+                _bring_window_to_front(None, "#32770", 115.0, "")
+                creation_flags = 0
+                if os.name == "nt":
+                    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                proc = subprocess.run(
+                    [
+                        "powershell.exe",
+                        "-STA",
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command",
+                        ps_command,
+                    ],
+                    capture_output=True,
+                    text=False,
+                    timeout=120,
+                    creationflags=creation_flags,
+                )
+                if proc.returncode != 0:
                     err_msg = proc.stderr.decode("utf-8", errors="replace").strip() if proc.stderr else ""
-                    logger.error("Folder picker failed with exit code %s: %s", proc.returncode, err_msg)
+                    logger.error("PowerShell FolderBrowserDialog failed with exit code %s: %s", proc.returncode, err_msg)
                     self.send_json(
                         HTTPStatus.OK,
                         {
                             "path": "",
-                            "error": f"Ошибка системного диалога выбора папки (код {proc.returncode}): {err_msg}" if err_msg else f"Диалог выбора папки завершился с кодом {proc.returncode}."
+                            "error": f"Ошибка вызова диалога выбора (код {proc.returncode}): {err_msg}" if err_msg else f"Диалог завершился с кодом {proc.returncode}."
                         }
                     )
                     return
-
                 selected = decode_folder_dialog_output(proc.stdout)
                 if selected:
                     logger.info("Folder dialog selected: %s", selected)
@@ -3769,17 +3765,23 @@ class LauncherHandler(BaseHTTPRequestHandler):
                     logger.info("Folder dialog cancelled by user (empty path)")
                     self.send_json(HTTPStatus.OK, {"path": ""})
             except subprocess.TimeoutExpired:
-                logger.warning("Folder dialog timed out after 180s")
+                logger.warning("Folder dialog timed out after 120s")
                 self.send_json(
                     HTTPStatus.OK,
                     {
                         "path": "",
-                        "error": "Системный диалог выбора папки Windows не ответил за 180 секунд. Попробуйте ещё раз.",
-                    },
+                        "error": "Таймаут выбора папки (120с). Попробуйте еще раз."
+                    }
                 )
-            except Exception as error:
-                logger.exception("Folder dialog failed with exception: %s", error)
-                self.send_json(HTTPStatus.OK, {"path": "", "error": f"Системный диалог выбора папки недоступен: {error}"})
+            except Exception as exc:
+                logger.error("Failed to spawn folder dialog: %s", exc, exc_info=True)
+                self.send_json(
+                    HTTPStatus.OK,
+                    {
+                        "path": "",
+                        "error": f"Не удалось открыть диалог выбора папки: {exc}"
+                    }
+                )
             return
 
         if parsed.path == "/api/config/apps":

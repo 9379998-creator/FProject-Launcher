@@ -7,12 +7,12 @@ namespace FeroLauncher {
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
 
-        [DllImport("shell32.dll", CharSet = CharSet.Auto)]
+        [DllImport("shell32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern int SHCreateItemFromParsingName(
             [MarshalAs(UnmanagedType.LPWStr)] string pszPath,
             IntPtr pbc,
             ref Guid riid,
-            [MarshalAs(UnmanagedType.Interface)] out object ppv);
+            [MarshalAs(UnmanagedType.Interface)] out IShellItem ppv);
 
         [ComImport]
         [Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]
@@ -20,21 +20,21 @@ namespace FeroLauncher {
         private class FileOpenDialogInternal { }
 
         [ComImport]
-        [Guid("d57c7288-d4a4-47e3-8021-2d880149e466")]
+        [Guid("42f85136-db7e-439c-85f1-e4075d135fc8")]
         [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        private interface IFileOpenDialog {
+        private interface IFileDialog {
             [PreserveSig] int Show(IntPtr parent);
-            void SetFileTypes();
-            void SetFileTypeIndex();
-            void GetFileTypeIndex();
-            void Advise();
-            void Unadvise();
+            void SetFileTypes(uint cFileTypes, IntPtr rgFilterSpec);
+            void SetFileTypeIndex(uint iFileType);
+            void GetFileTypeIndex(out uint piFileType);
+            void Advise(IntPtr pfde, out uint pdwCookie);
+            void Unadvise(uint dwCookie);
             void SetOptions(uint fos);
             void GetOptions(out uint pfos);
-            void SetDefaultFolder(object psi);
-            void SetFolder(object psi);
-            void GetFolder(out object ppsi);
-            void GetCurrentSelection(out object ppsi);
+            void SetDefaultFolder(IShellItem psi);
+            void SetFolder(IShellItem psi);
+            void GetFolder(out IShellItem ppsi);
+            void GetCurrentSelection(out IShellItem ppsi);
             void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);
             void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string pszName);
             void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
@@ -47,29 +47,41 @@ namespace FeroLauncher {
         [Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe")]
         [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         private interface IShellItem {
-            void BindToHandler();
-            void GetParent();
+            void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+            void GetParent(out IShellItem ppsi);
             void GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName);
-            void GetAttributes();
-            void Compare();
+            void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
+            void Compare(IShellItem psi, uint hint, out int piOrder);
         }
 
         [STAThread]
         static int Main(string[] args) {
             try {
-                var dlg = (IFileOpenDialog)new FileOpenDialogInternal();
+                var dlg = (IFileDialog)new FileOpenDialogInternal();
                 try {
                     // FOS_PICKFOLDERS (0x20) | FOS_FORCEFILESYSTEM (0x40) | FOS_PATHMUSTEXIST (0x800)
                     uint options = 0x00000020 | 0x00000040 | 0x00000800;
                     dlg.SetOptions(options);
                     dlg.SetTitle("Выберите папку объекта - FERO Launcher");
 
-                    if (args.Length > 0 && !string.IsNullOrEmpty(args[0]) && Directory.Exists(args[0])) {
+                    string initialDir = null;
+                    foreach (var a in args) {
+                        if (!a.StartsWith("--") && Directory.Exists(a)) {
+                            initialDir = a;
+                            break;
+                        }
+                    }
+                    if (!string.IsNullOrEmpty(initialDir)) {
                         Guid guid = new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe");
-                        object folderItem;
-                        if (SHCreateItemFromParsingName(args[0], IntPtr.Zero, ref guid, out folderItem) == 0) {
+                        IShellItem folderItem;
+                        if (SHCreateItemFromParsingName(initialDir, IntPtr.Zero, ref guid, out folderItem) == 0) {
                             dlg.SetFolder(folderItem);
                         }
+                    }
+
+                    if (Array.IndexOf(args, "--test") >= 0) {
+                        Console.WriteLine("READY");
+                        return 0;
                     }
 
                     IntPtr owner = GetForegroundWindow();
