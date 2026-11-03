@@ -658,6 +658,18 @@ def plot_dwg_to_pdf_via_accore(dwg_path: Path, pdf_path: Path) -> bool:
                     pass
 
 
+
+STANDARD_SCALES = [
+    0.1, 0.2, 0.5, 1.0, 2.0, 2.5, 4.0, 5.0,
+    10.0, 15.0, 20.0, 25.0, 40.0, 50.0, 75.0, 100.0, 200.0, 500.0
+]
+
+def snap_scale(raw: float, tol: float = 0.08) -> float:
+    for s in STANDARD_SCALES:
+        if abs(raw - s) / s <= tol:
+            return s
+    return raw
+
 def detect_catalog_scale(page: fitz.Page, crop_box: Optional[fitz.Rect] = None) -> float:
     """
     Dynamic dual-engine catalog scale detector:
@@ -798,23 +810,24 @@ def detect_catalog_scale(page: fitz.Page, crop_box: Optional[fitz.Rect] = None) 
         logger.info("Calibrated catalog scale from dimension lines: %s", calibrated_scale)
         return float(calibrated_scale)
 
-    # 2. Fallback: Search full page text for explicit scale indicator
-    try:
-        full_text = page.get_text()
-        m = re.findall(
-            r"(?:scale|schaal|maßstab|masstab|échelle)[\s\S]{0,40}?([0-9]+[/:][0-9]+(?:\.[0-9]+)?)",
-            full_text,
-            re.IGNORECASE,
-        )
-        if m:
-            parts = re.split(r"[/:]", m[0])
-            if len(parts) == 2 and float(parts[0]) > 0:
-                scale_fac = float(parts[1]) / float(parts[0])
-                if scale_fac > 0:
-                    logger.info("Detected scale from page title block: %s", scale_fac)
-                    return scale_fac
-    except Exception as ex:
-        logger.warning("Scale search fallback error: %s", ex)
+    # 2. Fallback: Search full page text for explicit scale indicator (only for full-page exports, never for cropped fragments)
+    if not crop_box:
+        try:
+            full_text = page.get_text()
+            m = re.findall(
+                r"(?:scale|schaal|maßstab|masstab|échelle)[\s\S]{0,40}?([0-9]+[/:][0-9]+(?:\.[0-9]+)?)",
+                full_text,
+                re.IGNORECASE,
+            )
+            if m:
+                parts = re.split(r"[/:]", m[0])
+                if len(parts) == 2 and float(parts[0]) > 0:
+                    scale_fac = float(parts[1]) / float(parts[0])
+                    if scale_fac > 0:
+                        logger.info("Detected scale from page title block: %s", scale_fac)
+                        return scale_fac
+        except Exception as ex:
+            logger.warning("Scale search fallback error: %s", ex)
 
     return 1.0
 
@@ -960,22 +973,127 @@ class PDFCadExtractor:
                 max(page_rect.height, page.mediabox.height, page.cropbox.height),
             )
 
-        # 1. Dynamic Scale Calibration
+        # Load drawings and words for filter_rect (fast spatial bounds)
+        if crop_box:
+            drawings = [
+                d for d in page.get_drawings()
+                if filter_rect.intersects(fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5))
+            ]
+            crop_words = [
+                w for w in page.get_text("words")
+                if filter_rect.contains(fitz.Point((w[0] + w[2]) / 2.0, (w[1] + w[3]) / 2.0))
+            ]
+        else:
+            drawings = page.get_drawings()
+            crop_words = page.get_text("words")
+
+        # Collect lines, boundary ticks ("две палочки"), and numbers inside filter_rect in visual CAD space
+        h_lines = []
+        v_lines = []
+        ticks = []
+
+        for d_idx, d in enumerate(drawings):
+            for it in d.get("items", []):
+                if it[0] == "l":
+                    p1_vis = it[1] * rot_m
+                    p2_vis = it[2] * rot_m
+                    dx = abs(p2_vis.x - p1_vis.x)
+                    dy = abs(p2_vis.y - p1_vis.y)
+                    L = math.hypot(dx, dy)
+                    # Boundary tick ("две палочки"): 45-deg slash or perpendicular stroke
+                    if 1.5 <= L <= 10.0 and abs(dx - dy) < 0.85 * max(dx, dy) and min(dx, dy) > 0.4:
+                        ticks.append({"idx": d_idx, "mid": fitz.Point((p1_vis.x + p2_vis.x) / 2.0, (p1_vis.y + p2_vis.y) / 2.0), "p1": p1_vis, "p2": p2_vis})
+                    elif 1.5 <= L <= 12.0 and (dx < 0.35 or dy < 0.35):
+                        ticks.append({"idx": d_idx, "mid": fitz.Point((p1_vis.x + p2_vis.x) / 2.0, (p1_vis.y + p2_vis.y) / 2.0), "p1": p1_vis, "p2": p2_vis})
+                    elif dy < 0.35 and dx >= 4.0:
+                        h_lines.append({
+                            "idx": d_idx, "x0": min(p1_vis.x, p2_vis.x), "x1": max(p1_vis.x, p2_vis.x),
+                            "y": (p1_vis.y + p2_vis.y) / 2.0, "len": dx
+                        })
+                    elif dx < 0.35 and dy >= 4.0:
+                        v_lines.append({
+                            "idx": d_idx, "y0": min(p1_vis.y, p2_vis.y), "y1": max(p1_vis.y, p2_vis.y),
+                            "x": (p1_vis.x + p2_vis.x) / 2.0, "len": dy
+                        })
+
+        num_words = []
+        for w in crop_words:
+            txt = str(w[4]).strip().replace(" ", "").replace(",", ".")
+            if txt.replace(".", "", 1).isdigit():
+                val = float(txt)
+                if 1.0 <= val <= 35000.0:
+                    p_vis = fitz.Point((w[0] + w[2]) / 2.0, (w[1] + w[3]) / 2.0) * rot_m
+                    num_words.append({"txt": txt, "val": val, "mid": p_vis, "raw": w})
+
+        # 1. Dynamic Scale Calibration (Pass 1: Scale Voting)
         scale_opt = options.get("scale") if options else None
         if scale_opt is not None and float(scale_opt) > 0.0:
             scale_factor = float(scale_opt)
+        elif crop_box:
+            scale_votes = []
+            for hl in h_lines:
+                x0, x1, y = hl["x0"], hl["x1"], hl["y"]
+                t_left = [t for t in ticks if abs(t["mid"].x - x0) < 3.5 and abs(t["mid"].y - y) < 3.5]
+                t_right = [t for t in ticks if abs(t["mid"].x - x1) < 3.5 and abs(t["mid"].y - y) < 3.5]
+                if t_left and t_right:
+                    for nw in num_words:
+                        if abs(nw["mid"].y - y) < 20.0 and x0 - 10 <= nw["mid"].x <= x1 + 10:
+                            raw_k = nw["val"] / (hl["len"] * PT_TO_MM)
+                            snapped_k = snap_scale(raw_k)
+                            if abs(raw_k - snapped_k) / snapped_k < 0.05:
+                                scale_votes.append(snapped_k)
+            for vl in v_lines:
+                y0, y1, x = vl["y0"], vl["y1"], vl["x"]
+                t_top = [t for t in ticks if abs(t["mid"].y - y0) < 3.5 and abs(t["mid"].x - x) < 3.5]
+                t_bot = [t for t in ticks if abs(t["mid"].y - y1) < 3.5 and abs(t["mid"].x - x) < 3.5]
+                if t_top and t_bot:
+                    for nw in num_words:
+                        if abs(nw["mid"].x - x) < 20.0 and y0 - 10 <= nw["mid"].y <= y1 + 10:
+                            raw_k = nw["val"] / (vl["len"] * PT_TO_MM)
+                            snapped_k = snap_scale(raw_k)
+                            if abs(raw_k - snapped_k) / snapped_k < 0.05:
+                                scale_votes.append(snapped_k)
+            for i, t1 in enumerate(ticks):
+                for j in range(i + 1, min(i + 30, len(ticks))):
+                    t2 = ticks[j]
+                    if abs(t1["mid"].y - t2["mid"].y) < 1.5:
+                        L_pt = abs(t1["mid"].x - t2["mid"].x)
+                        if L_pt > 3.0:
+                            y = (t1["mid"].y + t2["mid"].y) / 2.0
+                            for nw in num_words:
+                                if abs(nw["mid"].y - y) < 20.0 and min(t1["mid"].x, t2["mid"].x) - 15 <= nw["mid"].x <= max(t1["mid"].x, t2["mid"].x) + 15:
+                                    raw_k = nw["val"] / (L_pt * PT_TO_MM)
+                                    snapped_k = snap_scale(raw_k)
+                                    if abs(raw_k - snapped_k) / snapped_k < 0.05:
+                                        scale_votes.append(snapped_k)
+                    elif abs(t1["mid"].x - t2["mid"].x) < 1.5:
+                        L_pt = abs(t1["mid"].y - t2["mid"].y)
+                        if L_pt > 3.0:
+                            x = (t1["mid"].x + t2["mid"].x) / 2.0
+                            for nw in num_words:
+                                if abs(nw["mid"].x - x) < 20.0 and min(t1["mid"].y, t2["mid"].y) - 15 <= nw["mid"].y <= max(t1["mid"].y, t2["mid"].y) + 15:
+                                    raw_k = nw["val"] / (L_pt * PT_TO_MM)
+                                    snapped_k = snap_scale(raw_k)
+                                    if abs(raw_k - snapped_k) / snapped_k < 0.05:
+                                        scale_votes.append(snapped_k)
+            scale_factor = Counter(scale_votes).most_common(1)[0][0] if scale_votes else 1.0
         else:
-            scale_factor = detect_catalog_scale(page, crop_box=filter_rect if crop_box else None)
+            scale_factor = detect_catalog_scale(page)
+
         total_scale = PT_TO_MM * scale_factor
-        logger.info("Calibrated catalog scale: %s (total_scale=%f mm/pt)", scale_factor, total_scale)
+        logger.info("Calibrated catalog scale: 1:%d (scale_factor=%s, total_scale=%f mm/pt)", int(scale_factor), scale_factor, total_scale)
 
         # 2. Universal Upright Coordinate Transformation (Task 032)
-        # Accurately maps physical PDF coordinates to upright CAD millimeter coordinates across 0/90/180/270
         vis_origin_x = visual_crop.x0
         vis_origin_y = visual_crop.y1
 
         def to_cad(pt: Tuple[float, float]) -> Tuple[float, float]:
             p_vis = fitz.Point(pt[0], pt[1]) * rot_m
+            cad_x = (p_vis.x - vis_origin_x) * total_scale
+            cad_y = (vis_origin_y - p_vis.y) * total_scale
+            return (round(cad_x, 4), round(cad_y, 4))
+
+        def vis_to_cad(p_vis: fitz.Point) -> Tuple[float, float]:
             cad_x = (p_vis.x - vis_origin_x) * total_scale
             cad_y = (vis_origin_y - p_vis.y) * total_scale
             return (round(cad_x, 4), round(cad_y, 4))
@@ -994,17 +1112,18 @@ class PDFCadExtractor:
         # Configure architectural dimension style FERO_MM with DIMLFAC = 1.0 (exact millimeters)
         dimstyle = dxf_doc.dimstyles.new("FERO_MM")
         dimstyle.dxf.dimscale = 1.0
-        dimstyle.dxf.dimlfac = 1.0     # Critical: factor 1.0, NOT 100.0!
+        dimstyle.dxf.dimlfac = 1.0     # Factor 1.0 for true ModelSpace millimeters
+        dimstyle.dxf.dimtsz = 1.5      # Architectural tick marks ("две палочки")
         dimstyle.dxf.dimtxt = 3.5      # 3.5 mm text height
-        dimstyle.dxf.dimasz = 2.5      # 2.5 mm arrow size
+        dimstyle.dxf.dimasz = 2.5      # 2.5 mm arrow/tick size
         dimstyle.dxf.dimdec = 1        # allow 1 decimal place (51.5, 89.5)
-        dimstyle.dxf.dimzin = 8        # suppress trailing zeros (5.0 -> 5, 23.0 -> 23, 33.0 -> 33)
+        dimstyle.dxf.dimzin = 8        # suppress trailing zeros (40.0 -> 40, 800.0 -> 800)
         dimstyle.dxf.dimtxsty = "Standard"
         dimstyle.dxf.dimclrd = 3       # Green dimension line
         dimstyle.dxf.dimclre = 3       # Green extension lines
         dimstyle.dxf.dimclrt = 3       # Green text
-        dimstyle.dxf.dimtad = 1
-        dimstyle.dxf.dimtih = 0
+        dimstyle.dxf.dimtad = 1        # Text above dimension line
+        dimstyle.dxf.dimtih = 0        # Text aligned with dimension line
         dimstyle.dxf.dimtoh = 0
 
         layers_def = [
@@ -1045,230 +1164,115 @@ class PDFCadExtractor:
         entities_count = 0
         closed_loops_count = 0
 
-        if crop_box:
-            drawings = [
-                d for d in page.get_drawings()
-                if filter_rect.intersects(fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5))
-            ]
-            crop_words = [
-                w for w in page.get_text("words")
-                if filter_rect.contains(fitz.Point((w[0] + w[2]) / 2.0, (w[1] + w[3]) / 2.0))
-            ]
-        else:
-            drawings = page.get_drawings()
-            crop_words = page.get_text("words")
-
-        # 4. Extract Native AutoCAD DIMENSION Entities (Tasks 021, 027, 029 & 032)
-        # Fast spatially-indexed universal dimension matcher across rotations 0/90/180/270
+        # 4. Extract Native AutoCAD DIMENSION Entities (Pass 2: Precise Matching & Geometry Separation)
         extracted_dims = []
         dim_drawings_indices = set()
         dim_nominals = set()
 
-        # Transform all drawings inside filter_rect to find arrowheads and ticks in visual CAD space
-        arrow_candidates = []
-        for idx, d in enumerate(drawings):
-            r_padded = fitz.Rect(d["rect"].x0 - 0.5, d["rect"].y0 - 0.5, d["rect"].x1 + 0.5, d["rect"].y1 + 0.5)
-            if not filter_rect.intersects(r_padded):
-                continue
-            items = d.get("items", [])
-            # Triangle arrowheads (filled lines, strictly 1 or 2 small triangles: 3 or 6 lines, edge <= 12 pt)
-            if d.get("fill") is not None:
-                lines = [it for it in items if it[0] == "l"]
-                if len(lines) in (3, 6):
-                    for k in range(0, len(lines), 3):
-                        p0 = lines[k][1]
-                        p1 = lines[k+1][1]
-                        p2 = lines[k+2][1]
-                        e0 = math.hypot(p0.x - p1.x, p0.y - p1.y)
-                        e1 = math.hypot(p1.x - p2.x, p1.y - p2.y)
-                        e2 = math.hypot(p2.x - p0.x, p2.y - p0.y)
-                        if max(e0, e1, e2) <= 12.0:
-                            tip_phys = p2 if e0 <= e1 and e0 <= e2 else (p0 if e1 <= e0 and e1 <= e2 else p1)
-                            tip_vis = fitz.Point(tip_phys.x, tip_phys.y) * rot_m
-                            arrow_candidates.append({
-                                "idx": idx, "tip_phys": tip_phys, "tip_vis": tip_vis, "kind": "arrow", "rect": d["rect"]
-                            })
-            # 45-degree architectural slash ticks
-            elif len(items) == 1 and items[0][0] == "l":
-                p1_phys, p2_phys = items[0][1], items[0][2]
-                tick_len = math.hypot(p1_phys.x - p2_phys.x, p1_phys.y - p2_phys.y)
-                if 1.5 <= tick_len <= 7.5 and abs(abs(p1_phys.x - p2_phys.x) - abs(p1_phys.y - p2_phys.y)) < 0.8:
-                    mid_phys = fitz.Point((p1_phys.x + p2_phys.x) / 2.0, (p1_phys.y + p2_phys.y) / 2.0)
-                    mid_vis = mid_phys * rot_m
-                    arrow_candidates.append({
-                        "idx": idx, "tip_phys": mid_phys, "tip_vis": mid_vis, "kind": "tick", "rect": d["rect"]
+        # Match Horizontal lines bounded by two ticks
+        for hl in h_lines:
+            x0, x1, y = hl["x0"], hl["x1"], hl["y"]
+            t_left = [t for t in ticks if abs(t["mid"].x - x0) < 3.5 and abs(t["mid"].y - y) < 3.5]
+            t_right = [t for t in ticks if abs(t["mid"].x - x1) < 3.5 and abs(t["mid"].y - y) < 3.5]
+            if t_left and t_right:
+                meas_mm = hl["len"] * total_scale
+                best_w = None
+                best_diff = 999.0
+                for nw in num_words:
+                    diff = abs(nw["val"] - meas_mm)
+                    if diff <= max(1.5, meas_mm * 0.03):
+                        if abs(nw["mid"].y - y) < 25.0 and x0 - 15 <= nw["mid"].x <= x1 + 15:
+                            if diff < best_diff:
+                                best_diff = diff
+                                best_w = nw
+                if best_w:
+                    extracted_dims.append({
+                        "nominal": best_w["txt"], "val": best_w["val"], "meas_mm": meas_mm,
+                        "p1": vis_to_cad(fitz.Point(x0, y)),
+                        "p2": vis_to_cad(fitz.Point(x1, y)),
+                        "base": vis_to_cad(fitz.Point((x0 + x1) / 2.0, y)),
+                        "angle": 0.0,
                     })
+                    dim_drawings_indices.add(hl["idx"])
+                    dim_drawings_indices.add(t_left[0]["idx"])
+                    dim_drawings_indices.add(t_right[0]["idx"])
+                    dim_nominals.add(best_w["txt"])
 
-        # Spatially index arrows in visual space
-        arrows_by_vy = defaultdict(list)
-        arrows_by_vx = defaultdict(list)
-        for a in arrow_candidates:
-            arrows_by_vy[round(a["tip_vis"].y / 2.0)].append(a)
-            arrows_by_vx[round(a["tip_vis"].x / 2.0)].append(a)
+        # Match Vertical lines bounded by two ticks
+        for vl in v_lines:
+            y0, y1, x = vl["y0"], vl["y1"], vl["x"]
+            t_top = [t for t in ticks if abs(t["mid"].y - y0) < 3.5 and abs(t["mid"].x - x) < 3.5]
+            t_bot = [t for t in ticks if abs(t["mid"].y - y1) < 3.5 and abs(t["mid"].x - x) < 3.5]
+            if t_top and t_bot:
+                meas_mm = vl["len"] * total_scale
+                best_w = None
+                best_diff = 999.0
+                for nw in num_words:
+                    diff = abs(nw["val"] - meas_mm)
+                    if diff <= max(1.5, meas_mm * 0.03):
+                        if abs(nw["mid"].x - x) < 25.0 and y0 - 15 <= nw["mid"].y <= y1 + 15:
+                            if diff < best_diff:
+                                best_diff = diff
+                                best_w = nw
+                if best_w:
+                    extracted_dims.append({
+                        "nominal": best_w["txt"], "val": best_w["val"], "meas_mm": meas_mm,
+                        "p1": vis_to_cad(fitz.Point(x, y0)),
+                        "p2": vis_to_cad(fitz.Point(x, y1)),
+                        "base": vis_to_cad(fitz.Point(x, (y0 + y1) / 2.0)),
+                        "angle": 90.0,
+                    })
+                    dim_drawings_indices.add(vl["idx"])
+                    dim_drawings_indices.add(t_top[0]["idx"])
+                    dim_drawings_indices.add(t_bot[0]["idx"])
+                    dim_nominals.add(best_w["txt"])
 
-        # Identify 3+3 digit split article numbers (e.g. Schuco "358 150", "245 755") so they are never treated as dimensions
-        article_word_indices = set()
-        three_digit_words = [
-            (wi, w) for wi, w in enumerate(crop_words)
-            if re.match(r"^\d{3}$", str(w[4]).strip())
-        ]
-        for i_td, (wi1, w1) in enumerate(three_digit_words):
-            for wi2, w2 in three_digit_words[i_td + 1:]:
-                if abs(w1[1] - w2[1]) < 3.0 and (0.0 <= (w2[0] - w1[2]) <= 12.0 or 0.0 <= (w1[0] - w2[2]) <= 12.0):
-                    article_word_indices.add(wi1)
-                    article_word_indices.add(wi2)
-
-        # Transform numeric words to visual coordinates
-        num_words = []
-        for wi, w in enumerate(crop_words):
-            if wi in article_word_indices:
+        # Match Tick pairs (chain dimensions without separate line segment)
+        for i, t1 in enumerate(ticks):
+            if t1["idx"] in dim_drawings_indices:
                 continue
-            txt = str(w[4]).strip()
-            if re.match(r"^\d+(\.\d+)?$", txt):
-                val = float(txt)
-                if 2.0 <= val <= 3000.0:
-                    p_mid_phys = fitz.Point((w[0] + w[2]) / 2.0, (w[1] + w[3]) / 2.0)
-                    p_mid_vis = p_mid_phys * rot_m
-                    num_words.append((txt, val, p_mid_phys, p_mid_vis, w))
-
-        # Match each numeric word to the best arrow or tick pair in visual CAD coordinates
-        for txt, val, w_phys, w_vis, w_raw in num_words:
-            best_candidate = None
-            best_score = 9999.0
-
-            # 1. Search Horizontal dimension in visual space
-            w_y_bin = round(w_vis.y / 2.0)
-            cand_h = []
-            for b in range(w_y_bin - 25, w_y_bin + 26):
-                cand_h.extend(arrows_by_vy[b])
-
-            for i, a1 in enumerate(cand_h):
-                tv1 = a1["tip_vis"]
-                for j in range(i + 1, len(cand_h)):
-                    a2 = cand_h[j]
-                    tv2 = a2["tip_vis"]
-                    if abs(tv1.y - tv2.y) < 2.8 and abs(tv1.x - tv2.x) > 2.5:
-                        meas_mm = abs(tv1.x - tv2.x) * total_scale
-                        diff = abs(meas_mm - val)
-                        if diff < 0.35:
-                            dim_vy = (tv1.y + tv2.y) / 2.0
-                            dim_vx = (tv1.x + tv2.x) / 2.0
-                            dx = abs(w_vis.x - dim_vx)
-                            dy = abs(w_vis.y - dim_vy)
-                            if dx < 45.0 and dy < 35.0:
-                                score = diff * 10.0 + dy * 2.0 + dx
-                                if score < best_score:
-                                    best_score = score
-                                    cad_p1 = ((min(tv1.x, tv2.x) - vis_origin_x) * total_scale, (vis_origin_y - dim_vy) * total_scale)
-                                    cad_p2 = ((max(tv1.x, tv2.x) - vis_origin_x) * total_scale, (vis_origin_y - dim_vy) * total_scale)
-                                    cad_base = ((dim_vx - vis_origin_x) * total_scale, (vis_origin_y - dim_vy) * total_scale)
-                                    best_candidate = {
-                                        "nominal": txt,
-                                        "val": val,
-                                        "meas_mm": meas_mm,
-                                        "diff": diff,
-                                        "base": cad_base,
-                                        "p1": cad_p1,
-                                        "p2": cad_p2,
-                                        "angle": 0.0,
-                                        "a1_idx": a1["idx"],
-                                        "a2_idx": a2["idx"],
-                                        "is_horiz": True,
-                                        "dim_coord": dim_vy,
-                                        "min_val": min(tv1.x, tv2.x),
-                                        "max_val": max(tv1.x, tv2.x),
-                                    }
-
-            # 2. Search Vertical dimension in visual space
-            w_x_bin = round(w_vis.x / 2.0)
-            cand_v = []
-            for b in range(w_x_bin - 25, w_x_bin + 26):
-                cand_v.extend(arrows_by_vx[b])
-
-            for i, a1 in enumerate(cand_v):
-                tv1 = a1["tip_vis"]
-                for j in range(i + 1, len(cand_v)):
-                    a2 = cand_v[j]
-                    tv2 = a2["tip_vis"]
-                    if abs(tv1.x - tv2.x) < 2.8 and abs(tv1.y - tv2.y) > 2.5:
-                        meas_mm = abs(tv1.y - tv2.y) * total_scale
-                        diff = abs(meas_mm - val)
-                        if diff < 0.35:
-                            dim_vx = (tv1.x + tv2.x) / 2.0
-                            dim_vy = (tv1.y + tv2.y) / 2.0
-                            dx = abs(w_vis.x - dim_vx)
-                            dy = abs(w_vis.y - dim_vy)
-                            if dx < 35.0 and dy < 45.0:
-                                score = diff * 10.0 + dx * 2.0 + dy
-                                if score < best_score:
-                                    best_score = score
-                                    cad_p1 = ((dim_vx - vis_origin_x) * total_scale, (vis_origin_y - min(tv1.y, tv2.y)) * total_scale)
-                                    cad_p2 = ((dim_vx - vis_origin_x) * total_scale, (vis_origin_y - max(tv1.y, tv2.y)) * total_scale)
-                                    cad_base = ((dim_vx - vis_origin_x) * total_scale, (vis_origin_y - dim_vy) * total_scale)
-                                    best_candidate = {
-                                        "nominal": txt,
-                                        "val": val,
-                                        "meas_mm": meas_mm,
-                                        "diff": diff,
-                                        "base": cad_base,
-                                        "p1": cad_p1,
-                                        "p2": cad_p2,
-                                        "angle": 90.0,
-                                        "a1_idx": a1["idx"],
-                                        "a2_idx": a2["idx"],
-                                        "is_horiz": False,
-                                        "dim_coord": dim_vx,
-                                        "min_val": min(tv1.y, tv2.y),
-                                        "max_val": max(tv1.y, tv2.y),
-                                    }
-
-            # 3. Fallback: Check 4-line dimension construct (standard catalog dimensions)
-            if not best_candidate:
-                for idx, d in enumerate(drawings):
-                    items = d.get("items", [])
-                    if len(items) == 4 and all(it[0] == "l" for it in items):
-                        lines = [(it[1], it[2]) for it in items]
-                        horiz = [l for l in lines if abs(l[0].y - l[1].y) < 0.2]
-                        vert = [l for l in lines if abs(l[0].x - l[1].x) < 0.2]
-                        if len(horiz) == 2 and len(vert) == 2:
-                            # Vertical dimension
-                            y1, y2 = horiz[0][0].y, horiz[1][0].y
-                            dim_x = vert[0][0].x
-                            meas_mm = abs(y2 - y1) * total_scale
-                            if abs(meas_mm - val) < 0.25:
-                                mid_y = (y1 + y2) / 2.0
-                                if math.hypot(w_phys.x - dim_x, w_phys.y - mid_y) < 25.0:
-                                    best_candidate = {
-                                        "nominal": txt, "val": val, "meas_mm": meas_mm, "diff": abs(meas_mm - val),
-                                        "base": to_cad((dim_x, mid_y)), "p1": to_cad((horiz[0][0].x, y1)),
-                                        "p2": to_cad((horiz[1][0].x, y2)), "angle": 90.0, "a1_idx": idx, "a2_idx": idx,
-                                    }
-                                    break
-                        elif len(vert) == 2 and len(horiz) == 2:
-                            # Horizontal dimension
-                            x1, x2 = vert[0][0].x, vert[1][0].x
-                            dim_y = horiz[0][0].y
-                            meas_mm = abs(x2 - x1) * total_scale
-                            if abs(meas_mm - val) < 0.25:
-                                mid_x = (x1 + x2) / 2.0
-                                if math.hypot(w_phys.x - mid_x, w_phys.y - dim_y) < 25.0:
-                                    best_candidate = {
-                                        "nominal": txt, "val": val, "meas_mm": meas_mm, "diff": abs(meas_mm - val),
-                                        "base": to_cad((mid_x, dim_y)), "p1": to_cad((x1, vert[0][0].y)),
-                                        "p2": to_cad((x2, vert[1][0].y)), "angle": 0.0, "a1_idx": idx, "a2_idx": idx,
-                                    }
-                                    break
-
-            if best_candidate:
-                extracted_dims.append(best_candidate)
-                dim_nominals.add(txt)
-                for a_idx in (best_candidate["a1_idx"], best_candidate["a2_idx"]):
-                    dim_drawings_indices.add(a_idx)
-                    if a_idx > 0 and len(drawings[a_idx].get("items", [])) == 6:
-                        prev_d = drawings[a_idx - 1]
-                        prev_items = prev_d.get("items", [])
-                        if prev_d.get("fill") is None and len(prev_items) in (3, 4, 5) and all(it[0] == "l" for it in prev_items):
-                            dim_drawings_indices.add(a_idx - 1)
+            for j in range(i + 1, min(i + 30, len(ticks))):
+                t2 = ticks[j]
+                if t2["idx"] in dim_drawings_indices:
+                    continue
+                if abs(t1["mid"].y - t2["mid"].y) < 1.5:
+                    L_pt = abs(t1["mid"].x - t2["mid"].x)
+                    meas_mm = L_pt * total_scale
+                    y = (t1["mid"].y + t2["mid"].y) / 2.0
+                    for nw in num_words:
+                        diff = abs(nw["val"] - meas_mm)
+                        if diff <= max(1.0, meas_mm * 0.03):
+                            if abs(nw["mid"].y - y) < 25.0 and min(t1["mid"].x, t2["mid"].x) - 15 <= nw["mid"].x <= max(t1["mid"].x, t2["mid"].x) + 15:
+                                extracted_dims.append({
+                                    "nominal": nw["txt"], "val": nw["val"], "meas_mm": meas_mm,
+                                    "p1": vis_to_cad(fitz.Point(min(t1["mid"].x, t2["mid"].x), y)),
+                                    "p2": vis_to_cad(fitz.Point(max(t1["mid"].x, t2["mid"].x), y)),
+                                    "base": vis_to_cad(fitz.Point((t1["mid"].x + t2["mid"].x) / 2.0, y)),
+                                    "angle": 0.0,
+                                })
+                                dim_drawings_indices.add(t1["idx"])
+                                dim_drawings_indices.add(t2["idx"])
+                                dim_nominals.add(nw["txt"])
+                                break
+                elif abs(t1["mid"].x - t2["mid"].x) < 1.5:
+                    L_pt = abs(t1["mid"].y - t2["mid"].y)
+                    meas_mm = L_pt * total_scale
+                    x = (t1["mid"].x + t2["mid"].x) / 2.0
+                    for nw in num_words:
+                        diff = abs(nw["val"] - meas_mm)
+                        if diff <= max(1.0, meas_mm * 0.03):
+                            if abs(nw["mid"].x - x) < 25.0 and min(t1["mid"].y, t2["mid"].y) - 15 <= nw["mid"].y <= max(t1["mid"].y, t2["mid"].y) + 15:
+                                extracted_dims.append({
+                                    "nominal": nw["txt"], "val": nw["val"], "meas_mm": meas_mm,
+                                    "p1": vis_to_cad(fitz.Point(x, min(t1["mid"].y, t2["mid"].y))),
+                                    "p2": vis_to_cad(fitz.Point(x, max(t1["mid"].y, t2["mid"].y))),
+                                    "base": vis_to_cad(fitz.Point(x, (t1["mid"].y + t2["mid"].y) / 2.0)),
+                                    "angle": 90.0,
+                                })
+                                dim_drawings_indices.add(t1["idx"])
+                                dim_drawings_indices.add(t2["idx"])
+                                dim_nominals.add(nw["txt"])
+                                break
 
         for dim_data in extracted_dims:
             try:
@@ -1279,7 +1283,7 @@ class PDFCadExtractor:
                     angle=dim_data["angle"],
                     text=dim_data.get("nominal", ""),
                     dimstyle="FERO_MM",
-                    dxfattribs={"layer": "Размерная линия", "color": 3},
+                    dxfattribs={"layer": "07_РАЗМЕРЫ", "color": 3},
                 )
                 dim.render()
                 entities_count += 1
