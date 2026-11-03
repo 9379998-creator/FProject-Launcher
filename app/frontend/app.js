@@ -195,7 +195,7 @@ function setMode(mode) {
 }
 
 function inWindow3() {
-  return Boolean(state.viewMode === "full" || els.shell?.classList.contains("full-view"));
+  return Boolean(state.viewMode === "full" || els.shell?.classList.contains("full-view") || els.pdfViewer?.classList.contains("stage-active"));
 }
 
 function syncActionGridVisibility() {
@@ -219,6 +219,13 @@ function exitWindow3() {
     renderWordDocumentRail();
   } else if (state.excelWorkbooks?.length > 1) {
     renderExcelWorkbookRail();
+  }
+  if (state.renderedPages?.length) {
+    updateActivePdfThumb();
+    const activeThumb = els.pdfThumbs?.querySelector(".pdf-thumb.active") || (state.activePageKey ? els.pdfThumbs?.querySelector(`.pdf-thumb[data-page-key="${CSS.escape(state.activePageKey)}"]`) : null);
+    if (activeThumb) {
+      activeThumb.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    }
   }
   updateObjectButtons();
 }
@@ -1003,22 +1010,40 @@ async function importObject(forceRefresh = false) {
 
 
 async function excludeSelectedObject() {
-  const object = selectedObject();
-  if (!object) return;
+  const object = selectedObject() || (state.currentManifest ? { id: state.currentManifest.id, name: state.currentManifest.name } : null);
+  if (!object) {
+    alert("Выберите объект для исключения");
+    return;
+  }
+  const confirmed = window.confirm(`Исключить объект «${object.name}» из списка лаунчера?\n(Файлы на вашем диске останутся в полной сохранности)`);
+  if (!confirmed) return;
   const controller = createOperationController();
   startProgress("Исключение объекта", object.name);
-  const response = await fetch("/api/objects/exclude", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: object.id }),
-    signal: controller.signal,
-  });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || "Объект не исключён");
-  state.selectedObjectId = null;
-  state.currentManifest = null;
-  await loadObjectSummaries();
-  finishProgress("Объект исключён");
+  try {
+    const response = await fetch("/api/objects/exclude", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: object.id }),
+      signal: controller.signal,
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Объект не исключён");
+    state.selectedObjectId = null;
+    state.currentManifest = null;
+    state.selectedPaths.clear();
+    state.revealedPath = "";
+    state.renderedPages = [];
+    setViewerMode("standard");
+    setStageActive(false);
+    setMode("objects");
+    await loadObjectSummaries();
+    renderObjectList();
+    updateObjectButtons();
+    updateObjectStats();
+    finishProgress("Объект исключён");
+  } catch (err) {
+    showOperationError(err);
+  }
 }
 
 function getCachedFlatNodes() {
@@ -1719,18 +1744,12 @@ async function previewFileDirectly(node, options = {}) {
       return pPath === norm;
     });
     if (matchedPage) {
-      const total = matchedPage.totalPages || 1;
-      const mDoc = matchedPage.documentPath || "";
-      const mSrc = matchedPage.sourcePath || "";
-      const loaded = state.renderedPages.filter((p) => (mDoc && p.documentPath === mDoc) || (mSrc && p.sourcePath === mSrc)).length;
-      if (loaded >= total) {
-        showPdfPage(matchedPage, { skipTreeScroll: true });
-        if (options.fullView) setViewerMode("full");
-        const key = pageKey(matchedPage);
-        const thumbEl = els.pdfThumbs?.querySelector(`.pdf-thumb[data-page-key="${CSS.escape(key)}"]`);
-        if (thumbEl) thumbEl.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-        return;
-      }
+      showPdfPage(matchedPage, { skipTreeScroll: true });
+      if (options.fullView) setViewerMode("full");
+      const key = pageKey(matchedPage);
+      const thumbEl = els.pdfThumbs?.querySelector(`.pdf-thumb[data-page-key="${CSS.escape(key)}"]`);
+      if (thumbEl) thumbEl.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+      return;
     }
   }
 
@@ -2190,8 +2209,10 @@ function updateTreeFilterSummary() {
     state.activeFilters.clear();
     els.treeSearch.value = "";
     state.diffFilter = false;
+    state.collapsedFolders.clear();
     renderFormats();
     renderTree();
+    updateTreeFilterSummary();
   });
 
   els.treeFilterSummary.replaceChildren(contentSpan, resetBtn);
@@ -6198,7 +6219,7 @@ window.addEventListener("keydown", (event) => {
       return;
     }
 
-    // Иначе (Зона 1 — дерево слева): навигация по списку файлов БЕЗ авторендеринга
+    // Иначе (Зона 1 — дерево слева): навигация по списку файлов с синхронизацией ленты Окна 2
     if (inTreeMode()) {
       const files = state.visibleRows.filter((r) => r.type === "file");
       if (!files.length) return;
@@ -6215,6 +6236,21 @@ window.addEventListener("keydown", (event) => {
         selectNode(nextFile);
         const row = els.objectTree?.querySelector(`.tree-row[data-path="${CSS.escape(nextFile.path)}"]`);
         if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+
+        // Синхронизация с Окном 2: центрируем и подсвечиваем миниатюру
+        const norm = nextFile.path.replace(/\//g, "\\").toLowerCase();
+        const matchedPage = state.renderedPages?.find((p) => {
+          const pPath = (p.previewFor?.path || p.sourcePath || p.documentPath || p.path || "").replace(/\//g, "\\").toLowerCase();
+          return pPath === norm;
+        });
+        if (matchedPage) {
+          state.activePageKey = pageKey(matchedPage);
+          updateActivePdfThumb();
+          const activeThumb = els.pdfThumbs?.querySelector(`.pdf-thumb[data-page-key="${CSS.escape(state.activePageKey)}"]`);
+          if (activeThumb) {
+            activeThumb.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+          }
+        }
       }
       return;
     }
