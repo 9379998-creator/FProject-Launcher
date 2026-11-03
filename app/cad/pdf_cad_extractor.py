@@ -550,7 +550,7 @@ def convert_dxf_to_dwg_via_accore(dxf_path: Path, dwg_path: Path) -> bool:
 
     try:
         cmd = [str(accore_exe), "/i", str(actual_in.resolve()), "/s", str(scr_path.resolve()), "/l", "en-US"]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000) if os.name == 'nt' else 0)
         if tmp_dwg and tmp_dwg.exists() and tmp_dwg.stat().st_size > 0:
             shutil.copy2(tmp_dwg, dwg_path)
         success = dwg_path.exists() and dwg_path.stat().st_size > 0
@@ -639,7 +639,7 @@ def plot_dwg_to_pdf_via_accore(dwg_path: Path, pdf_path: Path) -> bool:
 
     try:
         cmd = [str(accore_exe), "/i", str(actual_in.resolve()), "/s", str(scr_path.resolve()), "/readonly", "/l", "en-US"]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000) if os.name == 'nt' else 0)
         if tmp_pdf and tmp_pdf.exists() and tmp_pdf.stat().st_size > 0:
             shutil.copy2(tmp_pdf, pdf_path)
         success = pdf_path.exists() and pdf_path.stat().st_size > 0
