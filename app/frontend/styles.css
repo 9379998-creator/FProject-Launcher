@@ -2234,3 +2234,19 @@ textarea:focus {
   flex: 1;
   background: #525659;
 }
+
+
+/* Кнопка «Паспорт объекта» */
+.action-grid > button.btn-passport {
+  width: 110px;
+  min-width: 110px;
+  max-width: 110px;
+  color: #D6632B;
+  font-weight: 600;
+  border-color: #f0c3ae;
+}
+.action-grid > button.btn-passport:hover:not(:disabled) {
+  background: #FFF3EB;
+  border-color: #D6632B;
+  color: #b85220;
+}

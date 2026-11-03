@@ -77,6 +77,7 @@ const els = {
   load: document.getElementById("loadObject"),
   refresh: document.getElementById("refreshObject"),
   display: document.getElementById("displayObject"),
+  passport: document.getElementById("passportObject"),
   exclude: document.getElementById("excludeObject"),
   cancel: document.getElementById("cancelOperation"),
   progressPanel: document.getElementById("progressPanel"),
@@ -245,6 +246,7 @@ function updateObjectButtons() {
     if (els.load) els.load.disabled = true;
     if (els.refresh) els.refresh.disabled = true;
     if (els.display) els.display.disabled = true;
+    if (els.passport) els.passport.disabled = true;
     if (els.exclude) els.exclude.disabled = true;
     if (els.btnSettings) els.btnSettings.disabled = true;
   } else if (tree) {
@@ -262,6 +264,7 @@ function updateObjectButtons() {
     if (els.load) els.load.disabled = false;
     if (els.refresh) els.refresh.disabled = false;
     if (els.display) els.display.disabled = false;
+    if (els.passport) els.passport.disabled = false;
     if (els.exclude) els.exclude.disabled = false;
     if (els.btnSettings) els.btnSettings.disabled = false;
   } else {
@@ -278,6 +281,7 @@ function updateObjectButtons() {
     if (els.load) els.load.disabled = false;
     if (els.refresh) els.refresh.disabled = !hasSelection;
     if (els.display) els.display.disabled = !hasSelection;
+    if (els.passport) els.passport.disabled = !hasSelection;
     if (els.exclude) els.exclude.disabled = !hasSelection;
     if (els.btnSettings) els.btnSettings.disabled = false;
   }
@@ -5254,6 +5258,40 @@ els.refresh.addEventListener("click", () => {
   if (inTreeMode()) refreshObjectInPlace().catch(showOperationError);
   else importObject(true).catch(showOperationError);
 });
+
+async function handleGeneratePassport() {
+  const object = selectedObject();
+  if (!object) return;
+  const btn = els.passport;
+  if (!btn) return;
+  const originalText = btn.textContent;
+  try {
+    btn.disabled = true;
+    btn.textContent = "Сборка...";
+    const res = await fetch("/api/object/generate-passport", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: object.id, rootPath: object.rootPath, name: object.name })
+    });
+    const data = await res.json();
+    if (data.ok && data.filePath) {
+      await fetch("/api/open-file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: data.filePath })
+      });
+    } else {
+      alert("Не удалось сформировать паспорт: " + (data.error || "неизвестная ошибка"));
+    }
+  } catch (err) {
+    alert("Ошибка запроса паспорта: " + err.message);
+  } finally {
+    btn.textContent = originalText;
+    updateObjectButtons();
+  }
+}
+
+els.passport?.addEventListener("click", handleGeneratePassport);
 els.display.addEventListener("click", () => {
   if (inTreeMode()) renderSelectedFiles().catch(showOperationError);
   else openSelectedObject().catch(showOperationError);

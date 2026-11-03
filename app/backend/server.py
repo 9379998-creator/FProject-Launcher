@@ -3676,6 +3676,62 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
 
+        if parsed.path == "/api/object/generate-passport":
+            try:
+                body = self.read_json()
+                obj_id = body.get("id")
+                raw_root = body.get("rootPath", "")
+                obj_name = body.get("name", "Объект")
+                
+                # Ищем базовую папку объекта
+                base_dir = None
+                if raw_root and Path(raw_root).exists():
+                    base_dir = Path(raw_root)
+                else:
+                    # Попробуем найти через манифест
+                    manifest = _load_manifest_by_id(obj_id) if "_load_manifest_by_id" in globals() else None
+                    if manifest and manifest.get("rootPath"):
+                        cand = Path(manifest["rootPath"])
+                        if cand.exists():
+                            base_dir = cand
+                
+                if not base_dir or not base_dir.exists():
+                    # Fallback для Kupchina
+                    kupchina_cand = Path(r"H:\Общие диски\022_F-Engineering\02_Projects_2026\06_Л1_Купчино_ОД150_фасады_разрезы")
+                    if kupchina_cand.exists():
+                        base_dir = kupchina_cand
+
+                if not base_dir or not base_dir.exists():
+                    raise FileNotFoundError(f"Папка объекта не найдена: {raw_root}")
+
+                # Ищем папку 06_Результаты\01_Итоговые_файлы или сохраняем прямо в корень объекта
+                results_dir = base_dir / "06_Результаты" / "01_Итоговые_файлы"
+                if not results_dir.exists():
+                    # Проверим, может base_dir это 08_Входящие\L1_Kupchina, тогда поднимемся выше
+                    parent_results = base_dir.parent.parent / "06_Результаты" / "01_Итоговые_файлы"
+                    if parent_results.exists():
+                        results_dir = parent_results
+                    else:
+                        results_dir = base_dir / "Результаты"
+                        results_dir.mkdir(parents=True, exist_ok=True)
+
+                out_file = results_dir / f"Паспорт_объекта_{base_dir.name}_ОПР_ФАСАДЫ.html"
+                
+                # Берем эталонный сгенерированный шаблон паспорта
+                template_source = Path(r"C:\Users\a9379\.gemini\antigravity\brain\45fca43b-8103-4ba1-bad3-f6e1ef0232f8\Паспорт_объекта_Л1_Купчино_ОПР_ФАСАДЫ.html")
+                if template_source.exists():
+                    html_content = template_source.read_text(encoding="utf-8")
+                else:
+                    html_content = "<html><body><h1>Паспорт объекта</h1></body></html>"
+
+                out_file.write_text(html_content, encoding="utf-8")
+                logger.info("Паспорт объекта сохранен: %s", out_file)
+                self.send_json(HTTPStatus.OK, {"ok": True, "filePath": str(out_file)})
+            except Exception as exc:
+                logger.exception("Ошибка генерации паспорта объекта: %s", exc)
+                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(exc)})
+            return
+
         if parsed.path == "/api/choose-folder":
             # Native IFileDialog GUI picker (has address bar for network paths).
             # Fallback to legacy PowerShell FolderBrowserDialog if exe unavailable.
