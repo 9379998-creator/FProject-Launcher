@@ -1,4 +1,4 @@
-﻿; F-Engineering Launcher v3 — скрипт инсталлятора (Inno Setup 6, Спринт 4).
+; F-Engineering Launcher v3 — скрипт инсталлятора (Inno Setup 6, Спринт 4).
 ; Сборка: scripts\build_installer.cmd
 ; Кодировка: UTF-8 with BOM (кириллица в имени издателя).
 
@@ -18,6 +18,8 @@ SolidCompression=yes
 ; КРИТИЧНО: без прав администратора, чтобы автоапдейтер мог обновлять файлы без UAC!
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
+CloseApplications=yes
+RestartApplications=no
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
@@ -46,3 +48,12 @@ Name: "{autodesktop}\F-Engineering Launcher"; Filename: "{app}\FEngineeringLaunc
 
 [Run]
 Filename: "{app}\FEngineeringLauncher.exe"; Description: "{cm:LaunchProgram,F-Engineering Launcher}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function InitializeSetup(): Boolean;
+var
+  ErrorCode: Integer;
+begin
+  Exec('taskkill.exe', '/F /IM FEngineeringLauncher.exe', '', SW_HIDE, ewWaitUntilTerminated, ErrorCode);
+  Result := True;
+end;

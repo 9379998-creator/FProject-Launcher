@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace FeroLauncher {
     static class Program {
@@ -31,16 +32,16 @@ namespace FeroLauncher {
             void Unadvise(uint dwCookie);
             void SetOptions(uint fos);
             void GetOptions(out uint pfos);
-            void SetDefaultFolder(IShellItem psi);
-            void SetFolder(IShellItem psi);
-            void GetFolder(out IShellItem ppsi);
-            void GetCurrentSelection(out IShellItem ppsi);
+            void SetDefaultFolder([MarshalAs(UnmanagedType.Interface)] IShellItem psi);
+            void SetFolder([MarshalAs(UnmanagedType.Interface)] IShellItem psi);
+            void GetFolder([MarshalAs(UnmanagedType.Interface)] out IShellItem ppsi);
+            void GetCurrentSelection([MarshalAs(UnmanagedType.Interface)] out IShellItem ppsi);
             void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);
             void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string pszName);
             void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
             void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
             void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);
-            [PreserveSig] int GetResult(out IShellItem ppsi);
+            void GetResult([MarshalAs(UnmanagedType.Interface)] out IShellItem ppsi);
         }
 
         [ComImport]
@@ -48,10 +49,20 @@ namespace FeroLauncher {
         [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         private interface IShellItem {
             void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
-            void GetParent(out IShellItem ppsi);
-            [PreserveSig] int GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName);
+            void GetParent([MarshalAs(UnmanagedType.Interface)] out IShellItem ppsi);
+            [PreserveSig] int GetDisplayName(uint sigdnName, out IntPtr ppszName);
             void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
-            void Compare(IShellItem psi, uint hint, out int piOrder);
+            void Compare([MarshalAs(UnmanagedType.Interface)] IShellItem psi, uint hint, out int piOrder);
+        }
+
+        static void Log(string msg) {
+            try {
+                string localApp = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string logDir = Path.Combine(localApp, @"FEngineering_Launcher\runtime\logs");
+                if (!Directory.Exists(logDir)) Directory.CreateDirectory(logDir);
+                string logFile = Path.Combine(logDir, "folder_picker.log");
+                File.AppendAllText(logFile, string.Format("[{0:yyyy-MM-dd HH:mm:ss}] {1}\r\n", DateTime.Now, msg));
+            } catch { }
         }
 
         [STAThread]
@@ -62,10 +73,11 @@ namespace FeroLauncher {
                     return 0;
                 }
 
+                Log("folder_picker launched with args: " + string.Join(" ", args));
+
                 var dlg = (IFileDialog)new FileOpenDialogInternal();
                 try {
                     // FOS_PICKFOLDERS (0x20) | FOS_PATHMUSTEXIST (0x800) | FOS_NOCHANGEDIR (0x8)
-                    // Note: Do NOT use FOS_FORCEFILESYSTEM (0x40) as it rejects Google Drive / Cloud namespace items!
                     uint options = 0x00000020 | 0x00000800 | 0x00000008;
                     dlg.SetOptions(options);
                     dlg.SetTitle("Выбор папки объекта - FERO Launcher");
@@ -78,42 +90,88 @@ namespace FeroLauncher {
                         }
                     }
                     if (!string.IsNullOrEmpty(initialDir)) {
-                        Guid guid = new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe");
-                        IShellItem folderItem;
-                        if (SHCreateItemFromParsingName(initialDir, IntPtr.Zero, ref guid, out folderItem) == 0) {
-                            dlg.SetFolder(folderItem);
+                        try {
+                            Guid guid = new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe");
+                            IShellItem folderItem;
+                            if (SHCreateItemFromParsingName(initialDir, IntPtr.Zero, ref guid, out folderItem) == 0 && folderItem != null) {
+                                dlg.SetFolder(folderItem);
+                                Log("Set initialDir: " + initialDir);
+                            }
+                        } catch (Exception exDir) {
+                            Log("Error setting initial dir: " + exDir.Message);
                         }
                     }
 
                     IntPtr owner = GetForegroundWindow();
+                    Log("Showing dialog with owner: " + owner);
                     int hr = dlg.Show(owner);
+                    Log("Show returned hr: 0x" + hr.ToString("X8"));
+
                     if (hr == 0) {
-                        IShellItem item;
-                        if (dlg.GetResult(out item) == 0 && item != null) {
+                        IShellItem item = null;
+                        try {
+                            dlg.GetResult(out item);
+                        } catch (Exception exRes) {
+                            Log("GetResult threw: " + exRes.Message);
+                        }
+
+                        if (item != null) {
                             string path = null;
                             // 1. Try SIGDN_FILESYSPATH (0x80058000)
-                            int hrName = item.GetDisplayName(0x80058000, out path);
-                            // 2. Fallback to SIGDN_DESKTOPABSOLUTEPARSING (0x80028000) for Google Drive / Network drives
-                            if (hrName != 0 || string.IsNullOrEmpty(path)) {
-                                hrName = item.GetDisplayName(0x80028000, out path);
+                            IntPtr pStr = IntPtr.Zero;
+                            int hrName = item.GetDisplayName(0x80058000, out pStr);
+                            if (hrName == 0 && pStr != IntPtr.Zero) {
+                                path = Marshal.PtrToStringUni(pStr);
+                                Marshal.FreeCoTaskMem(pStr);
+                                Log("Resolved via SIGDN_FILESYSPATH: " + path);
                             }
+
+                            // 2. Fallback to SIGDN_DESKTOPABSOLUTEPARSING (0x80028000) for Google Drive / network drives
+                            if (string.IsNullOrEmpty(path)) {
+                                pStr = IntPtr.Zero;
+                                hrName = item.GetDisplayName(0x80028000, out pStr);
+                                if (hrName == 0 && pStr != IntPtr.Zero) {
+                                    path = Marshal.PtrToStringUni(pStr);
+                                    Marshal.FreeCoTaskMem(pStr);
+                                    Log("Resolved via SIGDN_DESKTOPABSOLUTEPARSING: " + path);
+                                }
+                            }
+
                             // 3. Fallback to SIGDN_NORMALDISPLAY (0x00000000)
-                            if (hrName != 0 || string.IsNullOrEmpty(path)) {
-                                hrName = item.GetDisplayName(0x00000000, out path);
+                            if (string.IsNullOrEmpty(path)) {
+                                pStr = IntPtr.Zero;
+                                hrName = item.GetDisplayName(0x00000000, out pStr);
+                                if (hrName == 0 && pStr != IntPtr.Zero) {
+                                    path = Marshal.PtrToStringUni(pStr);
+                                    Marshal.FreeCoTaskMem(pStr);
+                                    Log("Resolved via SIGDN_NORMALDISPLAY: " + path);
+                                }
                             }
 
                             if (!string.IsNullOrEmpty(path)) {
-                                Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+                                Console.OutputEncoding = new UTF8Encoding(false);
                                 Console.WriteLine(path);
+                                Log("Selected folder output: " + path);
                                 return 0;
+                            } else {
+                                Log("Failed to resolve folder path string.");
+                                Console.Error.WriteLine("Не удалось определить путь к выбранной папке.");
+                                return 2;
                             }
+                        } else {
+                            Log("item is null after GetResult");
+                            Console.Error.WriteLine("Элемент папки не получен (null).");
+                            return 2;
                         }
                     }
-                    return 1; // User cancelled or closed window
+
+                    Log("Dialog cancelled by user.");
+                    return 1;
                 } finally {
                     Marshal.ReleaseComObject(dlg);
                 }
             } catch (Exception ex) {
+                Log("Fatal exception: " + ex);
                 Console.Error.WriteLine(ex.Message);
                 return 2;
             }
