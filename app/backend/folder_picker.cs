@@ -69,11 +69,30 @@ namespace FeroLauncher {
         static int Main(string[] args) {
             try {
                 if (Array.IndexOf(args, "--test") >= 0) {
-                    Console.WriteLine("READY");
+                    try {
+                        using (var stdout = Console.OpenStandardOutput()) {
+                            byte[] bytes = new UTF8Encoding(false).GetBytes("READY\r\n");
+                            stdout.Write(bytes, 0, bytes.Length);
+                            stdout.Flush();
+                        }
+                    } catch {
+                        Console.WriteLine("READY");
+                    }
                     return 0;
                 }
 
                 Log("folder_picker launched with args: " + string.Join(" ", args));
+
+                string outFile = null;
+                string initialDir = null;
+                for (int i = 0; i < args.Length; i++) {
+                    if (args[i] == "--out-file" && i + 1 < args.Length) {
+                        outFile = args[i + 1];
+                        i++;
+                    } else if (!args[i].StartsWith("--") && Directory.Exists(args[i])) {
+                        initialDir = args[i];
+                    }
+                }
 
                 var dlg = (IFileDialog)new FileOpenDialogInternal();
                 try {
@@ -82,13 +101,6 @@ namespace FeroLauncher {
                     dlg.SetOptions(options);
                     dlg.SetTitle("Выбор папки объекта - FERO Launcher");
 
-                    string initialDir = null;
-                    foreach (var a in args) {
-                        if (!a.StartsWith("--") && Directory.Exists(a)) {
-                            initialDir = a;
-                            break;
-                        }
-                    }
                     if (!string.IsNullOrEmpty(initialDir)) {
                         try {
                             Guid guid = new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe");
@@ -149,18 +161,36 @@ namespace FeroLauncher {
                             }
 
                             if (!string.IsNullOrEmpty(path)) {
-                                Console.OutputEncoding = new UTF8Encoding(false);
-                                Console.WriteLine(path);
-                                Log("Selected folder output: " + path);
+                                // Write to stdout via raw stream (safe for winexe)
+                                try {
+                                    using (var stdout = Console.OpenStandardOutput()) {
+                                        byte[] bytes = new UTF8Encoding(false).GetBytes(path + "\r\n");
+                                        stdout.Write(bytes, 0, bytes.Length);
+                                        stdout.Flush();
+                                    }
+                                } catch (Exception exOut) {
+                                    Log("OpenStandardOutput failed: " + exOut.Message);
+                                    try { Console.WriteLine(path); } catch { }
+                                }
+
+                                // Write to out-file if requested
+                                if (!string.IsNullOrEmpty(outFile)) {
+                                    try {
+                                        File.WriteAllText(outFile, path, new UTF8Encoding(false));
+                                        Log("Wrote path to outFile: " + outFile);
+                                    } catch (Exception exFile) {
+                                        Log("Failed to write outFile: " + exFile.Message);
+                                    }
+                                }
+
+                                Log("SUCCESS returning folder: " + path);
                                 return 0;
                             } else {
                                 Log("Failed to resolve folder path string.");
-                                Console.Error.WriteLine("Не удалось определить путь к выбранной папке.");
                                 return 2;
                             }
                         } else {
                             Log("item is null after GetResult");
-                            Console.Error.WriteLine("Элемент папки не получен (null).");
                             return 2;
                         }
                     }
@@ -172,7 +202,6 @@ namespace FeroLauncher {
                 }
             } catch (Exception ex) {
                 Log("Fatal exception: " + ex);
-                Console.Error.WriteLine(ex.Message);
                 return 2;
             }
         }

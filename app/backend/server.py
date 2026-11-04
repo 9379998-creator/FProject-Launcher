@@ -3737,22 +3737,33 @@ class LauncherHandler(BaseHTTPRequestHandler):
             # Fallback to legacy PowerShell FolderBrowserDialog if exe unavailable.
             picker_exe = get_folder_picker_exe()
             if picker_exe:
+                temp_out = RUNTIME_DIR / "temp_picker_path.txt"
+                if temp_out.exists():
+                    try:
+                        temp_out.unlink()
+                    except Exception:
+                        pass
                 try:
                     proc = subprocess.run(
-                        [str(picker_exe)],
+                        [str(picker_exe), "--out-file", str(temp_out)],
                         capture_output=True,
                         text=False,
-                        timeout=120,
+                        timeout=180,
                         creationflags=0,
                     )
-                    if proc.returncode == 0:
+                    selected = ""
+                    if temp_out.exists():
+                        try:
+                            selected = temp_out.read_text(encoding="utf-8").strip()
+                            temp_out.unlink()
+                        except Exception:
+                            pass
+                    if not selected:
                         selected = decode_folder_dialog_output(proc.stdout)
-                        if selected:
-                            logger.info("Native folder dialog selected: %s", selected)
-                            self.send_json(HTTPStatus.OK, {"path": selected})
-                        else:
-                            logger.info("Native folder dialog empty selection")
-                            self.send_json(HTTPStatus.OK, {"path": ""})
+
+                    if (proc.returncode == 0 or selected) and selected:
+                        logger.info("Native folder dialog selected: %s", selected)
+                        self.send_json(HTTPStatus.OK, {"path": selected})
                         return
                     elif proc.returncode == 1:
                         logger.info("Native folder dialog cancelled by user")
@@ -3761,11 +3772,11 @@ class LauncherHandler(BaseHTTPRequestHandler):
                     else:
                         err_msg = proc.stderr.decode("utf-8", errors="replace").strip() if proc.stderr else ""
                         logger.warning("folder_picker.exe exited with code %s: %s", proc.returncode, err_msg)
-                        self.send_json(HTTPStatus.OK, {"path": "", "error": err_msg or "Ошибка выбора папки"})
+                        self.send_json(HTTPStatus.OK, {"path": "", "error": err_msg or "Папка не выбрана"})
                         return
                 except subprocess.TimeoutExpired:
-                    logger.warning("folder_picker.exe timed out after 120s")
-                    self.send_json(HTTPStatus.OK, {"path": "", "error": "Таймаут выбора папки (120с)."})
+                    logger.warning("folder_picker.exe timed out after 180s")
+                    self.send_json(HTTPStatus.OK, {"path": "", "error": "Таймаут выбора папки (180с)."})
                     return
                 except Exception as exc:
                     logger.warning("folder_picker.exe execution failed: %s", exc)
