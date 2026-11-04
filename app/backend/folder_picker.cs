@@ -40,7 +40,7 @@ namespace FeroLauncher {
             void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
             void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
             void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);
-            void GetResult(out IShellItem ppsi);
+            [PreserveSig] int GetResult(out IShellItem ppsi);
         }
 
         [ComImport]
@@ -49,7 +49,7 @@ namespace FeroLauncher {
         private interface IShellItem {
             void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
             void GetParent(out IShellItem ppsi);
-            void GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName);
+            [PreserveSig] int GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName);
             void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
             void Compare(IShellItem psi, uint hint, out int piOrder);
         }
@@ -57,12 +57,18 @@ namespace FeroLauncher {
         [STAThread]
         static int Main(string[] args) {
             try {
+                if (Array.IndexOf(args, "--test") >= 0) {
+                    Console.WriteLine("READY");
+                    return 0;
+                }
+
                 var dlg = (IFileDialog)new FileOpenDialogInternal();
                 try {
-                    // FOS_PICKFOLDERS (0x20) | FOS_FORCEFILESYSTEM (0x40) | FOS_PATHMUSTEXIST (0x800)
-                    uint options = 0x00000020 | 0x00000040 | 0x00000800;
+                    // FOS_PICKFOLDERS (0x20) | FOS_PATHMUSTEXIST (0x800) | FOS_NOCHANGEDIR (0x8)
+                    // Note: Do NOT use FOS_FORCEFILESYSTEM (0x40) as it rejects Google Drive / Cloud namespace items!
+                    uint options = 0x00000020 | 0x00000800 | 0x00000008;
                     dlg.SetOptions(options);
-                    dlg.SetTitle("Выберите папку объекта - FERO Launcher");
+                    dlg.SetTitle("Выбор папки объекта - FERO Launcher");
 
                     string initialDir = null;
                     foreach (var a in args) {
@@ -79,23 +85,31 @@ namespace FeroLauncher {
                         }
                     }
 
-                    if (Array.IndexOf(args, "--test") >= 0) {
-                        Console.WriteLine("READY");
-                        return 0;
-                    }
-
                     IntPtr owner = GetForegroundWindow();
                     int hr = dlg.Show(owner);
                     if (hr == 0) {
                         IShellItem item;
-                        dlg.GetResult(out item);
-                        string path;
-                        item.GetDisplayName(0x80058000, out path); // SIGDN_FILESYSPATH
-                        Console.OutputEncoding = System.Text.Encoding.UTF8;
-                        Console.WriteLine(path);
-                        return 0;
+                        if (dlg.GetResult(out item) == 0 && item != null) {
+                            string path = null;
+                            // 1. Try SIGDN_FILESYSPATH (0x80058000)
+                            int hrName = item.GetDisplayName(0x80058000, out path);
+                            // 2. Fallback to SIGDN_DESKTOPABSOLUTEPARSING (0x80028000) for Google Drive / Network drives
+                            if (hrName != 0 || string.IsNullOrEmpty(path)) {
+                                hrName = item.GetDisplayName(0x80028000, out path);
+                            }
+                            // 3. Fallback to SIGDN_NORMALDISPLAY (0x00000000)
+                            if (hrName != 0 || string.IsNullOrEmpty(path)) {
+                                hrName = item.GetDisplayName(0x00000000, out path);
+                            }
+
+                            if (!string.IsNullOrEmpty(path)) {
+                                Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+                                Console.WriteLine(path);
+                                return 0;
+                            }
+                        }
                     }
-                    return 1; // User cancelled
+                    return 1; // User cancelled or closed window
                 } finally {
                     Marshal.ReleaseComObject(dlg);
                 }

@@ -3760,13 +3760,17 @@ class LauncherHandler(BaseHTTPRequestHandler):
                         return
                     else:
                         err_msg = proc.stderr.decode("utf-8", errors="replace").strip() if proc.stderr else ""
-                        logger.warning("folder_picker.exe exited with code %s: %s, falling back to PowerShell", proc.returncode, err_msg)
+                        logger.warning("folder_picker.exe exited with code %s: %s", proc.returncode, err_msg)
+                        self.send_json(HTTPStatus.OK, {"path": "", "error": err_msg or "Ошибка выбора папки"})
+                        return
                 except subprocess.TimeoutExpired:
                     logger.warning("folder_picker.exe timed out after 120s")
                     self.send_json(HTTPStatus.OK, {"path": "", "error": "Таймаут выбора папки (120с)."})
                     return
                 except Exception as exc:
-                    logger.warning("folder_picker.exe failed (%s), falling back to PowerShell", exc)
+                    logger.warning("folder_picker.exe execution failed: %s", exc)
+                    self.send_json(HTTPStatus.OK, {"path": "", "error": str(exc)})
+                    return
 
             # Fallback: legacy PowerShell FolderBrowserDialog
             try:
