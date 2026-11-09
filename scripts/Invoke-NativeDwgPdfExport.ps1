@@ -83,7 +83,8 @@ function Invoke-NativeDwgPdfExport {
     '(setvar "EXPERT" 5)',
     '(setvar "BACKGROUNDPLOT" 0)',
     '(setvar "FILEDIA" 0)',
-    '(setvar "CMDDIA" 0)'
+    '(setvar "CMDDIA" 0)',
+    '(setvar "EPDFSHX" 0)'
   )
 
   # LayoutName comes from DWG content (untrusted): drop control chars, escape for an AutoLISP string.

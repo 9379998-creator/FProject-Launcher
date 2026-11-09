@@ -1081,6 +1081,7 @@ def start_accore_progressive_export(
 (setvar "FILEDIA" 0)
 (setvar "CMDDIA" 0)
 (setvar "BACKGROUNDPLOT" 0)
+(setvar "EPDFSHX" 0)
 (setq outdir "{out_dir_str}")
 (setq prio {prio})
 (setq d (dictsearch (namedobjdict) "ACAD_LAYOUT"))
@@ -1246,6 +1247,8 @@ def start_accore_progressive_export(
                 "/readonly",
             ]
             t_start = time.time()
+            t_last_activity = time.time()
+            last_completed_count = 0
             with open(log_path, "wb") as log_f:
                 proc = subprocess.Popen(
                     cmd,
@@ -1255,8 +1258,14 @@ def start_accore_progressive_export(
                     close_fds=True,
                 )
                 while proc.poll() is None:
-                    if time.time() - t_start > timeout_sec:
-                        logger.warning("accoreconsole progressive export timed out after %ds for %s", timeout_sec, input_dwg.name)
+                    if len(completed_pages) > last_completed_count:
+                        last_completed_count = len(completed_pages)
+                        t_last_activity = time.time()
+                    idle_sec = time.time() - t_last_activity
+                    total_sec = time.time() - t_start
+                    max_total_limit = max(timeout_sec, 3600)
+                    if (idle_sec > 300 and total_sec > 180) or total_sec > max_total_limit:
+                        logger.warning("accoreconsole progressive export timed out (idle=%.0fs, total=%.0fs) for %s", idle_sec, total_sec, input_dwg.name)
                         if os.name == "nt":
                             try:
                                 subprocess.run(
