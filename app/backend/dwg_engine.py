@@ -1249,6 +1249,7 @@ def start_accore_progressive_export(
             t_start = time.time()
             t_last_activity = time.time()
             last_completed_count = 0
+            last_log_size = 0
             with open(log_path, "wb") as log_f:
                 proc = subprocess.Popen(
                     cmd,
@@ -1261,10 +1262,17 @@ def start_accore_progressive_export(
                     if len(completed_pages) > last_completed_count:
                         last_completed_count = len(completed_pages)
                         t_last_activity = time.time()
+                    try:
+                        curr_log_size = log_path.stat().st_size
+                        if curr_log_size != last_log_size:
+                            last_log_size = curr_log_size
+                            t_last_activity = time.time()
+                    except OSError:
+                        pass
                     idle_sec = time.time() - t_last_activity
                     total_sec = time.time() - t_start
-                    max_total_limit = max(timeout_sec, 3600)
-                    if (idle_sec > 300 and total_sec > 180) or total_sec > max_total_limit:
+                    max_total_limit = max(timeout_sec, 7200)
+                    if (idle_sec > 600 and total_sec > 180) or total_sec > max_total_limit:
                         logger.warning("accoreconsole progressive export timed out (idle=%.0fs, total=%.0fs) for %s", idle_sec, total_sec, input_dwg.name)
                         if os.name == "nt":
                             try:
