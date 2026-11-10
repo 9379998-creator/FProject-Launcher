@@ -1,21 +1,22 @@
-; F-Engineering Launcher v3 — скрипт инсталлятора (Inno Setup 6, Спринт 4).
-; Сборка: scripts\build_installer.cmd
-; Кодировка: UTF-8 with BOM (кириллица в имени издателя).
+; F-Engineering Launcher v4.4 — Скрипт инсталлятора (Inno Setup 6).
+; Инженерное бюро ООО «ФЕРО»
+; Кодировка: UTF-8 with BOM
 
 [Setup]
 AppName=F-Engineering Launcher
-AppVersion=3.1.0
-AppPublisher=ООО "Ф-Инжиниринг"
-AppPublisherURL=https://github.com/f-engineering-spb/f-engineering-launcher
+AppVersion=4.4.0
+AppPublisher=ООО "ФЕРО"
+AppPublisherURL=https://ferospb.info
 DefaultDirName={localappdata}\FEngineering_Launcher
 DefaultGroupName=F-Engineering Launcher
-OutputBaseFilename=FEngineering_Launcher_v3_Setup
+OutputBaseFilename=FEngineering_Launcher_v4_Setup
 OutputDir=..\dist_setup
 SetupIconFile=..\app\frontend\assets\flauncher.ico
 UninstallDisplayIcon={app}\FEngineeringLauncher.exe
 Compression=lzma2/ultra64
 SolidCompression=yes
-; КРИТИЧНО: без прав администратора, чтобы автоапдейтер мог обновлять файлы без UAC!
+
+; КРИТИЧНО: без прав администратора! Установка в профиль пользователя исключает ошибки «Отказано в доступе».
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
 CloseApplications=yes
@@ -28,18 +29,14 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-; Содержимое собранного PyInstaller (из dist\FEngineeringLauncher)
-Source: "..\dist\FEngineeringLauncher\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-; Исходники и скрипты для динамического обновления и работы
-Source: "..\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\scripts\*"; DestDir: "{app}\scripts"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\version.json"; DestDir: "{app}"; Flags: ignoreversion
-; Создаем скелет папок runtime
-Source: "..\runtime\manifests\*"; DestDir: "{app}\runtime\manifests"; Flags: ignoreversion recursesubdirs createallsubdirs external skipifsourcedoesntexist
+; Полное содержимое автономного дистрибутива
+Source: "C:\Users\a9379\.gemini\antigravity\scratch\dist_colleague\FEngineering_Launcher_v4\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Dirs]
 Name: "{app}\runtime\cache"
 Name: "{app}\runtime\logs"
+Name: "{app}\runtime\manifests"
+Name: "{app}\runtime\db"
 
 [Icons]
 Name: "{group}\F-Engineering Launcher"; Filename: "{app}\FEngineeringLauncher.exe"
