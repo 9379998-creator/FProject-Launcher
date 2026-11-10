@@ -41,7 +41,7 @@ _ACCORE_JOBS_LOCK = threading.Lock()
 # GUI-воркер (COM в AutoCAD пользователя) отключён: он открывал документы в окне пользователя
 # и не закрывал их при принудительной остановке. Рендер идёт только через headless accoreconsole.
 USE_GUI_WORKER = False
-ACCORE_EXPORT_TIMEOUT_SEC = 300
+ACCORE_EXPORT_TIMEOUT_SEC = 7200
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0
 
 
@@ -1250,6 +1250,8 @@ def start_accore_progressive_export(
             t_last_activity = time.time()
             last_completed_count = 0
             last_log_size = 0
+            last_cpu_time = 0.0
+            ps_proc = None
             with open(log_path, "wb") as log_f:
                 proc = subprocess.Popen(
                     cmd,
@@ -1258,6 +1260,11 @@ def start_accore_progressive_export(
                     creationflags=_NO_WINDOW,
                     close_fds=True,
                 )
+                try:
+                    import psutil
+                    ps_proc = psutil.Process(proc.pid)
+                except Exception:
+                    ps_proc = None
                 while proc.poll() is None:
                     if len(completed_pages) > last_completed_count:
                         last_completed_count = len(completed_pages)
@@ -1269,6 +1276,15 @@ def start_accore_progressive_export(
                             t_last_activity = time.time()
                     except OSError:
                         pass
+                    if ps_proc is not None:
+                        try:
+                            c_times = ps_proc.cpu_times()
+                            c_tot = c_times.user + c_times.system
+                            if c_tot > last_cpu_time + 0.2:
+                                last_cpu_time = c_tot
+                                t_last_activity = time.time()
+                        except Exception:
+                            pass
                     idle_sec = time.time() - t_last_activity
                     total_sec = time.time() - t_start
                     max_total_limit = max(timeout_sec, 7200)

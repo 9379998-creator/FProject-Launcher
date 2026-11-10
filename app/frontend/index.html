@@ -25,10 +25,19 @@
       </div>
     </div>
     <div class="progress-panel" id="progressPanel" hidden>
-      <div class="progress-head"><span id="progressLabel">Операция…</span><strong id="progressValue">0%</strong></div>
-      <div class="progress-track"><span id="progressFill"></span></div>
-      <div class="progress-detail" id="progressDetail">Подготовка</div>
-      <button class="cancel-button" id="cancelOperation" type="button">Отменить</button>
+      <div class="progress-head" id="progressHead">
+        <span class="progress-drag-handle" id="progressDragHandle" title="Потяните, чтобы переместить панель">⋮⋮</span>
+        <span id="progressLabel">Операция…</span>
+        <strong id="progressValue">0%</strong>
+        <div class="progress-actions">
+          <button id="progressToggleCollapse" type="button" class="progress-btn-icon" title="Свернуть / Развернуть панель" aria-label="Свернуть / Развернуть">−</button>
+        </div>
+      </div>
+      <div class="progress-body" id="progressBody">
+        <div class="progress-track"><span id="progressFill"></span></div>
+        <div class="progress-detail" id="progressDetail">Подготовка</div>
+        <button class="cancel-button" id="cancelOperation" type="button">Отменить</button>
+      </div>
     </div>
     <main class="shell">
       <aside class="sidebar" id="sidebar">

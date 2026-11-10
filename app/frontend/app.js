@@ -81,6 +81,8 @@ const els = {
   exclude: document.getElementById("excludeObject"),
   cancel: document.getElementById("cancelOperation"),
   progressPanel: document.getElementById("progressPanel"),
+  progressHead: document.getElementById("progressHead"),
+  progressToggleCollapse: document.getElementById("progressToggleCollapse"),
   progressLabel: document.getElementById("progressLabel"),
   progressValue: document.getElementById("progressValue"),
   progressFill: document.getElementById("progressFill"),
@@ -532,7 +534,7 @@ function startDwgStatusPolling(filePath, totalPages, epoch) {
       stopDwgStatusPolling();
       return;
     }
-    if (Date.now() - pollStartedAt > 15 * 60 * 1000) {
+    if (Date.now() - pollStartedAt > 120 * 60 * 1000) {
       stopDwgStatusPolling();
       showNotice("Рендеринг листов DWG занимает слишком долго - опрос остановлен.");
       return;
@@ -7365,3 +7367,91 @@ initPdfDocFrameSync();
 hookIframeContextMenuDismiss(els.pdfDocFrame);
 hookIframeContextMenuDismiss(els.excelSheetFrame);
 hookIframeContextMenuDismiss(els.wordDocFrame);
+
+// Перемещение (drag) и сворачивание (collapse) панели прогресса
+function initProgressPanelInteractions() {
+  const panel = els.progressPanel;
+  const head = document.getElementById("progressHead") || panel?.querySelector(".progress-head");
+  const toggleBtn = document.getElementById("progressToggleCollapse");
+  if (!panel || !head) return;
+
+  const setCollapsed = (collapsed) => {
+    panel.classList.toggle("is-collapsed", collapsed);
+    if (toggleBtn) {
+      toggleBtn.textContent = collapsed ? "+" : "−";
+      toggleBtn.title = collapsed ? "Развернуть панель" : "Свернуть панель";
+      toggleBtn.setAttribute("aria-label", collapsed ? "Развернуть" : "Свернуть");
+    }
+  };
+
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setCollapsed(!panel.classList.contains("is-collapsed"));
+    });
+  }
+
+  head.addEventListener("dblclick", (e) => {
+    if (e.target.closest("button")) return;
+    setCollapsed(!panel.classList.contains("is-collapsed"));
+  });
+
+  let isDragging = false;
+  let startX = 0, startY = 0;
+  let panelStartX = 0, panelStartY = 0;
+
+  head.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button") || e.button !== 0) return;
+    isDragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+
+    const rect = panel.getBoundingClientRect();
+    panelStartX = rect.left;
+    panelStartY = rect.top;
+
+    panel.style.transform = "none";
+    panel.style.left = `${panelStartX}px`;
+    panel.style.top = `${panelStartY}px`;
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
+
+    head.setPointerCapture(e.pointerId);
+    head.style.cursor = "grabbing";
+    e.preventDefault();
+  });
+
+  head.addEventListener("pointermove", (e) => {
+    if (!isDragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+
+    let newLeft = panelStartX + dx;
+    let newTop = panelStartY + dy;
+
+    const panelWidth = panel.offsetWidth;
+    const panelHeight = panel.offsetHeight;
+    const maxLeft = Math.max(0, window.innerWidth - panelWidth);
+    const maxTop = Math.max(0, window.innerHeight - panelHeight);
+
+    newLeft = Math.max(10, Math.min(newLeft, maxLeft - 10));
+    newTop = Math.max(10, Math.min(newTop, maxTop - 10));
+
+    panel.style.left = `${newLeft}px`;
+    panel.style.top = `${newTop}px`;
+  });
+
+  const stopDrag = (e) => {
+    if (!isDragging) return;
+    isDragging = false;
+    head.style.cursor = "";
+    try {
+      head.releasePointerCapture(e.pointerId);
+    } catch (_) {}
+  };
+
+  head.addEventListener("pointerup", stopDrag);
+  head.addEventListener("pointercancel", stopDrag);
+}
+
+initProgressPanelInteractions();

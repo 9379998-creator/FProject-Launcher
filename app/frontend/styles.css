@@ -251,7 +251,7 @@ button:disabled {
   transform: translateX(-50%);
   width: 440px;
   max-width: 90vw;
-  padding: 12px 14px;
+  padding: 10px 14px;
   background: #ffffff;
   border: 1px solid #707070;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
@@ -259,17 +259,98 @@ button:disabled {
   z-index: 30000;
   box-sizing: border-box;
   pointer-events: auto;
+  transition: width 0.15s ease, padding 0.15s ease, box-shadow 0.15s ease;
 }
 
 .progress-panel[hidden] {
   display: none !important;
 }
 
+.progress-panel.is-collapsed {
+  width: auto;
+  min-width: 260px;
+  max-width: 420px;
+  padding: 6px 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+}
+
+.progress-panel.is-collapsed .progress-body {
+  display: none !important;
+}
+
 .progress-head {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
   gap: 8px;
   font-size: 12px;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.progress-head:active {
+  cursor: grabbing;
+}
+
+.progress-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  color: #888888;
+  font-size: 13px;
+  letter-spacing: -1px;
+  cursor: grab;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+#progressLabel {
+  font-weight: 600;
+  color: #1e293b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+#progressValue {
+  font-weight: 700;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.progress-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+}
+
+.progress-btn-icon {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  width: 22px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: bold;
+  line-height: 1;
+  color: #475569;
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.progress-btn-icon:hover {
+  background: #e2e8f0;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+
+.progress-body {
+  margin-top: 6px;
 }
 
 .progress-track {
