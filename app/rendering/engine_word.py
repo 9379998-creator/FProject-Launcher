@@ -159,11 +159,17 @@ img{{max-width:100%;height:auto;display:block;margin:12px auto}}
 .doc-page-top{{text-align:center;color:#94a3b8;font-size:11px;font-weight:600;padding-bottom:18px;margin-bottom:18px;border-bottom:1px solid #f1f5f9;user-select:none;letter-spacing:0.5px}}
 .doc-page-divider{{text-align:center;color:#94a3b8;font-size:11px;font-weight:600;padding:18px 0 12px;margin:32px 0 20px;border-top:1px dashed #cbd5e1;user-select:none;letter-spacing:0.5px}}
 #doc-floating-page-badge{{position:fixed;bottom:16px;right:24px;background:rgba(30,41,59,.88);backdrop-filter:blur(4px);color:#fff;font-size:12px;font-weight:600;padding:6px 14px;border-radius:999px;box-shadow:0 2px 10px rgba(0,0,0,.25);z-index:1000;pointer-events:none;letter-spacing:.3px;transition:opacity .2s}}
+body.hand-mode {{ cursor: grab !important; user-select: none; -webkit-user-select: none; }}
+body.hand-mode.dragging {{ cursor: grabbing !important; }}
 </style></head><body>
 <div id="doc-canvas"><div id="doc-sheet">{doc_content}</div></div>
 <div id="doc-floating-page-badge">Стр. <span id="cur-p">1</span> из <span id="tot-p">{max(1, page_break_count)}</span></div>
 <script>
 let scale = 1;
+let hand = true;
+let dragging = false;
+let startX = 0, startY = 0;
+let startLeft = 0, startTop = 0;
 const sheet = document.getElementById('doc-sheet');
 const canvas = document.getElementById('doc-canvas');
 const curPEl = document.getElementById('cur-p');
@@ -230,6 +236,50 @@ window.addEventListener('contextmenu', (e) => {{
   }}, '*');
 }});
 
+function updateCursor() {{
+  if (hand) {{
+    document.body.classList.add('hand-mode');
+    document.body.classList.toggle('dragging', dragging);
+    document.body.style.cursor = dragging ? 'grabbing' : 'grab';
+  }} else {{
+    document.body.classList.remove('hand-mode', 'dragging');
+    document.body.style.cursor = 'default';
+  }}
+}}
+
+window.addEventListener('pointerdown', (e) => {{
+  if (!hand || e.button !== 0) return;
+  dragging = true;
+  startX = e.clientX;
+  startY = e.clientY;
+  startLeft = window.scrollX;
+  startTop = window.scrollY;
+  document.body.setPointerCapture?.(e.pointerId);
+  updateCursor();
+  e.preventDefault();
+}});
+
+window.addEventListener('pointermove', (e) => {{
+  if (!dragging) return;
+  window.scrollTo(startLeft - (e.clientX - startX), startTop - (e.clientY - startY));
+}});
+
+window.addEventListener('pointerup', (e) => {{
+  if (!dragging) return;
+  dragging = false;
+  document.body.releasePointerCapture?.(e.pointerId);
+  updateCursor();
+}});
+
+window.addEventListener('pointercancel', () => {{
+  dragging = false;
+  updateCursor();
+}});
+
+window.addEventListener('load', () => {{
+  updateCursor();
+}});
+
 window.addEventListener('message', (e) => {{
   if (!e.data) return;
   if (e.data.type === 'launcher-sheet-zoom') {{
@@ -237,6 +287,11 @@ window.addEventListener('message', (e) => {{
   }}
   if (e.data.type === 'launcher-sheet-fit') {{
     applyZoom(1.0);
+  }}
+  if (e.data.type === 'launcher-sheet-hand') {{
+    hand = Boolean(e.data.value);
+    dragging = false;
+    updateCursor();
   }}
 }});
 </script>
@@ -253,7 +308,7 @@ window.addEventListener('message', (e) => {{
     return html_page, stats
 
 
-WORD_ENGINE_VERSION = "v4"
+WORD_ENGINE_VERSION = "v5"
 
 
 def ensure_docx_preview(src: Path, cache_dir: Path) -> dict:

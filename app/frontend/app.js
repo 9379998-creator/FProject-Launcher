@@ -3118,6 +3118,8 @@ async function activateExcelWorkbook(index) {
   if (els.wordViewer) els.wordViewer.hidden = true;
   if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
   els.viewerControls.hidden = false;
+  if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
+  updateViewerToolButton(state.view.panMode ? 1 : 0);
   setActiveNativePath(workbook.path);
   revealPathInTree(workbook.path);
   updateViewTransform();
@@ -3266,6 +3268,8 @@ async function activateWordDocument(index) {
   if (els.excelViewer) els.excelViewer.hidden = true;
   els.wordViewer.hidden = false;
   els.viewerControls.hidden = false;
+  if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
+  updateViewerToolButton(state.view.panMode ? 1 : 0);
   setActiveNativePath(docItem.path);
   if (els.wordOpenNative) {
     els.wordOpenNative.onclick = () => openFileByPath(docItem.path, "native");
@@ -4069,70 +4073,26 @@ function showPdfPage(page, options = {}) {
 
     clearExcelViewer();
   const targetDocPath = thumbPathForPage(page);
-  const isPdf = Boolean(targetDocPath && targetDocPath.toLowerCase().endsWith(".pdf") &&
-    page.previewType !== "IMAGE" &&
-    page.previewType !== "VIDEO" &&
-    page.previewType !== "TXT" &&
-    page.type !== "missing-preview" &&
-    page.type !== "native-file");
 
-  if (isPdf) {
-    if (els.mediaVideoViewer) {
-      try { els.mediaVideoViewer.pause(); } catch (_) {}
-      els.mediaVideoViewer.hidden = true;
-      els.mediaVideoViewer.removeAttribute("src");
-    }
-    if (els.txtViewer) els.txtViewer.hidden = true;
-    if (els.wordViewer) els.wordViewer.hidden = true;
-  if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
-    if (els.pdfPageImage) {
-      els.pdfPageImage.hidden = true;
-      els.pdfPageImage.removeAttribute("src");
-    }
-    const canvas = document.getElementById("pdfPageCanvas");
-    if (canvas) canvas.hidden = true;
-    els.viewerEmpty.hidden = true;
-    els.pdfViewer.classList.remove("empty");
-    els.viewerControls.hidden = false;
-    if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
-    updateViewerToolButton(false);
-
-    setActiveNativePath(targetDocPath);
-    revealPathInTree(targetDocPath, { updateSelection: true, skipScroll: skipTreeScroll });
-
-    if (els.pdfDocViewer) els.pdfDocViewer.hidden = false;
-    syncActionGridVisibility();
-
-    const rawUrl = "/api/file/raw?path=" + encodeURIComponent(targetDocPath);
-    const targetPageNum = Number(page.page) || 1;
-
-    if (els.pdfDocFrame.dataset.currentDoc === targetDocPath) {
-      const win = els.pdfDocFrame.contentWindow;
-      if (win && win.PDFViewerApplication && win.PDFViewerApplication.initialized) {
-        win.PDFViewerApplication.page = targetPageNum;
-      } else {
-        els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
-      }
-    } else {
-      els.pdfDocFrame.dataset.currentDoc = targetDocPath;
-      els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
-      const viewerUrl = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum;
-      els.pdfDocFrame.src = viewerUrl;
-    }
-
-    updateActivePdfThumb();
-    updatePagePosition(page);
-    return;
+  if (els.mediaVideoViewer) {
+    try { els.mediaVideoViewer.pause(); } catch (_) {}
+    els.mediaVideoViewer.hidden = true;
+    els.mediaVideoViewer.removeAttribute("src");
   }
-
-  // Non-PDF documents (DWG, images, fallback)
+  if (els.txtViewer) els.txtViewer.hidden = true;
+  if (els.wordViewer) els.wordViewer.hidden = true;
   if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
   if (els.pdfDocFrame) {
     els.pdfDocFrame.dataset.currentDoc = "";
     els.pdfDocFrame.dataset.targetPage = "";
   }
+  const canvas = document.getElementById("pdfPageCanvas");
+  if (canvas) canvas.hidden = true;
+  els.viewerEmpty.hidden = true;
+  els.pdfViewer.classList.remove("empty");
+  els.viewerControls.hidden = false;
   if (els.viewToggleDpi) els.viewToggleDpi.hidden = false;
-  updateViewerToolButton(state.view.panMode);
+  updateViewerToolButton(state.view.panMode ? 1 : 0);
 
   const currentDpi = state.viewerDpi || 150;
   const highPage = state.highQualityPages.get(`${key}@${currentDpi}`);
@@ -4155,11 +4115,6 @@ function showPdfPage(page, options = {}) {
   } else if (els.pdfPageImage) {
     delete els.pdfPageImage.dataset.dwgLoadedPage;
   }
-  const canvas = document.getElementById("pdfPageCanvas");
-  if (canvas) canvas.hidden = true;
-  els.viewerEmpty.hidden = true;
-  els.pdfViewer.classList.remove("empty");
-  els.viewerControls.hidden = false;
   updateActivePdfThumb();
   updateViewerDpiButton();
   if (els.pdfPageImage.complete && els.pdfPageImage.naturalWidth) {
@@ -4218,6 +4173,9 @@ function updateViewTransform() {
   if (state.excelWorkbook) {
     els.excelSheetFrame.contentWindow?.postMessage({ type: "launcher-sheet-hand", value: view.panMode }, "*");
     els.excelSheetFrame.contentWindow?.postMessage({ type: "launcher-sheet-rotate", value: view.rotation }, "*");
+  }
+  if (state.wordDoc && els.wordDocFrame) {
+    els.wordDocFrame.contentWindow?.postMessage({ type: "launcher-sheet-hand", value: view.panMode }, "*");
   }
 }
 
@@ -5357,7 +5315,8 @@ if (els.wordDocFrame) {
   els.wordDocFrame.addEventListener("load", () => {
     forwardWordDocContextMenu();
     if (!state.wordDoc) return;
-    els.wordDocFrame.contentWindow?.postMessage({ type: "launcher-sheet-zoom", value: state.wordScale }, "*");
+    els.wordDocFrame.contentWindow?.postMessage({ type: "launcher-sheet-zoom", value: state.wordScale || 1 }, "*");
+    els.wordDocFrame.contentWindow?.postMessage({ type: "launcher-sheet-hand", value: state.view.panMode !== false }, "*");
   });
 }
 els.excelTabsLeft.addEventListener("click", () => {
@@ -6064,6 +6023,12 @@ function handleGlobalEscape() {
           return true;
         }
       }
+      els.pdfDocViewer.hidden = true;
+      if (els.pdfPageImage) els.pdfPageImage.hidden = false;
+      if (els.viewToggleDpi) els.viewToggleDpi.hidden = false;
+      updateViewerDpiButton();
+      updateViewerToolButton(state.view.panMode ? 1 : 0);
+      return true;
     }
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed && sel.toString().trim()) {
@@ -6595,8 +6560,8 @@ function renderSettingsAppRows(cfg) {
   }
 }
 
-// РљРѕРЅС‚РµРєСЃС‚РЅРѕРµ РјРµРЅСЋ С„Р°Р№Р»Р°/РїР°РїРєРё/С‚РµРєСЃС‚Р° (РїСЂР°РІР°СЏ РєРЅРѕРїРєР° РјС‹С€Рё).
-// РџСѓРЅРєС‚С‹: РЎРєРѕРїРёСЂРѕРІР°С‚СЊ, РџРµСЂРµРІРµСЃС‚Рё, РќР°Р№С‚Рё РІ РґРѕРєСѓРјРµРЅС‚Рµ, РЎРєРѕРїРёСЂРѕРІР°С‚СЊ РїСѓС‚СЊ, РћС‚РєСЂС‹С‚СЊ РІ РїСЂРѕРіСЂР°РјРјРµ, РћС‚РєСЂС‹С‚СЊ РІ РїСЂРѕРІРѕРґРЅРёРєРµ.
+// Контекстное меню файла/папки/текста (правая кнопка мыши).
+// Пункты: Скопировать, Перевести, Найти в документе, Скопировать путь, Открыть в программе, Открыть в проводнике.
 function hideFileContextMenu() {
   if (els.contextMenu && !els.contextMenu.hidden) {
     els.contextMenu.hidden = true;
@@ -6715,7 +6680,7 @@ function showFileContextMenu(clientX, clientY, target) {
     items.push({ sep: true });
   }
 
-  // 2. РџСѓРЅРєС‚ "РЎРєРѕРїРёСЂРѕРІР°С‚СЊ РїСѓС‚СЊ"
+  // 2. Пункт "Скопировать путь"
   if (target.path) {
     items.push({
       icon: "\uD83D\uDCC2",
@@ -6726,7 +6691,7 @@ function showFileContextMenu(clientX, clientY, target) {
     items.push({ sep: true });
   }
 
-  // 3. РџСѓРЅРєС‚ "РћС‚РєСЂС‹С‚СЊ РІ РїСЂРѕРіСЂР°РјРјРµ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ"
+  // 3. Пункт "Открыть в программе по умолчанию"
   if (target.path && !target.isDir) {
     items.push({
       icon: "\u2197\uFE0F",
@@ -6736,7 +6701,7 @@ function showFileContextMenu(clientX, clientY, target) {
     });
   }
 
-  // 4. РџСѓРЅРєС‚ "РћС‚РєСЂС‹С‚СЊ РІ РїСЂРѕРІРѕРґРЅРёРєРµ"
+  // 4. Пункт "Открыть в проводнике"
   if (target.path) {
     items.push({
       icon: "\uD83D\uDCC1",
@@ -6802,8 +6767,8 @@ function showFileContextMenu(clientX, clientY, target) {
   menu.style.top = Math.max(8, Math.min(clientY, window.innerHeight - h - 8)) + "px";
 }
 
-// Р“Р»РѕР±Р°Р»СЊРЅС‹Рµ СЃР»СѓС€Р°С‚РµР»Рё РѕС‚РјРµРЅС‹ РєРѕРЅС‚РµРєСЃС‚РЅРѕРіРѕ РјРµРЅСЋ:
-// 1) РљР»РёРє РјС‹С€СЊСЋ РІ Р»СЋР±РѕРµ СЃРІРѕР±РѕРґРЅРѕРµ РїРѕР»Рµ/РїСЂРѕСЃС‚СЂР°РЅСЃС‚РІРѕ
+// Глобальные слушатели отмены контекстного меню:
+// 1) Клик мышью в любое свободное поле/пространство
 const handleDismissContextMenu = (event) => {
   if (!els.contextMenu || els.contextMenu.hidden) return;
   if (event && els.contextMenu.contains(event.target)) return;
@@ -6816,7 +6781,7 @@ window.addEventListener("scroll", handleDismissContextMenu, true);
 window.addEventListener("resize", () => hideFileContextMenu());
 window.addEventListener("blur", () => hideFileContextMenu());
 
-// 2) РћС‚РјРµРЅР° РєРѕРЅС‚РµРєСЃС‚РЅРѕРіРѕ РјРµРЅСЋ РїРѕ РєР»Р°РІРёС€Рµ Esc (РІ С„Р°Р·Рµ Р·Р°С…РІР°С‚Р°, РґРѕ РѕСЃС‚Р°Р»СЊРЅС‹С… РѕР±СЂР°Р±РѕС‚С‡РёРєРѕРІ)
+// 2) Отмена контекстного меню по клавише Esc (в фазе захвата, до остальных обработчиков)
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     if (hideFileContextMenu()) {
@@ -7190,6 +7155,23 @@ try {
 // =============================================================================
 
 function openPdfJsSearch(text) {
+  const isPdf = Boolean(state.activeNativePath && state.activeNativePath.toLowerCase().endsWith(".pdf"));
+  if (isPdf && els.pdfDocFrame) {
+    if (els.pdfDocViewer && els.pdfDocViewer.hidden) {
+      if (els.pdfPageImage) els.pdfPageImage.hidden = true;
+      els.pdfDocViewer.hidden = false;
+      if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
+      updateViewerToolButton(2);
+      const rawUrl = "/api/file/raw?path=" + encodeURIComponent(state.activeNativePath);
+      const curPage = state.renderedPages?.find((p) => pageKey(p) === state.activePageKey);
+      const targetPageNum = Number(curPage?.page) || 1;
+      if (els.pdfDocFrame.dataset.currentDoc !== state.activeNativePath) {
+        els.pdfDocFrame.dataset.currentDoc = state.activeNativePath;
+        els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
+        els.pdfDocFrame.src = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum;
+      }
+    }
+  }
   const win = els.pdfDocFrame?.contentWindow;
   if (!win) return;
   win.focus();
@@ -7333,22 +7315,32 @@ function updateViewerToolButton(mode) {
 window.updateViewerToolButton = updateViewerToolButton;
 
 function toggleViewerTool() {
-  const isPdf = Boolean(els.pdfDocViewer && !els.pdfDocViewer.hidden);
-  if (isPdf) {
+  const isWord = Boolean(els.wordViewer && !els.wordViewer.hidden);
+  const isExcel = Boolean(els.excelViewer && !els.excelViewer.hidden);
+
+  if (isWord || isExcel) {
+    state.view.panMode = !state.view.panMode;
+    updateViewTransform();
+    updateViewerToolButton(state.view.panMode ? 1 : 0);
+    return;
+  }
+
+  const isPdfViewerOpen = Boolean(els.pdfDocViewer && !els.pdfDocViewer.hidden);
+  if (isPdfViewerOpen) {
     const win = els.pdfDocFrame?.contentWindow;
     if (win && typeof win.getViewerToolMode === "function" && typeof win.setViewerToolMode === "function") {
       const current = win.getViewerToolMode();
-      // Cycle: 0 (Рамка) -> 2 (Текст) -> 1 (Лапа) -> 0 (Рамка)
       const next = current === 0 ? 2 : current === 2 ? 1 : 0;
       win.setViewerToolMode(next);
       updateViewerToolButton(next);
       return;
     }
-  } else {
-    state.view.panMode = !state.view.panMode;
-    updateViewTransform();
-    updateViewerToolButton(state.view.panMode ? 1 : 0);
   }
+
+  // Standard Stage (PDF raster, DWG, Images)
+  state.view.panMode = !state.view.panMode;
+  updateViewTransform();
+  updateViewerToolButton(state.view.panMode ? 1 : 0);
 }
 
 if (els.viewToggleTool) {
