@@ -4073,7 +4073,68 @@ function showPdfPage(page, options = {}) {
 
     clearExcelViewer();
   const targetDocPath = thumbPathForPage(page);
+  const isPdf = Boolean(targetDocPath && targetDocPath.toLowerCase().endsWith(".pdf") &&
+    page.previewType !== "IMAGE" &&
+    page.previewType !== "VIDEO" &&
+    page.previewType !== "TXT" &&
+    page.type !== "missing-preview" &&
+    page.type !== "native-file");
 
+  if (isPdf) {
+    if (els.mediaVideoViewer) {
+      try { els.mediaVideoViewer.pause(); } catch (_) {}
+      els.mediaVideoViewer.hidden = true;
+      els.mediaVideoViewer.removeAttribute("src");
+    }
+    if (els.txtViewer) els.txtViewer.hidden = true;
+    if (els.wordViewer) els.wordViewer.hidden = true;
+    if (els.pdfPageImage) {
+      els.pdfPageImage.hidden = true;
+      els.pdfPageImage.removeAttribute("src");
+    }
+    const canvas = document.getElementById("pdfPageCanvas");
+    if (canvas) canvas.hidden = true;
+    els.viewerEmpty.hidden = true;
+    els.pdfViewer.classList.remove("empty");
+    els.viewerControls.hidden = false;
+    if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
+
+    setActiveNativePath(targetDocPath);
+    revealPathInTree(targetDocPath, { updateSelection: true, skipScroll: skipTreeScroll });
+
+    if (els.pdfDocViewer) els.pdfDocViewer.hidden = false;
+    syncActionGridVisibility();
+
+    const win = els.pdfDocFrame?.contentWindow;
+    if (win && typeof win.getViewerToolMode === "function") {
+      updateViewerToolButton(win.getViewerToolMode());
+    } else {
+      updateViewerToolButton(2);
+    }
+
+    const rawUrl = "/api/file/raw?path=" + encodeURIComponent(targetDocPath);
+    const targetPageNum = Number(page.page) || 1;
+
+    if (els.pdfDocFrame.dataset.currentDoc === targetDocPath) {
+      const frameWin = els.pdfDocFrame.contentWindow;
+      if (frameWin && frameWin.PDFViewerApplication && frameWin.PDFViewerApplication.initialized) {
+        frameWin.PDFViewerApplication.page = targetPageNum;
+      } else {
+        els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
+      }
+    } else {
+      els.pdfDocFrame.dataset.currentDoc = targetDocPath;
+      els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
+      const viewerUrl = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum;
+      els.pdfDocFrame.src = viewerUrl;
+    }
+
+    updateActivePdfThumb();
+    updatePagePosition(page);
+    return;
+  }
+
+  // Non-PDF documents (DWG, images, fallback)
   if (els.mediaVideoViewer) {
     try { els.mediaVideoViewer.pause(); } catch (_) {}
     els.mediaVideoViewer.hidden = true;
