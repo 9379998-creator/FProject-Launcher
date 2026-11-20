@@ -13,7 +13,7 @@ OutputBaseFilename=FEngineering_Launcher_v4_Setup
 OutputDir=..\dist_setup
 SetupIconFile=..\app\frontend\assets\flauncher.ico
 UninstallDisplayIcon={app}\FEngineeringLauncher.exe
-Compression=lzma2/ultra64
+Compression=lzma2/normal
 SolidCompression=yes
 
 ; КРИТИЧНО: без прав администратора! Установка в профиль пользователя исключает ошибки «Отказано в доступе».
