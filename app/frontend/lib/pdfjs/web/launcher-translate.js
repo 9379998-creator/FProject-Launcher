@@ -163,34 +163,6 @@
     const style = document.createElement("style");
     style.id = "launcherEnhancedStyles";
     style.textContent = `
-      /* Prominent back button in PDF viewer toolbar */
-      #toolbarBackBtn {
-        min-width: 74px !important;
-        width: auto !important;
-        padding: 0 8px !important;
-        margin-right: 6px !important;
-        background: #f1f5f9 !important;
-        border: 1px solid #94a3b8 !important;
-        border-radius: 3px !important;
-        color: #0f172a !important;
-        cursor: pointer !important;
-      }
-      #toolbarBackBtn > span {
-        display: inline-block !important;
-        text-indent: 0 !important;
-        font-size: 12px !important;
-        font-weight: 700 !important;
-        color: #0f172a !important;
-      }
-      #toolbarBackBtn:hover {
-        background: #0969da !important;
-        border-color: #0969da !important;
-        color: #ffffff !important;
-      }
-      #toolbarBackBtn:hover > span {
-        color: #ffffff !important;
-      }
-
       /* 1. TextLayer display */
       .textLayer {
         opacity: 1 !important;
@@ -304,20 +276,6 @@
       }
     `;
     document.head.appendChild(style);
-
-    // Toolbar Back Button
-    const backBtn = document.getElementById("toolbarBackBtn");
-    if (backBtn) {
-      backBtn.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        try {
-          if (window.parent && typeof window.parent.exitWindow3 === "function") {
-            window.parent.exitWindow3();
-          }
-        } catch (_) {}
-      };
-    }
 
     // Floating Action Pill (Translate + CAD Export)
     tooltip = document.createElement("div");
