@@ -152,6 +152,18 @@ def get_file_preview(path: str | Path, runtime_dir: Path | None = None,
             return {"type": "text", "name": src.name, "path": str(src),
                     "cacheKey": key, **info}
 
+        if ext in (".html", ".htm"):
+            import urllib.parse
+            key = file_key(src, "html")
+            return {
+                "type": "html",
+                "name": src.name,
+                "path": str(src),
+                "url": f"/api/file/raw?path={urllib.parse.quote(str(src))}",
+                "cacheKey": key,
+                "bytes": src.stat().st_size,
+            }
+
         return {"type": "unsupported", "name": src.name, "extension": ext,
                 "fallback": native_app_card(src)}
     finally:

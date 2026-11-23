@@ -25,7 +25,7 @@ from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -3478,6 +3478,8 @@ class LauncherHandler(BaseHTTPRequestHandler):
                         logger.warning("Failed to convert TIFF %s to PNG: %s", target, err)
 
                 content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+                if (content_type.startswith("text/") or content_type == "application/json") and "charset" not in content_type:
+                    content_type += "; charset=utf-8"
                 file_size = target.stat().st_size
                 range_header = self.headers.get("Range")
                 
@@ -4403,6 +4405,27 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 if not raw_file:
                     raise ValueError("Не выбран Word-файл для отображения")
                 self.send_json(HTTPStatus.OK, word_document_preview(Path(raw_file)))
+            except Exception as error:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+            return
+
+        if parsed.path in {"/api/html/preview", "/api/html/document"}:
+            try:
+                body = self.read_json()
+                raw_file = str(body.get("file", "")).strip()
+                if not raw_file:
+                    raise ValueError("Не выбран HTML-файл для отображения")
+                src = Path(raw_file).expanduser()
+                if not src.exists():
+                    raise FileNotFoundError(f"Файл не найден: {src}")
+                raw_url = f"/api/file/raw?path={quote(str(src))}"
+                self.send_json(HTTPStatus.OK, {
+                    "url": raw_url,
+                    "thumbnailUrl": raw_url,
+                    "name": src.name,
+                    "path": str(src),
+                    "bytes": src.stat().st_size,
+                })
             except Exception as error:
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return

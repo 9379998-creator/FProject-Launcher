@@ -23,6 +23,7 @@ GOLDEN_EXTENSIONS = frozenset({
     ".dwg", ".pdf",
     ".xlsx", ".xlsm", ".xls",
     ".docx",
+    ".html", ".htm",
     ".jpg", ".jpeg", ".png", ".gif",
     ".txt", ".log",
 })
