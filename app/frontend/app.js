@@ -55,7 +55,7 @@ const state = {
 
   activeDwgPath: "",
   viewMode: "standard",
-  viewerDpi: Number(localStorage.getItem("launcher_viewer_dpi")) || 150,
+  viewerDpi: 300,
   activeNavZone: "tree",
   thumbScale: 1,
   treeScale: 1,
@@ -81,7 +81,6 @@ const els = {
   load: document.getElementById("loadObject"),
   refresh: document.getElementById("refreshObject"),
   display: document.getElementById("displayObject"),
-  passport: document.getElementById("passportObject"),
   exclude: document.getElementById("excludeObject"),
   cancel: document.getElementById("cancelOperation"),
   progressPanel: document.getElementById("progressPanel"),
@@ -264,7 +263,6 @@ function updateObjectButtons() {
     if (els.load) els.load.disabled = true;
     if (els.refresh) els.refresh.disabled = true;
     if (els.display) els.display.disabled = true;
-    if (els.passport) els.passport.disabled = true;
     if (els.exclude) els.exclude.disabled = true;
     if (els.btnSettings) els.btnSettings.disabled = true;
   } else if (tree) {
@@ -282,7 +280,6 @@ function updateObjectButtons() {
     if (els.load) els.load.disabled = false;
     if (els.refresh) els.refresh.disabled = false;
     if (els.display) els.display.disabled = false;
-    if (els.passport) els.passport.disabled = false;
     if (els.exclude) els.exclude.disabled = false;
     if (els.btnSettings) els.btnSettings.disabled = false;
   } else {
@@ -299,7 +296,6 @@ function updateObjectButtons() {
     if (els.load) els.load.disabled = false;
     if (els.refresh) els.refresh.disabled = !hasSelection;
     if (els.display) els.display.disabled = !hasSelection;
-    if (els.passport) els.passport.disabled = !hasSelection;
     if (els.exclude) els.exclude.disabled = !hasSelection;
     if (els.btnSettings) els.btnSettings.disabled = false;
   }
@@ -3864,7 +3860,7 @@ function updatePagePosition(page, currentDpiInfo = null) {
   if (currentDpiInfo) {
     dpiLabel = ` · ${currentDpiInfo}`;
   } else {
-    const dpi = page?.dpi || state.viewerDpi || 150;
+    const dpi = page?.dpi || state.viewerDpi || 300;
     if (natW && natH) {
       dpiLabel = ` · ${dpi} DPI (${natW}×${natH} px)`;
     } else {
@@ -3924,21 +3920,16 @@ function extOfPath(path) {
   return dot > 0 ? base.slice(dot + 1).toUpperCase() : "";
 }
 
-function updateViewerDpiButton(loading = false) {
-  if (!els.viewToggleDpi) return;
-  const dpi = state.viewerDpi || 150;
-  els.viewToggleDpi.textContent = loading ? `${dpi} DPI…` : `${dpi} DPI`;
-  els.viewToggleDpi.classList.toggle("dpi-300", dpi === 300);
-  els.viewToggleDpi.classList.toggle("dpi-150", dpi === 150);
-  els.viewToggleDpi.classList.toggle("dpi-72", dpi === 72);
-  els.viewToggleDpi.classList.toggle("loading", loading);
-  const nextDpi = dpi === 72 ? 150 : (dpi === 150 ? 300 : 72);
-  els.viewToggleDpi.title = `Разрешение окна: ${dpi} DPI. Нажмите для переключения на ${nextDpi} DPI (режимы 72 → 150 → 300)`;
+function updateViewerDpiButton(_loading = false) {
+  if (els.viewToggleDpi) {
+    els.viewToggleDpi.hidden = true;
+    els.viewToggleDpi.style.display = "none";
+  }
 }
 
 let activeHighQualityController = null;
 
-async function requestHighQualityPage(page, targetDpi = (state.viewerDpi || 150)) {
+async function requestHighQualityPage(page, targetDpi = (state.viewerDpi || 300)) {
   const sourceDocPath = page.documentPath || page.sourcePath || page.previewFor?.path || page.path || "";
   const pageNum = Number(page.page) || 1;
   if (!sourceDocPath || !pageNum) return;
@@ -4452,10 +4443,10 @@ function showPdfPage(page, options = {}) {
   els.viewerEmpty.hidden = true;
   els.pdfViewer.classList.remove("empty");
   els.viewerControls.hidden = false;
-  if (els.viewToggleDpi) els.viewToggleDpi.hidden = false;
+  if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
   updateViewerToolButton(state.view.panMode ? 1 : 0);
 
-  const currentDpi = state.viewerDpi || 150;
+  const currentDpi = state.viewerDpi || 300;
   const highPage = state.highQualityPages.get(`${key}@${currentDpi}`);
   const displayPage = highPage || page;
   setActiveNativePath(targetDocPath);
@@ -5663,39 +5654,6 @@ els.refresh.addEventListener("click", () => {
   else importObject(true).catch(showOperationError);
 });
 
-async function handleGeneratePassport() {
-  const object = selectedObject();
-  if (!object) return;
-  const btn = els.passport;
-  if (!btn) return;
-  const originalText = btn.textContent;
-  try {
-    btn.disabled = true;
-    btn.textContent = "Сборка...";
-    const res = await fetch("/api/object/generate-passport", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: object.id, rootPath: object.rootPath, name: object.name })
-    });
-    const data = await res.json();
-    if (data.ok && data.filePath) {
-      await fetch("/api/open-file", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: data.filePath })
-      });
-    } else {
-      alert("Не удалось сформировать паспорт: " + (data.error || "неизвестная ошибка"));
-    }
-  } catch (err) {
-    alert("Ошибка запроса паспорта: " + err.message);
-  } finally {
-    btn.textContent = originalText;
-    updateObjectButtons();
-  }
-}
-
-els.passport?.addEventListener("click", handleGeneratePassport);
 els.display.addEventListener("click", () => {
   if (inTreeMode()) renderSelectedFiles().catch(showOperationError);
   else openSelectedObject().catch(showOperationError);
@@ -5755,22 +5713,6 @@ els.excelTabs.addEventListener("wheel", (event) => {
 }, { passive: false });
 els.viewZoomOut.addEventListener("click", () => zoomPdf(0.82));
 els.viewZoomIn.addEventListener("click", () => zoomPdf(1.22));
-
-if (els.viewToggleDpi) {
-  els.viewToggleDpi.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const cur = state.viewerDpi || 150;
-    state.viewerDpi = cur === 72 ? 150 : (cur === 150 ? 300 : 72);
-    try {
-      localStorage.setItem("launcher_viewer_dpi", String(state.viewerDpi));
-    } catch (_) {}
-    updateViewerDpiButton();
-    const currPage = state.renderedPages?.find((p) => pageKey(p) === state.activePageKey) || state.renderedPages?.[0];
-    if (currPage) {
-      requestHighQualityPage(currPage, state.viewerDpi);
-    }
-  });
-}
 
 if (els.viewPrevPage) {
   els.viewPrevPage.addEventListener("click", (e) => {
@@ -6448,7 +6390,7 @@ function handleGlobalEscape() {
       }
       els.pdfDocViewer.hidden = true;
       if (els.pdfPageImage) els.pdfPageImage.hidden = false;
-      if (els.viewToggleDpi) els.viewToggleDpi.hidden = false;
+      if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
       updateViewerDpiButton();
       updateViewerToolButton(state.view.panMode ? 1 : 0);
       return true;
