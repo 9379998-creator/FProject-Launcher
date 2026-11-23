@@ -24,8 +24,8 @@
   --soft: #59636e;
   --accent: #0071e3;
   --accent-soft: #e5f0fa;
-  --copper: #b25828;
-  --copper-soft: #f7ede8;
+  --copper: #1D1D1F;
+  --copper-soft: #F5F5F7;
   --success: #1a7f37;
   --success-soft: #dafbe1;
   --warning: #9a6700;
@@ -488,7 +488,7 @@ pre code {
 }
 .badge-blue { background: var(--accent-soft); color: var(--accent); }
 .badge-green { background: var(--success-soft); color: var(--success); }
-.badge-copper { background: var(--copper-soft); color: var(--copper); }
+.badge-apple { background: var(--copper-soft); color: var(--copper); }
 .badge-amber { background: var(--warning-soft); color: var(--warning); }
 
 /* Футер */
@@ -636,7 +636,7 @@ pre code {
           </p>
         </div>
         <div class="card">
-          <div class="badge badge-copper">Контур №2: Точность</div>
+          <div class="badge badge-apple">Контур №2: Точность</div>
           <h4>Глубокий контур (Инженерный расчет и CAD)</h4>
           <p>
             Когда требуется получить точные физические объемы, площади и спецификации, в работу включается headless-ядро <strong>CadCraft</strong> или фоновый демон AutoCAD. Если же проектировщику нужно внести правку в чертеж — лаунчер по одной кнопке бесшовно передает управление нативной программе через Win32 API.
@@ -836,7 +836,7 @@ pre code {
       <div class="card" id="engine-cad" style="margin-bottom: 20px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
           <h3 style="margin:0;">2. AutoCAD COM Automation & Daemon</h3>
-          <span class="badge badge-copper">C++ ObjectARX Engine</span>
+          <span class="badge badge-apple">C++ ObjectARX Engine</span>
         </div>
         <p><strong>На чем написан:</strong> C++ графическое ядро Autodesk. Интеграция реализована через скрипт <code>render_dwg_smart.ps1</code> и протокол OLE/COM Windows.</p>
         <p><strong>Инженерные секреты ускорения:</strong></p>
@@ -882,7 +882,7 @@ pre code {
       <div class="card" id="engine-db">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
           <h3 style="margin:0;">5. База данных SQLite в режиме WAL (Write-Ahead Logging)</h3>
-          <span class="badge badge-copper">Конкурентное сканирование</span>
+          <span class="badge badge-apple">Конкурентное сканирование</span>
         </div>
         <p><strong>На чем написана:</strong> C. Ядро хранения метаданных в файле <code>runtime/db/launcher.sqlite</code>.</p>
         <p>
@@ -1068,7 +1068,7 @@ pre code {
 
       <div class="grid-2">
         <div class="card">
-          <div class="badge badge-copper">CadCraft Engine</div>
+          <div class="badge badge-apple">CadCraft Engine</div>
           <h4>CadCraft: Абсолютная математика</h4>
           <p><strong>Суперсила:</strong> Имеет прямой доступ к базе данных чертежа. Извлекает точные длины полилиний до миллиметра, площади замкнутых контуров, реальные координаты привязок, блоки и числовые свойства выносок.</p>
           <p><strong>Слепое пятно:</strong> «Слеп» к визуальному смыслу. Если проектировщик перед отправкой чертежа «взорвал» штриховку утеплителя (Exploded Hatch), для CadCraft это больше не <em>«утеплитель площадью 120 м&sup2;»</em> — для него это 15 000 несвязанных между собой отрезков. Кроме того, если стена имеет микроразрыв контура в 0.5 мм, CadCraft возвращает нулевую площадь.</p>
