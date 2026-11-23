@@ -2995,10 +2995,14 @@ function forwardExcelSheetContextMenu() {
       hideFileContextMenu();
       const info = getActiveSourceInfo();
       const wb = state.excelWorkbook;
-      const path = (info && info.path) || (wb && wb.path) || "";
+      const path = (info && info.path) || (wb && wb.path) || state.activeNativePath || state.revealedPath || "";
       if (!path) return;
       const rect = els.excelSheetFrame ? els.excelSheetFrame.getBoundingClientRect() : { left: 0, top: 0 };
-      showFileContextMenu(rect.left + event.clientX, rect.top + event.clientY, { path, isDir: false, ext: extOfPath(path) });
+      showFileContextMenu(rect.left + event.clientX, rect.top + event.clientY, {
+        path,
+        isDir: false,
+        ext: (wb && wb.extension) || extOfPath(path) || "XLSX",
+      });
     });
     doc.__launcherCtxForwarded = true;
   } catch (_) {}
@@ -3295,10 +3299,14 @@ function forwardWordDocContextMenu() {
       hideFileContextMenu();
       const info = getActiveSourceInfo();
       const currentDoc = state.wordDoc;
-      const path = (info && info.path) || (currentDoc && currentDoc.path) || "";
+      const path = (info && info.path) || (currentDoc && currentDoc.path) || state.activeNativePath || state.revealedPath || "";
       if (!path) return;
       const rect = els.wordDocFrame ? els.wordDocFrame.getBoundingClientRect() : { left: 0, top: 0 };
-      showFileContextMenu(rect.left + event.clientX, rect.top + event.clientY, { path, isDir: false, ext: extOfPath(path) });
+      showFileContextMenu(rect.left + event.clientX, rect.top + event.clientY, {
+        path,
+        isDir: false,
+        ext: extOfPath(path) || "DOCX",
+      });
     });
     doc.__launcherCtxForwarded = true;
   } catch (_) {}
@@ -6152,29 +6160,32 @@ window.showPdfViewerContextMenu = showPdfViewerContextMenu;
 
 if (els.excelViewer) {
   els.excelViewer.addEventListener("contextmenu", (event) => {
-    const wbPath = state.excelWorkbook?.path || "";
+    if (event.target.closest("input, select, textarea, .viewer-controls")) return;
+    const info = getActiveSourceInfo();
+    const wbPath = (info && info.path) || state.excelWorkbook?.path || state.activeNativePath || state.revealedPath || "";
     if (!wbPath) return;
     event.preventDefault();
     event.stopPropagation();
     showFileContextMenu(event.clientX, event.clientY, {
       path: wbPath,
       isDir: false,
-      ext: state.excelWorkbook?.extension || extOfPath(wbPath),
+      ext: state.excelWorkbook?.extension || extOfPath(wbPath) || "XLSX",
     });
   });
 }
 
 if (els.wordViewer) {
   els.wordViewer.addEventListener("contextmenu", (event) => {
-    if (event.target.closest("button, input, a, .excel-tabs, .excel-tabs-bar, .viewer-controls")) return;
-    const docPath = state.wordDoc?.path || state.activeNativePath || "";
+    if (event.target.closest("button:not(.excel-tab), input, select, textarea, .viewer-controls")) return;
+    const info = getActiveSourceInfo();
+    const docPath = (info && info.path) || state.wordDoc?.path || state.activeNativePath || state.revealedPath || "";
     if (!docPath) return;
     event.preventDefault();
     event.stopPropagation();
     showFileContextMenu(event.clientX, event.clientY, {
       path: docPath,
       isDir: false,
-      ext: extOfPath(docPath),
+      ext: extOfPath(docPath) || "DOCX",
     });
   });
 }
@@ -6957,6 +6968,14 @@ function showFileContextMenu(clientX, clientY, target) {
   const menu = els.contextMenu;
   if (!menu || !target) return;
 
+  if (!target.path) {
+    const info = getActiveSourceInfo();
+    target.path = (info && info.path) || state.activeNativePath || state.revealedPath || "";
+    if (!target.ext && target.path) {
+      target.ext = extOfPath(target.path);
+    }
+  }
+
   const isPdf = Boolean(target.isPdf);
   const pdfSelectedText = isPdf ? String(target.selectedText || "").trim() : "";
   const genericSelectedText = isPdf ? "" : (target.selectedText || window.getSelection()?.toString() || "").trim();
@@ -7113,13 +7132,24 @@ function showFileContextMenu(clientX, clientY, target) {
       b.append(hint);
     }
 
-    b.addEventListener("click", (event) => {
+    let actionFired = false;
+    const triggerAction = (event) => {
       event.stopPropagation();
+      event.preventDefault();
+      if (actionFired) return;
+      actionFired = true;
       if (!it.disabled && typeof it.run === "function") {
-        it.run();
+        try {
+          it.run();
+        } catch (err) {
+          console.error("[Launcher] Context menu action error:", err);
+        }
       }
       hideFileContextMenu();
-    });
+    };
+
+    b.addEventListener("pointerdown", triggerAction);
+    b.addEventListener("click", triggerAction);
     menu.append(b);
   }
 
@@ -7180,7 +7210,6 @@ function hookIframeContextMenuDismiss(iframe) {
         }
       }, true);
       iframe.contentWindow?.addEventListener("scroll", dismiss, true);
-      iframe.contentWindow?.addEventListener("blur", dismiss);
     } catch (_) {}
   };
   attach();

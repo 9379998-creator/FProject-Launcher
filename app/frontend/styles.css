@@ -1328,6 +1328,7 @@ textarea:focus {
   padding: 14px;
   user-select: none;
   background: #ffffff;
+  contain: layout style;
 }
 
 .pdf-stage img, .pdf-stage canvas {
@@ -1554,6 +1555,9 @@ textarea:focus {
   opacity: .92;
   transform: translateX(-50%);
   transition: opacity .12s ease;
+  isolation: isolate;
+  contain: paint;
+  backface-visibility: hidden;
 }
 
 .viewer-controls:hover {
