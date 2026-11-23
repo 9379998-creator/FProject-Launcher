@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+import csv
 import html as _html
+import io
 import json
 import time
 from collections import OrderedDict
@@ -306,7 +308,10 @@ def ensure_xls_rendered(xls_path: Path, cache_dir: Path) -> list[dict]:
             pass
 
     t0 = time.perf_counter()
-    book = xlrd.open_workbook(str(xls_path), on_demand=False)
+    try:
+        book = xlrd.open_workbook(str(xls_path), on_demand=False, encoding_override="cp1251")
+    except Exception:
+        book = xlrd.open_workbook(str(xls_path), on_demand=False)
     try:
         metas: list[dict] = []
         for i, name in enumerate(book.sheet_names()):
@@ -360,3 +365,98 @@ def ensure_xls_rendered(xls_path: Path, cache_dir: Path) -> list[dict]:
         return metas
     finally:
         book.release_resources()
+
+
+def ensure_csv_rendered(csv_path: Path, cache_dir: Path) -> list[dict]:
+    """Быстрый путь для текстовых таблиц (.csv) — ~1-5 мс, чистый Python без COM."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = cache_dir / f"workbook-{SHEET_VERSION}.json"
+    stat = csv_path.stat()
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if (manifest.get("sourceMtimeNs") == stat.st_mtime_ns
+                    and manifest.get("sourceSize") == stat.st_size
+                    and manifest.get("engine") == "csv"):
+                mp = cache_dir / f"sheet-1-{SHEET_VERSION}.json"
+                if mp.exists():
+                    return [json.loads(mp.read_text(encoding="utf-8"))]
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    t0 = time.perf_counter()
+    raw_bytes = csv_path.read_bytes()
+    # Автоопределение кодировки (UTF-8 / CP1251)
+    if raw_bytes[:3] == b"\xef\xbb\xbf":
+        text = raw_bytes[3:].decode("utf-8", errors="replace")
+    else:
+        try:
+            text = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw_bytes.decode("cp1251", errors="replace")
+
+    # Определение разделителя
+    sample = text[:4096]
+    delimiter = ";"
+    if sample:
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=";,\t|")
+            delimiter = dialect.delimiter
+        except Exception:
+            if ";" in sample:
+                delimiter = ";"
+            elif "," in sample:
+                delimiter = ","
+            elif "\t" in sample:
+                delimiter = "\t"
+
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+    all_rows = []
+    max_cols = 0
+    for r_idx, row in enumerate(reader):
+        if r_idx >= MAX_ROWS:
+            break
+        all_rows.append(row)
+        if len(row) > max_cols:
+            max_cols = len(row)
+
+    max_cols = min(max_cols, MAX_COLS)
+    name = csv_path.stem or "Данные"
+    rows = []
+    for r_idx, row in enumerate(all_rows):
+        cells = []
+        for c_idx in range(max_cols):
+            v = row[c_idx] if c_idx < len(row) else ""
+            style = ' style="font-weight:500"' if r_idx == 0 and v else ""
+            cells.append(f"<td{style}>{_html.escape(v)}</td>")
+        rows.append(f"<tr><th>{r_idx + 1}</th>{''.join(cells)}</tr>")
+
+    cols = '<col class="row-number">' + "".join('<col style="width:110px">' for _ in range(max_cols))
+    metadata = {
+        "name": name,
+        "rows": len(all_rows),
+        "firstRow": 1,
+        "columns": max_cols,
+        "limited": len(all_rows) >= MAX_ROWS,
+    }
+    notice = "Просмотр CSV таблицы" if not metadata["limited"] else f"Показаны первые {MAX_ROWS:,} строк."
+    page = render_sheet_page(
+        title=name, cols=cols, rows=rows,
+        table_width=38 + 110 * max_cols, notice=notice
+    )
+
+    (cache_dir / f"sheet-1-{SHEET_VERSION}.html").write_text(page, encoding="utf-8")
+    (cache_dir / f"sheet-1-{SHEET_VERSION}.json").write_text(
+        json.dumps(metadata, ensure_ascii=False), encoding="utf-8"
+    )
+
+    manifest_path.write_text(json.dumps({
+        "engine": "csv",
+        "sourcePath": str(csv_path),
+        "sourceMtimeNs": stat.st_mtime_ns,
+        "sourceSize": stat.st_size,
+        "sheets": 1,
+        "renderMs": round((time.perf_counter() - t0) * 1000, 1),
+    }, ensure_ascii=False), encoding="utf-8")
+
+    return [metadata]

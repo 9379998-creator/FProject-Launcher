@@ -131,6 +131,14 @@ def get_file_preview(path: str | Path, runtime_dir: Path | None = None,
             return {"type": "workbook", "name": src.name, "path": str(src),
                     "engine": "xlrd", "sheets": sheets, "cacheKey": key}
 
+        if ext == ".csv":
+            key = file_key(src, "csv-html")
+            cache_dir = root / "csv" / "html" / key
+            metas = engine_excel.ensure_csv_rendered(src, cache_dir)
+            sheets = [{"index": i, "name": m["name"], **m} for i, m in enumerate(metas)]
+            return {"type": "workbook", "name": src.name, "path": str(src),
+                    "engine": "csv", "sheets": sheets, "cacheKey": key}
+
         if ext == ".docx":
             key = file_key(src, "word-html")
             cache_dir = root / "word" / "html" / key

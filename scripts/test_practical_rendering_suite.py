@@ -130,7 +130,8 @@ TEST_FILES = [
         "label": "metrics.csv (Инженерные данные, 6 КБ)",
         "path": r"C:\Users\a9379\Desktop\1\_dwg_png_benchmark\trueview\metrics.csv",
         "pair_path": None,
-        "expected_type": "native_app",  # В Лаунчере CSV открывается в нативной табличной программе (Excel)
+        "expected_type": "workbook",  # CSV теперь нативно рендерится как таблица через ensure_csv_rendered
+        "check_sheet_html": True,
     },
     {
         "category": "Архив ZIP (Нативный формат)",

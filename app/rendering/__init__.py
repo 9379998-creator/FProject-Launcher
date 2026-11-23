@@ -25,7 +25,7 @@ GOLDEN_EXTENSIONS = frozenset({
     ".docx",
     ".html", ".htm",
     ".jpg", ".jpeg", ".png", ".gif",
-    ".txt", ".log",
+    ".txt", ".log", ".csv",
 })
 
 NATIVE_APP_EXTENSIONS = frozenset({

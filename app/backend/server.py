@@ -479,7 +479,7 @@ def is_word_file(path: Path) -> bool:
 def is_excel_file(path: Path) -> bool:
     if path.name.startswith("~$") or path.name.startswith(".~"):
         return False
-    return path.suffix.casefold() in {".xls", ".xlsx", ".xlsm"}
+    return path.suffix.casefold() in {".xls", ".xlsx", ".xlsm", ".csv"}
 
 
 _FITZ_RENDER_LOCK = threading.Lock()
@@ -2434,9 +2434,25 @@ def excel_sheet_preview(path: Path, sheet_index: int) -> dict:
         except (OSError, json.JSONDecodeError):
             metadata = None
     if metadata is None:
-        page, metadata = excel_sheet_html(path, sheet_index)
-        output.write_text(page, encoding="utf-8")
-        metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+        ext = path.suffix.casefold()
+        if ext == ".xls" and _engine_excel is not None and getattr(_engine_excel, "xlrd", None) is not None:
+            _engine_excel.ensure_xls_rendered(path, cache_dir)
+            if output.exists() and metadata_path.exists():
+                try:
+                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    metadata = None
+        elif ext == ".csv" and _engine_excel is not None and hasattr(_engine_excel, "ensure_csv_rendered"):
+            _engine_excel.ensure_csv_rendered(path, cache_dir)
+            if output.exists() and metadata_path.exists():
+                try:
+                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    metadata = None
+        if metadata is None:
+            page, metadata = excel_sheet_html(path, sheet_index)
+            output.write_text(page, encoding="utf-8")
+            metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
     return {
         "index": sheet_index,
         "url": f"/cache/excel/html/{cache_dir.name}/{output.name}",
@@ -2452,11 +2468,6 @@ def excel_thumbnail_preview(path: Path) -> str:
     it could therefore disagree with the readable sheet.  The card is now a
     scaled viewport of the cached HTML sheet used by the full viewer.
     """
-    if openpyxl is None:
-        raise RuntimeError("Для HTML-просмотра Excel нужен пакет openpyxl")
-    # The rail already places this page in a scaled, clipped iframe.  Returning
-    # the sheet directly means its geometry, fonts and initial position are
-    # exactly the same in the card and in the large viewer.
     return excel_sheet_preview(path, 0)["url"]
 
 
@@ -2467,6 +2478,43 @@ def excel_workbook_preview(path: Path) -> dict:
         raise ValueError(f"Временный файл блокировки Office: {path.name}")
     if not is_excel_file(path):
         raise ValueError(f"Это не Excel-файл: {path}")
+
+    ext = path.suffix.casefold()
+
+    # Быстрый путь для .xls через xlrd (чистый Python, без COM):
+    if ext == ".xls":
+        cache_dir = excel_html_cache_dir(path)
+        if _engine_excel is not None and getattr(_engine_excel, "xlrd", None) is not None:
+            metas = _engine_excel.ensure_xls_rendered(path, cache_dir)
+            sheets = [{"index": index, "name": m.get("name", f"Лист {index + 1}")} for index, m in enumerate(metas)]
+            thumbnail_url = f"/cache/excel/html/{cache_dir.name}/sheet-1-v10.html"
+            return {
+                "name": path.name,
+                "path": str(path),
+                "sheets": sheets,
+                "maxRows": MAX_XLSX_ROWS,
+                "cacheKey": cache_dir.name,
+                "thumbnailUrl": thumbnail_url,
+                "engine": "xlrd",
+            }
+
+    # Быстрый путь для .csv (чистый Python, без COM):
+    if ext == ".csv":
+        cache_dir = excel_html_cache_dir(path)
+        if _engine_excel is not None and hasattr(_engine_excel, "ensure_csv_rendered"):
+            metas = _engine_excel.ensure_csv_rendered(path, cache_dir)
+            sheets = [{"index": index, "name": m.get("name", "Данные")} for index, m in enumerate(metas)]
+            thumbnail_url = f"/cache/excel/html/{cache_dir.name}/sheet-1-v10.html"
+            return {
+                "name": path.name,
+                "path": str(path),
+                "sheets": sheets,
+                "maxRows": MAX_XLSX_ROWS,
+                "cacheKey": cache_dir.name,
+                "thumbnailUrl": thumbnail_url,
+                "engine": "csv",
+            }
+
     if openpyxl is None:
         raise RuntimeError("Для HTML-просмотра Excel нужен пакет openpyxl")
 
