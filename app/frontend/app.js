@@ -3181,7 +3181,7 @@ async function activateExcelWorkbook(index) {
   els.excelViewer.hidden = false;
   if (els.wordViewer) els.wordViewer.hidden = true;
   if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
-  els.viewerControls.hidden = false;
+  els.viewerControls.hidden = state.viewMode !== "full";
   if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
   updateViewerToolButton(state.view.panMode ? 1 : 0);
   setActiveNativePath(workbook.path);
@@ -3331,7 +3331,7 @@ async function activateWordDocument(index) {
 
   if (els.excelViewer) els.excelViewer.hidden = true;
   els.wordViewer.hidden = false;
-  els.viewerControls.hidden = false;
+  els.viewerControls.hidden = state.viewMode !== "full";
   if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
   updateViewerToolButton(state.view.panMode ? 1 : 0);
   setActiveNativePath(docItem.path);
@@ -3428,7 +3428,7 @@ async function activateHtmlDocument(index) {
   }
 
   if (els.htmlViewer) els.htmlViewer.hidden = false;
-  if (els.viewerControls) els.viewerControls.hidden = false;
+  if (els.viewerControls) els.viewerControls.hidden = state.viewMode !== "full";
   if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
   if (els.viewPrevPage) els.viewPrevPage.hidden = true;
   if (els.viewNextPage) els.viewNextPage.hidden = true;
@@ -3876,7 +3876,7 @@ function updatePagePosition(page, currentDpiInfo = null) {
 
 function setActiveNativePath(path) {
   state.activeNativePath = path || "";
-  if (els.viewerControls && state.activeNativePath) els.viewerControls.hidden = false;
+  if (els.viewerControls && state.activeNativePath) els.viewerControls.hidden = state.viewMode !== "full";
 }
 
 function thumbPathForPage(page) {
@@ -4196,7 +4196,7 @@ function showPdfPage(page, options = {}) {
     if (canvas) canvas.hidden = true;
     els.viewerEmpty.hidden = true;
     els.pdfViewer.classList.remove("empty");
-    els.viewerControls.hidden = false;
+    els.viewerControls.hidden = state.viewMode !== "full";
     updateActivePdfThumb();
     els.pdfPageImage.onload = () => {
       applyPageView();
@@ -4253,7 +4253,7 @@ function showPdfPage(page, options = {}) {
     if (canvas) canvas.hidden = true;
     els.viewerEmpty.hidden = true;
     els.pdfViewer.classList.remove("empty");
-    els.viewerControls.hidden = false;
+    els.viewerControls.hidden = state.viewMode !== "full";
     updateActivePdfThumb();
     updatePagePosition(null);
     showTxtContent(sourcePath);
@@ -4279,7 +4279,7 @@ function showPdfPage(page, options = {}) {
     if (canvas) canvas.hidden = true;
     els.viewerEmpty.hidden = true;
     els.pdfViewer.classList.remove("empty");
-    els.viewerControls.hidden = false;
+    els.viewerControls.hidden = state.viewMode !== "full";
     updateActivePdfThumb();
     updatePagePosition(null);
 
@@ -4354,7 +4354,7 @@ function showPdfPage(page, options = {}) {
     }
 
     els.pdfViewer.classList.remove("empty");
-    els.viewerControls.hidden = false;
+    els.viewerControls.hidden = state.viewMode !== "full";
     updateActivePdfThumb();
     updatePagePosition(null);
     return;
@@ -4387,7 +4387,7 @@ function showPdfPage(page, options = {}) {
     if (canvas) canvas.hidden = true;
     els.viewerEmpty.hidden = true;
     els.pdfViewer.classList.remove("empty");
-    els.viewerControls.hidden = false;
+    els.viewerControls.hidden = state.viewMode !== "full";
     if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
 
     setActiveNativePath(targetDocPath);
@@ -4442,7 +4442,7 @@ function showPdfPage(page, options = {}) {
   if (canvas) canvas.hidden = true;
   els.viewerEmpty.hidden = true;
   els.pdfViewer.classList.remove("empty");
-  els.viewerControls.hidden = false;
+  els.viewerControls.hidden = state.viewMode !== "full";
   if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
   updateViewerToolButton(state.view.panMode ? 1 : 0);
 
@@ -4692,7 +4692,7 @@ function setStageActive(active) {
   const isAct = Boolean(active);
   if (els.pdfViewer) els.pdfViewer.classList.toggle("stage-active", isAct);
   if (els.pdfStage) els.pdfStage.classList.toggle("active-stage", isAct);
-  const showControls = state.viewMode === "full" || isAct;
+  const showControls = state.viewMode === "full";
   if (els.viewerControls) els.viewerControls.hidden = !showControls;
   updateObjectButtons();
   if (isAct) {
@@ -4714,7 +4714,7 @@ function setViewerMode(mode) {
     if (els.viewerControls) els.viewerControls.hidden = true;
   }
   updateObjectButtons();
-  const showControls = mode === "full" || els.pdfViewer?.classList.contains("stage-active");
+  const showControls = mode === "full";
   if (els.viewerControls) els.viewerControls.hidden = !showControls;
   const hasMultiplePages = (state.renderedPages?.length || 0) > 1 || (Number(state.renderedPages?.[0]?.totalPages) || 0) > 1;
   if (els.viewPrevPage) els.viewPrevPage.hidden = !hasMultiplePages;
