@@ -1393,7 +1393,18 @@ function nodeMatches(node, visiting = new Set()) {
   }
   visiting.add(node);
 
-  const value = `${node.name} ${node.extension || ""} ${node.path || ""}`.toLocaleLowerCase("ru");
+  const isRoot = (node === state.currentManifest?.tree);
+  const rootPath = state.currentManifest?.tree?.path || state.currentManifest?.root || "";
+  let relPath = "";
+  if (node.path && rootPath && node.path.startsWith(rootPath) && node.path !== rootPath) {
+    relPath = node.path.slice(rootPath.length).replace(/^[\\\/]+/, "");
+  }
+
+  // Для поиска используем имя, расширение и относительный путь внутри проекта,
+  // исключая имя корневой папки проекта (чтобы «фасады_разрезы» не выбирали все файлы подряд)
+  const value = isRoot
+    ? (node.name || "").toLocaleLowerCase("ru")
+    : `${node.name} ${node.extension || ""} ${relPath}`.toLocaleLowerCase("ru");
   const searchOk = !query || value.includes(query);
   const formatOk = !hasFormatFilter || node.type === "folder" || state.activeFilters.has(node.extension);
   if (node.type === "file") {
@@ -1408,15 +1419,15 @@ function nodeMatches(node, visiting = new Set()) {
     return res;
   }
 
-  // Для папок: если имя совпало с поиском (и нет фильтра расширений), сразу подходит
-  if (!state.diffFilter && searchOk && !hasFormatFilter) {
+  // Для папок: если имя не корневой папки совпало с поиском (и нет фильтра расширений), сразу подходит
+  if (!isRoot && !state.diffFilter && searchOk && !hasFormatFilter) {
     if (nodeMatchCache) nodeMatchCache.set(node, true);
     visiting.delete(node);
     return true;
   }
 
   const childMatch = (node.children || []).some((child) => nodeMatches(child, visiting));
-  const res = state.diffFilter ? childMatch : (childMatch || searchOk);
+  const res = state.diffFilter ? childMatch : (isRoot ? childMatch : (childMatch || searchOk));
   if (nodeMatchCache) nodeMatchCache.set(node, res);
   visiting.delete(node);
   return res;
