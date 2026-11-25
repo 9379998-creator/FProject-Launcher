@@ -2274,6 +2274,11 @@ function updateTreeFilterSummary() {
 function collapseAllFolders() {
   state.collapsedFolders.clear();
   if (!state.currentManifest?.tree) return;
+  const totalFiles = state.currentManifest?.statistics?.files || 0;
+  // Если файлов в объекте немного (до 150), оставляем структуру раскрытой,
+  // чтобы пользователь сразу видел всё дерево папок и файлы без лишних кликов.
+  if (totalFiles <= 150) return;
+
   const stack = [state.currentManifest.tree];
   const seen = new Set();
   while (stack.length) {
@@ -2331,9 +2336,7 @@ function renderTreeNode(rootNode, rootParent) {
 
     const iconEl = document.createElement("span");
     iconEl.className = "tree-icon";
-    if (node === state.currentManifest?.tree) {
-      iconEl.innerHTML = `<svg viewBox="0 0 16 16" width="15" height="15"><path fill="#ffffff" stroke="#718096" stroke-width="0.9" d="M3 1.5A1.5 1.5 0 0 1 4.5 0h6l4 4v10.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 3 14.5v-13z"/><path fill="#3b82f6" d="M5 6h6v1.2H5zm0 3h6v1.2H5zm0 3h4v1.2H5z"/></svg>`;
-    } else if (node.type === "folder") {
+    if (node.type === "folder") {
       iconEl.innerHTML = FOLDER_ICON_SVG;
     } else {
       iconEl.innerHTML = getFileIconSvg(node.extension);
