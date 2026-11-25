@@ -63,7 +63,7 @@ def _backend_python() -> str:
 BACKEND = _resource_path("app", "backend", "server.py")
 ICON = _resource_path("app", "frontend", "assets", "flauncher.ico")
 EMBEDDED_PYTHON = os.path.join(REPO_ROOT, "runtime", "python", "pythonw.exe")
-TITLE = "F-Engineering Launcher"
+TITLE = "Fero-Launcher"
 GUI_MUTEX_PORT = 8799
 LOGS_DIR = os.path.join(REPO_ROOT, "runtime", "logs")
 

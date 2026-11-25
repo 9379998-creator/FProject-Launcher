@@ -4957,7 +4957,7 @@ class SingleInstanceHTTPServer(ThreadingHTTPServer):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run F-Engineering Launcher v3 local server.")
+    parser = argparse.ArgumentParser(description="Run Fero-Launcher local server.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8780)
     args = parser.parse_args()
@@ -4991,7 +4991,7 @@ def main() -> None:
             print(f"ERROR: Port {args.port} is already in use by another process: {err}", file=sys.stderr, flush=True)
             sys.exit(48)
         raise
-    print(f"F-Engineering Launcher v3: http://{args.host}:{args.port}/", flush=True)
+    print(f"Fero-Launcher: http://{args.host}:{args.port}/", flush=True)
     start_server_idle_watchdog()
     server.serve_forever()
 

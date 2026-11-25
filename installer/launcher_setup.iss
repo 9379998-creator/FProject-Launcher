@@ -1,15 +1,15 @@
-; F-Engineering Launcher v4.4 — Скрипт инсталлятора (Inno Setup 6).
-; Инженерное бюро ООО «ФЕРО»
+; Fero-Launcher v4.5.0 — Скрипт инсталлятора (Inno Setup 6).
+; Лейбл FERO / Fero Engineering
 ; Кодировка: UTF-8 with BOM
 
 [Setup]
-AppName=F-Engineering Launcher
-AppVersion=4.4.0
+AppName=Fero-Launcher
+AppVersion=4.5.0
 AppPublisher=ООО "ФЕРО"
 AppPublisherURL=https://ferospb.info
-DefaultDirName={localappdata}\FEngineering_Launcher
-DefaultGroupName=F-Engineering Launcher
-OutputBaseFilename=FEngineering_Launcher_v4_Setup
+DefaultDirName={localappdata}\Fero_Launcher
+DefaultGroupName=Fero-Launcher
+OutputBaseFilename=Fero_Launcher_v4.5.0_Setup
 OutputDir=..\dist_setup
 SetupIconFile=..\app\frontend\assets\flauncher.ico
 UninstallDisplayIcon={app}\FEngineeringLauncher.exe
@@ -30,7 +30,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; Полное содержимое автономного дистрибутива
-Source: "C:\Users\a9379\.gemini\antigravity\scratch\dist_colleague\FEngineering_Launcher_v4\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "C:\Users\a9379\.gemini\antigravity\scratch\dist_colleague\Fero_Launcher_v4\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Dirs]
 Name: "{app}\runtime\cache"
@@ -39,12 +39,12 @@ Name: "{app}\runtime\manifests"
 Name: "{app}\runtime\db"
 
 [Icons]
-Name: "{group}\F-Engineering Launcher"; Filename: "{app}\FEngineeringLauncher.exe"
-Name: "{group}\Удалить F-Engineering Launcher"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\F-Engineering Launcher"; Filename: "{app}\FEngineeringLauncher.exe"; Tasks: desktopicon
+Name: "{group}\Fero-Launcher"; Filename: "{app}\FEngineeringLauncher.exe"
+Name: "{group}\Удалить Fero-Launcher"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\Fero Launcher"; Filename: "{app}\FEngineeringLauncher.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\FEngineeringLauncher.exe"; Description: "{cm:LaunchProgram,F-Engineering Launcher}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\FEngineeringLauncher.exe"; Description: "{cm:LaunchProgram,Fero-Launcher}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 function InitializeSetup(): Boolean;

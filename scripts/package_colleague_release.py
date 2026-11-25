@@ -6,10 +6,10 @@ from pathlib import Path
 REPO_ROOT = Path(r"C:\Users\a9379\.gemini\antigravity\scratch\FProject-Launcher")
 INSTALLED_APP = Path(r"C:\Users\a9379\AppData\Local\FEngineering_Launcher")
 BUILD_DIR = Path(r"C:\Users\a9379\.gemini\antigravity\scratch\dist_colleague")
-TARGET_FOLDER = BUILD_DIR / "FEngineering_Launcher_v4"
-ZIP_OUTPUT = BUILD_DIR / "FEngineering_Launcher_v4_Portable.zip"
+TARGET_FOLDER = BUILD_DIR / "Fero_Launcher_v4"
+ZIP_OUTPUT = BUILD_DIR / "Fero_Launcher_v4.5.0_Portable.zip"
 
-print(f"[*] Сборка портативного релиза F-Engineering Launcher v4.4.0...")
+print(f"[*] Сборка портативного релиза Fero-Launcher v4.5.0...")
 print(f"[*] Репозиторий: {REPO_ROOT}")
 print(f"[*] Среда выполнения: {INSTALLED_APP}")
 
@@ -69,12 +69,12 @@ set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 
 echo ========================================================================
-echo    F-Engineering Launcher v4.4 — Инженерное бюро ООО «ФЕРО»
+echo    Fero-Launcher v4.5.0 — Лейбл FERO (Fero Engineering)
 echo ========================================================================
 echo.
 
 if exist "%~dp0FEngineeringLauncher.exe" (
-    echo [OK] Запуск FEngineeringLauncher.exe...
+    echo [OK] Запуск Fero-Launcher...
     start "" "%~dp0FEngineeringLauncher.exe"
     exit /b 0
 )
@@ -112,12 +112,12 @@ setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
 
-echo Создание ярлыка F-Engineering Launcher на Рабочем столе...
+echo Создание ярлыка Fero Launcher на Рабочем столе...
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$ws = New-Object -ComObject WScript.Shell; " ^
     "$desktop = [Environment]::GetFolderPath('Desktop'); " ^
-    "$shortcutPath = [System.IO.Path]::Combine($desktop, 'F-Engineering Launcher.lnk'); " ^
+    "$shortcutPath = [System.IO.Path]::Combine($desktop, 'Fero Launcher.lnk'); " ^
     "$s = $ws.CreateShortcut($shortcutPath); " ^
     "if (Test-Path '%~dp0FEngineeringLauncher.exe') { " ^
     "    $s.TargetPath = '%~dp0FEngineeringLauncher.exe'; " ^
@@ -125,7 +125,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "    $s.TargetPath = '%~dp0Запуск_Лаунчера.bat'; " ^
     "} " ^
     "$s.WorkingDirectory = '%~dp0'; " ^
-    "$s.Description = 'F-Engineering Launcher v4.4 — Инженерное бюро ООО ФЕРО'; " ^
+    "$s.Description = 'Fero-Launcher v4.5.0 — Fero Engineering'; " ^
     "if (Test-Path '%~dp0app\\frontend\\assets\\flauncher.ico') { " ^
     "    $s.IconLocation = '%~dp0app\\frontend\\assets\\flauncher.ico,0'; " ^
     "} " ^
@@ -140,31 +140,32 @@ endlocal
 
 # 6. Инструкция для коллеги
 instruction_content = """========================================================================
-   F-Engineering Launcher v4.4 — ООО «ФЕРО» (Инженерное бюро)
+   Fero-Launcher v4.5.0 — FERO (Fero Engineering)
    Инженерный вьювер и диспетчер рабочей проектной документации
-   Релиз от 10 ноября 2026 г. (Стабильная поддержка DWG)
+   Релиз от 25 ноября 2026 г.
 ========================================================================
 
 ИНСТРУКЦИЯ ПО ЗАПУСКУ ДЛЯ СОТРУДНИКОВ:
 
 1. БЫСТРЫЙ ЗАПУСК:
-   • Распакуйте архив в любую удобную папку на вашем компьютере (например: C:\\FEngineering_Launcher).
+   • Распакуйте архив в любую удобную папку на вашем компьютере (например: C:\\Fero_Launcher).
    • Запустите файл «Запуск_Лаунчера.bat» (или дважды кликните на «FEngineeringLauncher.exe»).
    • Программа запустится сразу. Установка Python, системных драйверов и прав администратора НЕ ТРЕБУЕТСЯ (все библиотеки, движки и автономный Poppler уже встроены).
 
 2. СОЗДАНИЕ ЯРЛЫКА НА РАБОЧЕМ СТОЛЕ:
    • Запустите файл «Создать_ярлык_на_Рабочем_столе.bat».
-   • На вашем Рабочем столе появится фирменный значок FERO для запуска в 1 клик.
+   • На вашем Рабочем столе появится фирменный значок Fero Launcher для запуска в 1 клик.
 
-3. КЛЮЧЕВЫЕ ВОЗМОЖНОСТИ РЕЛИЗА 4.4:
-   • Полноценный и устойчивый просмотр чертежей DWG (любой сложности и объема):
-     - Мгновенный отклик и плавное листание многостраничных альбомов без запуска тяжелого AutoCAD.
-     - Защита от зависаний и сбоев: оптимизированный экспорт без раздувания шрифтовых аннотаций SHX.
-     - Плавающая панель прогресса: окно статуса теперь можно свободно перемещать мышью по экрану за шапку и сворачивать кнопкой «−», чтобы оно не закрывало чертеж.
-   • Мгновенная каталогизация и навигация по проектным папкам объектов (PDF, DWG, DXF, XLSX, DOCX).
-   • Высокоскоростной просмотр векторных PDF (DPI 72/150/300) с панорамированием, масштабированием и разворотом.
-   • Автономный просмотр таблиц Excel и документов Word без открытия Microsoft Office.
-   • Формирование Инженерного паспорта объекта с декомпозицией разделов АР/КМ.
+3. НОВЫЕ ВОЗМОЖНОСТИ РЕЛИЗА 4.5.0:
+   • Многооконный режим (Multi-Window):
+     - Открытие независимых окон для одновременного сравнения чертежей через кнопку «🗗 В новом окне», сочетание клавиш Ctrl+N или контекстное меню.
+     - Единый сервер-демон на порту 8780: отсутствие конфликтов портов и экономное потребление памяти.
+   • Адаптивное раскрытие дерева папок (Adaptive Tree Expansion):
+     - Для рабочих выборок и комплектов (до 150 файлов) папки чертежей открываются сразу полностью развернутыми.
+     - Корректная фирменная иконка жёлтой папки для корня и разделов.
+   • Интерактивная «Лапа» (Pan Hand Tool):
+     - Плавное перетаскивание больших чертежей мышью без залипания курсора.
+   • Быстрый просмотр DWG, PDF (72/150/300 DPI), таблиц Excel и документов Word.
 
 4. ТЕХНИЧЕСКИЕ ТРЕБОВАНИЯ:
    • ОС: Windows 10 / 11 (64-bit).
@@ -190,25 +191,13 @@ with zipfile.ZipFile(ZIP_OUTPUT, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as 
 zip_mb = round(ZIP_OUTPUT.stat().st_size / (1024 * 1024), 1)
 print(f"[OK] Сборка завершена! Упаковано файлов: {file_count}, размер ZIP: {zip_mb} МБ ({ZIP_OUTPUT.stat().st_size:,} байт)")
 
-# 8. Деплой в папку Documents и на Google Диск
-print("\n[7] Деплой релизных пакетов...")
-
-# А. Локальная папка для быстрой пересылки
-DOCS_RELEASE = Path(r"C:\Users\a9379\Documents\FERO_Launcher_v4_Release")
-DOCS_RELEASE.mkdir(parents=True, exist_ok=True)
-shutil.copy2(ZIP_OUTPUT, DOCS_RELEASE / "FEngineering_Launcher_v4_Portable.zip")
-shutil.copy2(TARGET_FOLDER / "Запуск_Лаунчера.bat", DOCS_RELEASE / "Запуск_Лаунчера.bat")
-shutil.copy2(TARGET_FOLDER / "Создать_ярлык_на_Рабочем_столе.bat", DOCS_RELEASE / "Создать_ярлык_на_Рабочем_столе.bat")
-shutil.copy2(TARGET_FOLDER / "ИНСТРУКЦИЯ_ДЛЯ_КОЛЛЕГИ.txt", DOCS_RELEASE / "ИНСТРУКЦИЯ_ДЛЯ_КОЛЛЕГИ.txt")
-print(f"[OK] Скопировано в локальную папку: {DOCS_RELEASE}")
-
-# Б. Корпоративный Google Диск
-GDRIVE_DIR = Path(r"G:\Общие диски\022_F-Engineering\01_Launcher")
+# 8. Деплой на корпоративный Google Диск (01_FERO-Launcher)
+print("\n[7] Деплой релизных пакетов на Google Диск...")
+GDRIVE_DIR = Path(r"G:\Общие диски\022_F-Engineering\01_FERO-Launcher")
 if GDRIVE_DIR.exists():
-    shutil.copy2(ZIP_OUTPUT, GDRIVE_DIR / "FEngineering_Launcher_v4_Portable.zip")
-    shutil.copy2(TARGET_FOLDER / "Запуск_Лаунчера.bat", GDRIVE_DIR / "Запуск_Лаунчера.bat")
-    shutil.copy2(TARGET_FOLDER / "Создать_ярлык_на_Рабочем_столе.bat", GDRIVE_DIR / "Создать_ярлык_на_Рабочем_столе.bat")
-    shutil.copy2(TARGET_FOLDER / "ИНСТРУКЦИЯ_ДЛЯ_КОЛЛЕГИ.txt", GDRIVE_DIR / "ИНСТРУКЦИЯ_ДЛЯ_КОЛЛЕГИ.txt")
+    shutil.copy2(ZIP_OUTPUT, GDRIVE_DIR / "Fero_Launcher_v4.5.0_Portable.zip")
+    shutil.copy2(ZIP_OUTPUT, GDRIVE_DIR / "Fero_Launcher_Portable.zip")
+    shutil.copy2(TARGET_FOLDER / "ИНСТРУКЦИЯ_ДЛЯ_КОЛЛЕГИ.txt", GDRIVE_DIR / "README_FERO_LAUNCHER.txt")
     print(f"[OK] Скопировано на Google Диск: {GDRIVE_DIR}")
 else:
     print(f"[!] Предупреждение: Google Диск {GDRIVE_DIR} не доступен.")

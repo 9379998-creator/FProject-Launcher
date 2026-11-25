@@ -1,8 +1,10 @@
 {
-  "name": "FProject Launcher",
+  "name": "Fero-Launcher",
+  "brand": "Fero",
   "version": "4.5.0",
   "build_date": "2026-11-25",
   "git_branch": "main",
   "runtime_version": "1.0",
-  "app_title": "F-Engineering Launcher"
+  "app_title": "Fero-Launcher",
+  "repository": "https://github.com/9379998-creator/Fero-Launcher"
 }

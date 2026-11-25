@@ -6988,7 +6988,7 @@ document.getElementById("menuView")?.addEventListener("click", () => {
   if (els.scaleResetBtn) els.scaleResetBtn.click();
 });
 document.getElementById("menuHelp")?.addEventListener("click", () => {
-  showToast("FProject Launcher — Справка");
+  showToast("Fero-Launcher — Справка");
   if (inTreeMode()) {
     stopDiffPolling();
     setMode("objects");
@@ -7708,7 +7708,7 @@ loadAppSettings().catch(() => {});
 // Если заголовок без версии — окно старое, его надо закрыть и открыть заново.
 try {
   const vm = String((typeof document !== "undefined" && document.currentScript && document.currentScript.src) || "").match(/[?&]v=([^&]+)/);
-  if (vm) document.title = `FProject Launcher · ${decodeURIComponent(vm[1])}`;
+  if (vm) document.title = `Fero-Launcher · ${decodeURIComponent(vm[1])}`;
 } catch (e) {}
 
 
