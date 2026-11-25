@@ -1604,6 +1604,14 @@ textarea:focus {
   transition: all 0.15s ease;
 }
 
+#viewOpenNewWindow {
+  font-weight: 600;
+  min-width: 95px;
+  font-size: 11px;
+  letter-spacing: 0.2px;
+  transition: all 0.15s ease;
+}
+
 .view-tool-btn {
   font-weight: 600;
   min-width: 82px;

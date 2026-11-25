@@ -139,6 +139,7 @@ const els = {
   viewNextPage: document.getElementById("viewNextPage"),
   viewToggleToc: document.getElementById("viewToggleToc"),
   viewCopyLink: document.getElementById("viewCopyLink"),
+  viewOpenNewWindow: document.getElementById("viewOpenNewWindow"),
   pdfTocDrawer: document.getElementById("pdfTocDrawer"),
   pdfTocSearch: document.getElementById("pdfTocSearch"),
   pdfTocClose: document.getElementById("pdfTocClose"),
@@ -6088,6 +6089,48 @@ if (els.viewCopyLink) { els.viewCopyLink.style.display = "none";
   });
 }
 
+// Открытие текущего или выбранного чертежа в отдельном окне лаунчера (Multi-Window)
+async function openInNewWindow(filePath, pageNum) {
+  let targetPath = filePath;
+  if (!targetPath) {
+    const info = getActiveSourceInfo();
+    targetPath = (info && info.path) || state.activeNativePath || state.revealedPath || "";
+  }
+  const objId = state.selectedObjectId || "";
+  let page = pageNum;
+  if (!page) {
+    const activePage = (state.renderedPages || []).find((p) => {
+      try { return pageKey(p) === state.activePageKey; } catch (_) { return false; }
+    });
+    page = activePage?.page || 1;
+  }
+  try {
+    const res = await fetch("/api/open-window", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        objectId: objId,
+        path: targetPath,
+        page: String(page || 1),
+      }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast("Открыто новое окно лаунчера");
+    } else {
+      showToast("Ошибка открытия окна: " + (data.error || "неизвестная ошибка"));
+    }
+  } catch (err) {
+    showToast("Ошибка связи с сервером при открытии окна: " + err.message);
+  }
+}
+
+if (els.viewOpenNewWindow) {
+  els.viewOpenNewWindow.addEventListener("click", () => {
+    openInNewWindow();
+  });
+}
+
 // Блокируем масштабирование всего окна браузера (Ctrl + / Ctrl - / Ctrl + wheel в пустых местах),
 // чтобы каркас окон, рамки и разметка никогда не «плыли»
 window.addEventListener("wheel", (event) => {
@@ -6506,6 +6549,11 @@ function stepThumbnails(delta) {
 }
 
 window.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && (event.key === "n" || event.key === "N" || event.key === "т" || event.key === "Т" || event.code === "KeyN")) {
+    event.preventDefault();
+    openInNewWindow();
+    return;
+  }
   if ((event.ctrlKey || event.metaKey) && (event.key === "f" || event.key === "F" || event.key === "а" || event.key === "А")) {
     if (els.pdfDocViewer && !els.pdfDocViewer.hidden) {
       event.preventDefault();
@@ -6834,10 +6882,97 @@ function checkUpdates() {
       }
     }).catch(() => {});
 }
+// --- Multi-Window Heartbeat & Deep Linking ---
+const CLIENT_WINDOW_ID = "win_" + Math.random().toString(36).slice(2, 10) + "_" + Date.now();
+
+function startHeartbeatLoop() {
+  const sendBeat = () => {
+    fetch("/api/heartbeat?id=" + encodeURIComponent(CLIENT_WINDOW_ID)).catch(() => {});
+  };
+  sendBeat();
+  setInterval(sendBeat, 5000);
+
+  window.addEventListener("pagehide", () => {
+    try {
+      const data = JSON.stringify({ id: CLIENT_WINDOW_ID });
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon("/api/heartbeat/close", new Blob([data], { type: "application/json" }));
+      } else {
+        fetch("/api/heartbeat/close", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: data,
+          keepalive: true,
+        }).catch(() => {});
+      }
+    } catch (_) {}
+  });
+}
+
+async function handleInitialDeepLink() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const targetObjId = urlParams.get("object");
+  const targetPath = urlParams.get("path");
+  const targetPage = parseInt(urlParams.get("page") || "1", 10);
+
+  if (!targetObjId && !targetPath) return;
+
+  // 1. Поиск объекта
+  let matchedObj = null;
+  if (targetObjId) {
+    matchedObj = state.objects.find((o) => o.id === targetObjId);
+  }
+  if (!matchedObj && targetPath) {
+    const normTarget = targetPath.replace(/\//g, "\\").toLowerCase();
+    matchedObj = state.objects.find((o) => {
+      const normRoot = (o.rootPath || "").replace(/\//g, "\\").toLowerCase();
+      return normRoot && normTarget.startsWith(normRoot);
+    });
+  }
+  if (!matchedObj && state.objects.length > 0) {
+    matchedObj = state.objects[0];
+  }
+  if (!matchedObj) return;
+
+  // 2. Открытие структуры объекта
+  state.selectedObjectId = matchedObj.id;
+  updateObjectListSelection();
+  updateObjectButtons();
+  updateObjectStats();
+  await openSelectedObject();
+
+  // 3. Открытие конкретного чертежа в крупном окне (Окно 3)
+  if (targetPath) {
+    const normTarget = targetPath.replace(/\//g, "\\").toLowerCase();
+    const allNodes = getCachedFlatNodes();
+    const matchedNode = allNodes.find((n) => {
+      const normNode = (n.path || "").replace(/\//g, "\\").toLowerCase();
+      return normNode === normTarget;
+    });
+
+    if (matchedNode) {
+      state.selectedPaths.clear();
+      state.selectedPaths.add(matchedNode.path);
+      updateTreeSelectionHighlight();
+      await previewFileDirectly(matchedNode, { fullView: true });
+
+      if (targetPage > 1 && state.renderedPages?.length) {
+        const pageObj = state.renderedPages.find((p) => p.page === targetPage);
+        if (pageObj) {
+          showPdfPage(pageObj, { skipTreeScroll: true });
+        }
+      }
+    }
+  }
+}
+
+startHeartbeatLoop();
 setTimeout(checkUpdates, 3000);
-loadObjectSummaries().catch((error) => {
-  els.objectList.innerHTML = `<div class="empty-note">Ошибка загрузки списка: ${error.message}</div>`;
-});
+loadObjectSummaries()
+  .then(() => handleInitialDeepLink())
+  .catch((error) => {
+    els.objectList.innerHTML = `<div class="empty-note">Ошибка загрузки списка: ${error.message}</div>`;
+  });
 
 // Меню действий в шапке
 document.getElementById("menuFile")?.addEventListener("click", () => els.load.click());
@@ -7106,6 +7241,13 @@ function showFileContextMenu(clientX, clientY, target) {
       label: "\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u0432 \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u0435 \u043F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E",
       hint: "",
       run: () => openFileByPath(target.path, "native"),
+    });
+
+    items.push({
+      icon: "🗗",
+      label: "Открыть в новом окне",
+      hint: "Ctrl+N",
+      run: () => openInNewWindow(target.path, target.page),
     });
   }
 

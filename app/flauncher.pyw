@@ -487,9 +487,11 @@ def wait_for_objects_ready(base_url: str, timeout_seconds: float) -> tuple[bool,
     """
     deadline = time.time() + max(0.1, timeout_seconds)
     last_error = "not attempted"
+    parsed_base = urllib.parse.urlsplit(base_url)
+    api_objects_url = f"{parsed_base.scheme}://{parsed_base.netloc}/api/objects"
     while True:
         try:
-            data = fetch_json(base_url + "api/objects", timeout=5)
+            data = fetch_json(api_objects_url, timeout=5)
             if isinstance(data, dict):
                 return True, f"objects ready ({len(data.get('items', []))} items)"
             last_error = "unexpected payload (not a JSON object)"
@@ -561,75 +563,93 @@ def open_browser_window(url: str) -> None:
     webbrowser.open(url)
 
 
-def main():
-    readiness_deadline = time.time() + READINESS_TIMEOUT_SECONDS
-    mutex = None
+def count_other_active_gui_windows() -> int:
+    """Подсчёт количества других работающих процессов окон лаунчера."""
+    my_pid = os.getpid()
+    count = 0
     try:
-        mutex = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        mutex.bind(("127.0.0.1", GUI_MUTEX_PORT))
-        if os.name == "nt":
+        import psutil
+        for p in psutil.process_iter(["pid", "name", "cmdline"]):
             try:
-                os.set_inheritable(mutex.fileno(), False)
-                ctypes.windll.kernel32.SetHandleInformation(
-                    int(mutex.fileno()), 1, 0  # HANDLE_FLAG_INHERIT = 1, 0 = disable inheritance
-                )
+                if p.pid == my_pid:
+                    continue
+                name = (p.info.get("name") or "").lower()
+                cmdline = " ".join(p.info.get("cmdline") or []).lower()
+                if ("fengineeringlauncher" in name or "flauncher" in cmdline) and "--backend-server" not in cmdline and "server.py" not in cmdline:
+                    if p.is_running():
+                        count += 1
             except Exception:
                 pass
-    except OSError:
-        # Проверяем, действительно ли живо окно лаунчера
-        try:
-            if focus_existing_window():
-                log("Focused existing window, exiting duplicate process")
-                return
-            else:
-                log("Mutex busy and existing window could not be focused; checking for stale lock...")
-                # Если окно не найдено — старый процесс завис или зомби.
-                # Принудительно убиваем зависшие процессы, удерживающие GUI_MUTEX_PORT (8799)
-                stale_pids = get_pids_on_port(GUI_MUTEX_PORT)
-                for pid in stale_pids:
-                    try:
-                        log(f"Killing stale mutex holder pid {pid} on port {GUI_MUTEX_PORT}")
-                        kill_process_tree_silent(int(pid))
-                    except Exception:
-                        pass
-                # Ждем до 2.0 секунд освобождения сокета после завершения процесса
-                wait_deadline = time.time() + 2.0
-                rebound = False
-                while time.time() < wait_deadline:
-                    try:
-                        mutex = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        mutex.bind(("127.0.0.1", GUI_MUTEX_PORT))
-                        if os.name == "nt":
-                            try:
-                                os.set_inheritable(mutex.fileno(), False)
-                                ctypes.windll.kernel32.SetHandleInformation(
-                                    int(mutex.fileno()), 1, 0
-                                )
-                            except Exception:
-                                pass
-                        log("Successfully rebound GUI mutex port after reaping stale holder")
-                        rebound = True
-                        break
-                    except OSError:
-                        time.sleep(0.3)
-                if not rebound:
-                    log("Mutex port still busy after reaping attempt, exiting")
-                    return
-        except Exception as e:
-            log(f"Mutex recovery failed: {e}")
-            return
+    except Exception:
+        pass
+    return count
+
+
+def check_rapid_duplicate_launch(open_path: str, object_id: str) -> bool:
+    """Защита от случайного быстрого даблклика по ярлыку (интервал < 600 мс с одинаковыми параметрами)."""
+    try:
+        import tempfile
+        lock_file = os.path.join(tempfile.gettempdir(), "flauncher_last_launch.json")
+        now = time.time()
+        key = f"{object_id}|{open_path}"
+        if os.path.exists(lock_file):
+            with open(lock_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            last_time = data.get("time", 0)
+            last_key = data.get("key", "")
+            if (now - last_time) < 0.6 and last_key == key:
+                log(f"Throttled rapid duplicate launch (<600ms) for key: {key}")
+                return True
+        with open(lock_file, "w", encoding="utf-8") as f:
+            json.dump({"time": now, "key": key}, f)
+    except Exception:
+        pass
+    return False
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--open-path", dest="open_path", default="")
+    parser.add_argument("--object-id", dest="object_id", default="")
+    parser.add_argument("--page", dest="page", default="")
+    cli_args, _ = parser.parse_known_args()
+
+    # Защита от случайного даблклика по ярлыку
+    if check_rapid_duplicate_launch(cli_args.open_path, cli_args.object_id):
+        return
+
+    readiness_deadline = time.time() + READINESS_TIMEOUT_SECONDS
 
     port, server_proc = find_or_start_server()
-    atexit.register(lambda: shutdown_server(server_proc, port))
+    atexit.register(lambda: shutdown_server(server_proc, port) if count_other_active_gui_windows() == 0 else None)
+
+    # Формируем целевой URL с параметрами открытия конкретного файла/объекта
+    query_parts = []
+    if cli_args.object_id:
+        query_parts.append(f"object={urllib.parse.quote(cli_args.object_id)}")
+    if cli_args.open_path:
+        query_parts.append(f"path={urllib.parse.quote(cli_args.open_path)}")
+    if cli_args.page and str(cli_args.page) != "1":
+        query_parts.append(f"page={urllib.parse.quote(str(cli_args.page))}")
 
     base_url = f"http://127.0.0.1:{port}/"
+    if query_parts:
+        base_url += "?" + "&".join(query_parts)
+
+    window_title = TITLE
+    if cli_args.open_path:
+        file_name = Path(cli_args.open_path).name
+        if file_name:
+            window_title = f"{file_name} — {TITLE}"
 
     # D1: objects readiness gate — no window exists yet.
     remaining = max(0.1, readiness_deadline - time.time())
     objects_ok, objects_detail = wait_for_objects_ready(base_url, remaining)
     if not objects_ok:
         log(f"Objects readiness failed: {objects_detail}")
-        shutdown_server(server_proc, port)
+        if count_other_active_gui_windows() == 0:
+            shutdown_server(server_proc, port)
         show_startup_error(f"objects endpoint failure: {objects_detail}")
         return
     log(f"Readiness: backend healthy, {objects_detail}")
@@ -644,7 +664,7 @@ def main():
 
     frontend_ready = threading.Event()
     window = webview.create_window(
-        TITLE,
+        window_title,
         base_url,
         hidden=True,
         width=1400,
@@ -661,10 +681,14 @@ def main():
     except Exception as e:
         log(f"Could not bind loaded event: {e}")
 
-    # Гарантированное завершение сервера при закрытии окна
+    # Координированное завершение: закрытие окна проверяет, есть ли другие открытые окна
     try:
         def _on_window_closed(*args, **kwargs):
-            log("Window closed event received, stopping server...")
+            other = count_other_active_gui_windows()
+            if other > 0:
+                log(f"Window closed event received. Other launcher GUI windows ({other}) still active; leaving backend on port {port} alive.")
+                return
+            log("Last launcher window closed event received, shutting down server...")
             shutdown_server(server_proc, port)
         window.events.closed += _on_window_closed
     except Exception as e:
@@ -706,7 +730,12 @@ def main():
         open_browser_window(base_url)
         return
     # После выхода из webview.start() (окно закрыто)
-    shutdown_server(server_proc, port)
+    other = count_other_active_gui_windows()
+    if other > 0:
+        log(f"webview.start ended. Other launcher GUI windows ({other}) still active; leaving backend on port {port} alive.")
+    else:
+        log("webview.start ended and no other windows active; shutting down server...")
+        shutdown_server(server_proc, port)
 
 
 if __name__ == "__main__":
