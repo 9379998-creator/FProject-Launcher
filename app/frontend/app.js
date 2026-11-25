@@ -220,6 +220,12 @@ function exitWindow3() {
   if (els.pdfViewer?.classList.contains("stage-active")) {
     setStageActive(false);
   }
+  state.view.dragging = false;
+  try {
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) sel.removeAllRanges();
+  } catch (_) {}
+  if (els.pdfTocDrawer) els.pdfTocDrawer.hidden = true;
   if (els.excelViewer) els.excelViewer.hidden = true;
   if (els.wordViewer) els.wordViewer.hidden = true;
   if (els.htmlViewer) els.htmlViewer.hidden = true;
@@ -6460,28 +6466,8 @@ function handleGlobalEscape() {
     els.pdfTocDrawer.hidden = true;
     return;
   }
-  // 1. В Окне 3: Escape сбрасывает телодвижения (контекстное меню -> перевод -> выделение -> поиск)
+  // 1. В Окне 3: Однократное нажатие Escape ВСЕГДА возвращает во Второе окно (ленту миниатюр + дерево)
   if (inWindow3()) {
-    if (els.pdfDocViewer && !els.pdfDocViewer.hidden) {
-      const win = els.pdfDocFrame?.contentWindow;
-      if (win && typeof win.handlePdfJsEscape === "function") {
-        if (win.handlePdfJsEscape()) {
-          return true;
-        }
-      }
-      els.pdfDocViewer.hidden = true;
-      if (els.pdfPageImage) els.pdfPageImage.hidden = false;
-      if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
-      updateViewerDpiButton();
-      updateViewerToolButton(state.view.panMode ? 1 : 0);
-      return true;
-    }
-    const sel = window.getSelection();
-    if (sel && !sel.isCollapsed && sel.toString().trim()) {
-      sel.removeAllRanges();
-      return true;
-    }
-    // Если локальных модальных состояний и выделений нет — возвращаемся из Окна 3 к Окну 1 + 2
     exitWindow3();
     return true;
   }

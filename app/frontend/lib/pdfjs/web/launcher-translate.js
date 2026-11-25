@@ -1434,14 +1434,15 @@
     initFindInputContextMenu();
 
     window.addEventListener("keydown", (e) => {
-      // 1. Escape: пошаговый сброс телодвижений в Окне 3
+      // 1. Escape: однократный возврат из Окна 3 во Второе окно (ленту миниатюр)
       if (e.key === "Escape") {
-        if (handlePdfJsEscape()) {
+        // Если открыто контекстное меню выделения текста — скрываем его
+        if (typeof hideSelectionContextMenu === "function" && hideSelectionContextMenu()) {
           e.preventDefault();
           e.stopPropagation();
           return;
         }
-        // Если локальных модальных элементов нет — пересылаем Escape родителю для возврата к Окну 1 + 2
+        // Однократное нажатие Escape в Окне 3 немедленно возвращает во Второе окно
         try {
           if (window.parent && window.parent !== window) {
             e.preventDefault();
