@@ -1,4 +1,4 @@
-# Agent instructions for F-Engineering Launcher
+# Agent instructions for F.E.R.O.-Launcher
 
 ## 0. ГЛАВНОЕ НЕЗЫБЛЕМОЕ ПРАВИЛО: ЗАПРЕТ НА РАЗРУШЕНИЕ И ОБЯЗАТЕЛЬНОЕ ВОССТАНОВЛЕНИЕ (NO-BREAK & MANDATORY RESTORATION)
 
@@ -18,31 +18,31 @@
 
 ---
 
-## Source of truth
+## Absolute Single Source of Truth (SSOT)
 
-This repository is the source of truth for Launcher v3 application code.
+- **CANONICAL LOCATION**: `C:\Users\a9379\Documents\Codex\F.E.R.O.-Launcher`
+- **DEFAULT BRANCH**: `main`
+- **BASELINE COMMIT**: `5edf1427d53ef5fd920cd47a89c6292476a5a8a7` (tag `v1.0.0-fero-base`)
 
-Do not treat old local Launcher folders, Google Drive virtual disks, exported demos, or browser-served experiments as authoritative unless explicitly named as donor material.
+CRITICAL RULE FOR ALL AI AGENTS (OpenCode, Claude, Cursor, Antigravity, ChatGPT, Codex):
+1. **DO NOT** search the filesystem, disks, or other directories for alternative launcher versions, legacy platforms, or past checkpoints.
+2. **DO NOT** reference or touch `FEngineering_Platform`, `FEngineering_Launcher`, `%TEMP%`, or `scratch` directories.
+3. This directory (`C:\Users\a9379\Documents\Codex\F.E.R.O.-Launcher`) is the ONLY authoritative repository and working tree.
+4. Always adhere to `docs/CORE_ARCH_RULES.md` and `docs/RENDERING_SPEC.md` (150 DPI PNG raster via PyMuPDF, instant Word HTML, cached Excel sheets, native format cards).
 
 ## Runtime safety
 
-- Keep live runtime execution on a local Windows `C:` workspace.
-- Do not use Google Drive `G:` or `H:` as the live writable runtime root.
-- Do not commit generated caches, manifests, rendered previews, logs, object files, customer documents, secrets, or temporary outputs.
+- Keep live runtime execution in this workspace (`C:\Users\a9379\Documents\Codex\F.E.R.O.-Launcher`).
+- Launch GUI through `app\flauncher.pyw` or the desktop shortcut `F.E.R.O.-Launcher`.
+- Do not commit generated caches, manifests, rendered previews, or logs (`runtime/cache/`, `runtime/logs/`).
 
 ## Development discipline
 
-- Make small, verifiable changes.
+- Make small, verifiable changes on branch `main`.
 - Keep frontend, backend, render pipeline, and runtime data separated.
-- After each meaningful change, run a local smoke test and record the result in the handoff/summary.
-- Preserve accepted viewer behavior unless the user explicitly changes it.
 - Treat Cyrillic text as a first-class project requirement. All source, docs, JSON manifests, HTML, CSS, JS, and Python files must be UTF-8.
-- Do not judge Cyrillic correctness from raw PowerShell output alone: Windows console encoding can display valid UTF-8 as mojibake. Verify text with UTF-8-aware checks, browser rendering, or Python `unicode_escape` inspection when needed.
 - Static text assets served by the backend must include `charset=utf-8` for text content types.
-- If mojibake appears in committed source text, stop and fix encoding before adding product logic.
-- See `docs/ENCODING.md` before editing Russian UI labels, backend messages, manifests, or generated text.
-- Always start Launcher v3 through `scripts/start_windows.cmd`; do not start the backend with ad-hoc PowerShell snippets when Russian paths, labels, or Google Drive paths are involved.
-- Always run `scripts/check_encoding.cmd` before and after changes that touch Russian text, Windows paths, backend messages, frontend labels, or docs.
+- Always check `docs/CORE_ARCH_RULES.md` before modifying rendering or preview logic.
 
 ## Product direction
 
@@ -287,18 +287,54 @@ git switch dvg-main
 - **Запрещённая папка:** `C:\Users\a9379\Documents\Codex\FEngineering_Launcher_v3_OLD_DO_NOT_USE`
 - **Хелпер запуска:** В корне репозитория создан скрипт `RUN_AGENT.cmd` для удобного запуска CLI-агента со считыванием задачи из `prompt.txt`.
 
-### 13. Контракт нативного открытия файлов (NATIVE FILE OPENING CONTRACT)
+### 13. Стиль коммуникации: Смешанный русско-английский формат (Bilingual Practice & Vocabulary Growth)
 
-Строго соблюдать правила из `docs/NATIVE_FILE_OPENING_CONTRACT.md`:
-1. **Приоритет A:** Если в Параметрах сохранён валидный путь к EXE, запускать **ТОЛЬКО** этот EXE отдельными аргументами `[exe, file]`. Никакого fallback на Windows default, никакой подмены на AutoCAD/DWG TrueView.
-2. **Приоритет B:** Если настройка пуста, использовать системную ассоциацию Windows (`ShellExecuteW` / `os.startfile`).
-3. **Приоритет C:** Если настройка заполнена, но EXE не существует/недоступен, возвращать ошибку `configured_app_missing` **БЕЗ ТИХОГО FALLBACK**. Фронтенд выводит уведомление и открывает окно Параметров.
-4. **Запрет AcLauncher:** Autodetect и импорт обязаны фильтровать `AcLauncher.exe` и `ZwLauncher.exe` для `.dwg`/`.dxf`. В режиме замены `replace_confirmed` поле DWG не очищается, если Windows возвращает системный launcher.
-5. **Разделение ответственности:** Чтение конфигурации (`load_native_apps_config`), первичная инициализация (`ensure_native_apps_first_run_initialized`), импорт ассоциаций Windows (`import_windows_default_app_mappings`) и запуск файла (`launch_native_file`) — строго изолированные функции. Их запрещено объединять в одну. `load_native_apps_config` обязана быть pure read/migration функцией без побочных записей на диск.
-6. **Обязательный тест:** Перед коммитом всегда запускать:
-   ```powershell
-   python -m unittest tests/test_native_open_contract.py -v
-   ```
+> **Статус**: Обязательный стандарт диалога с пользователем (Single Tone of Voice).  
+> **Целевой уровень**: B1–B2 (Upper-Intermediate) на базе школьной и инженерной подготовки.  
+> **Главная цель**: Поддержание и органичное совершенствование английского языка в процессе работы без потери скорости, ясности и инженерной строгости.
 
+1. **Естественный языковой микс (Natural Code-Switching):**
+   - Диалог ведётся на смешанном русско-английском языке. Русский язык служит надёжной смысловой основой, а в речь органично вплетаются английские фразы, деловые обороты, инженерные концепции и идиомы (*idioms & set expressions*).
+2. **Обязательная расшифровка и перевод терминов (Zero Ambiguity / Decode & Clarify):**
+   - Каждое английское сокращение или технический термин (акроним, аббревиатура: например, *SSOT — Single Source of Truth* / единый источник истины, *WBS — Work Breakdown Structure* / иерархическая структура работ, *DPI — Dots Per Inch* / точек на дюйм, *GUI — Graphical User Interface* / графический интерфейс, *PR — Pull Request* / запрос на слияние кода) обязательно расшифровывается, переводится и поясняется понятным языком.
+3. **Понятный контекстный ввод (Comprehensible Input):**
+   - Английские конструкции подбираются так, чтобы смысл был прозрачен из окружающего русского контекста либо сразу сопровождался кратким переводом/синонимом в скобках.
+   - Использовать реальные фразы из инженерной и IT-практики (*under the hood* — «под капотом / как устроено внутри», *best practices* — «лучшие практики», *trade-off* — «компромисс / баланс плюсов и минусов», *step by step* — «шаг за шагом», *heads-up* — «предупреждение / полезно иметь в виду»).
+4. **Тактичность и комфорт (No Snobbery):**
+   - Языковые вставки не должны превращаться в словесную перегрузку или снобизм. Это дружелюбный, живой и полезный формат взаимной работы (*collaborative and supportive communication*).
+
+### 14. Регламент многооконного режима (Multi-Window Architecture & Process Coordination)
+
+> **Статус**: Действующий стандарт одновременного сравнения чертежей.
+
+1. **Единый бэкенд-демон (*Single Shared Backend Daemon*):**
+   - Все окна лаунчера работают исключительно через канонический порт `8780`. Запрещено создавать новые серверные процессы на портах 8781, 8782 и т.д.
+   - Окна функционируют как лёгкие клиенты к единому серверу с общим дисковым и оперативным кэшем.
+2. **Координация жизненного цикла (*Reference Counting & Watchdog*):**
+   - Каждое окно отправляет пульс `GET /api/heartbeat?id=...` каждые 5 секунд.
+   - Закрытие одного окна проверяет `count_other_active_gui_windows()`. Если другие окна активны — бэкенд на порту 8780 остаётся жить.
+   - Закрытие последнего окна выгружает сервер и подчищает дочерние процессы без зависания в памяти.
+   - Сторож `server.py` (*idle watchdog*) автоматически выгружает сервер через 15 секунд при нуле активных пульсов.
+3. **Бесшовный переход и сравнение чертежей (*Deep Linking*):**
+   - Вызов нового окна осуществляется через кнопку `🗗 В новом окне` в панели Окна 3, горячую клавишу `Ctrl+N` (или `Ctrl+Т`) либо пункт контекстного меню `🗗 Открыть в новом окне`.
+   - Новое окно мгновенно открывает целевой объект и выбранный чертёж в Окне 3.
+
+### 15. Регламент отображения структуры каталогов (Adaptive Tree Expansion & Folder Icons)
+
+> **Статус**: Обязательный стандарт визуального отображения дерева файлов (Окно 1).
+
+1. **Единый стандарт иконки папок (Folder Icon Standard):**
+   - Корневой узел дерева, как и все вложенные папки, ВСЕГДА отображается стандартной жёлтой иконкой папки `FOLDER_ICON_SVG` (`#d89e13`).
+   - Категорически запрещено подменять иконку корневой папки на иконку белого листа бумаги или файла.
+2. **Адаптивное раскрытие дерева (*Adaptive Tree Expansion*):**
+   - Для объектов и папок объёмом **до 150 файлов** (рабочие выборки, разделы фасадов, поэтажные планы) дерево открывается **полностью раскрытым по умолчанию** (*auto-expanded*). Запрещено сворачивать папки в слепые стрелки при небольшом количестве файлов.
+   - Для гигантских массивов (>150 файлов) сворачивание сохраняется для оптимизации быстродействия.
+
+### 16. Протокол непрерывной фиксации при эксплуатации на объекте ОД150 (Continuous Tracking & Proactive Evolution)
+
+1. **Фиксация всех изменений (Zero Context Loss):**
+   - Все изменения логики, интерфейса, параметров отображения и настроек немедленно фиксируются в Git-репозитории на ветке `main` и отражаются в документации `docs/`.
+2. **Проактивная оптимизация под инженерные сценарии (Proactive Evolution):**
+   - На основе активной эксплуатации лаунчера на объекте ОД150 (Купчино, 1012 файлов, фасадные витражи и разрезы) агент обязан предлагать технические улучшения для ускорения навигации, сопоставления чертежей и работы со спецификациями.
 
 

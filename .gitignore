@@ -10,6 +10,7 @@ node_modules/
 dist/
 dist_setup/
 dist_release/
+dist_colleague/
 build/
 !app/frontend/lib/pdfjs/build/
 
