@@ -14,8 +14,25 @@
     } catch (_) {}
     return 1; // Default to Hand (Лапа) to match Launcher control panel default
   })();
+
+  const applyCursorToolOption = () => {
+    try {
+      const targetCursorTool = (viewerToolMode === 1) ? 1 : 0;
+      if (window.PDFViewerApplicationOptions?.set) {
+        window.PDFViewerApplicationOptions.set("cursorToolOnLoad", targetCursorTool);
+      }
+    } catch (_) {}
+  };
+  applyCursorToolOption();
+  window.document.addEventListener("webviewerloaded", () => {
+    applyCursorToolOption();
+  }, { capture: true });
+
   let isMouseDown = false;
   let isDragging = false;
+  let handDragActive = false;
+  let handStartX = 0, handStartY = 0;
+  let handStartScrollLeft = 0, handStartScrollTop = 0;
   let zoneStart = { clientX: 0, clientY: 0, target: null };
   let zoneSelectedText = "";
   let currentZoneSpans = [];
@@ -225,16 +242,26 @@
       }
 
       /* Mode 1: Hand Mode */
+      body.hand-mode-active,
       body.hand-mode-active #viewerContainer,
       body.hand-mode-active .page,
       body.hand-mode-active .textLayer,
       body.hand-mode-active :is(span, .launcher-word) {
         cursor: grab !important;
+        user-select: none !important;
+        -webkit-user-select: none !important;
       }
+      body.hand-mode-active.hand-mode-dragging,
+      body.hand-mode-active.hand-mode-dragging #viewerContainer,
+      body.hand-mode-active.hand-mode-dragging .page,
+      body.hand-mode-active.hand-mode-dragging .textLayer,
+      body.hand-mode-active.hand-mode-dragging :is(span, .launcher-word),
       body.hand-mode-active #viewerContainer:active,
       body.hand-mode-active .page:active,
       body.hand-mode-active .textLayer:active {
         cursor: grabbing !important;
+        user-select: none !important;
+        -webkit-user-select: none !important;
       }
 
       /* AutoCAD rectangular zone selection styling with word-level precision */
@@ -454,8 +481,23 @@
         tooltip.style.display = "none";
       }
 
-      // If in Hand mode (mode === 1) or Text mode (mode === 2): don't draw rectangular box
-      if (viewerToolMode === 1 || viewerToolMode === 2) {
+      // Mode 1: Hand Mode (instant native pan)
+      if (viewerToolMode === 1) {
+        const container = document.getElementById("viewerContainer");
+        if (container) {
+          handDragActive = true;
+          handStartX = e.clientX;
+          handStartY = e.clientY;
+          handStartScrollLeft = container.scrollLeft;
+          handStartScrollTop = container.scrollTop;
+          document.body.classList.add("hand-mode-dragging");
+        }
+        e.preventDefault();
+        return;
+      }
+
+      // Mode 2: Linear Text Selection mode
+      if (viewerToolMode === 2) {
         isMouseDown = true;
         return;
       }
@@ -477,8 +519,23 @@
     });
 
     document.addEventListener("mousemove", (e) => {
+      // Mode 1: Hand Mode panning
+      if (viewerToolMode === 1) {
+        if (handDragActive) {
+          const container = document.getElementById("viewerContainer");
+          if (container) {
+            const dx = e.clientX - handStartX;
+            const dy = e.clientY - handStartY;
+            container.scrollLeft = handStartScrollLeft - dx;
+            container.scrollTop = handStartScrollTop - dy;
+          }
+          e.preventDefault();
+        }
+        return;
+      }
+
       if (!isMouseDown) return;
-      if (viewerToolMode === 1 || viewerToolMode === 2) return;
+      if (viewerToolMode === 2) return;
 
       const dx = e.clientX - zoneStart.clientX;
       const dy = e.clientY - zoneStart.clientY;
@@ -549,16 +606,17 @@
     });
 
     document.addEventListener("mouseup", (e) => {
-      if (!isMouseDown) return;
-      isMouseDown = false;
-
-      // In Text mode (mode === 2): show tooltip over native selection
-      if (viewerToolMode === 2) {
-        setTimeout(updateSelectionTooltip, 30);
+      // Mode 1: End hand pan
+      if (viewerToolMode === 1) {
+        if (handDragActive) {
+          handDragActive = false;
+          document.body.classList.remove("hand-mode-dragging");
+        }
         return;
       }
 
-      if (viewerToolMode === 1) return;
+      if (!isMouseDown) return;
+      isMouseDown = false;
 
       if (!isDragging) {
         clearZoneSelection();
@@ -597,6 +655,13 @@
 
       // Floating action pill disabled (all actions via right-click context menu)
       if (tooltip) tooltip.style.display = "none";
+    });
+
+    window.addEventListener("blur", () => {
+      if (handDragActive) {
+        handDragActive = false;
+        document.body.classList.remove("hand-mode-dragging");
+      }
     });
 
     // Double-click to select a single word/span
@@ -1109,31 +1174,44 @@
     window.setViewerToolMode = function(mode) {
       viewerToolMode = Number(mode);
       const app = window.PDFViewerApplication;
-      document.body.classList.remove("hand-mode-active", "text-mode-active", "zone-mode-active");
+      document.body.classList.remove("hand-mode-active", "text-mode-active", "zone-mode-active", "hand-mode-dragging");
+      handDragActive = false;
+
+      const targetTool = (viewerToolMode === 1) ? 1 : 0;
+      applyCursorToolOption();
+
+      const applyToolToApp = () => {
+        try {
+          if (app?.pdfCursorTools && app.pdfCursorTools.activeTool !== targetTool) {
+            app.pdfCursorTools.switchTool(targetTool);
+          }
+        } catch (_) {}
+      };
 
       if (viewerToolMode === 1) {
         // Hand mode
         clearZoneSelection();
         document.body.classList.add("hand-mode-active");
-        try {
-          app?.pdfCursorTools?.switchTool(1);
-        } catch (_) {}
+        applyToolToApp();
       } else if (viewerToolMode === 2) {
         // Linear text selection mode (blinking I-beam cursor)
         clearZoneSelection();
         document.body.classList.add("text-mode-active");
-        try {
-          app?.pdfCursorTools?.switchTool(0);
-        } catch (_) {}
+        applyToolToApp();
       } else {
         // AutoCAD rectangular zone mode (crosshair cursor)
         viewerToolMode = 0;
         clearZoneSelection();
         document.body.classList.add("zone-mode-active");
-        try {
-          app?.pdfCursorTools?.switchTool(0);
-        } catch (_) {}
+        applyToolToApp();
       }
+
+      // Re-assert in subsequent ticks to prevent PDF.js internal microtasks/event resets from overriding
+      setTimeout(applyToolToApp, 0);
+      setTimeout(applyToolToApp, 30);
+      setTimeout(applyToolToApp, 100);
+      setTimeout(applyToolToApp, 300);
+
       try {
         if (window.parent && window.parent.state) {
           window.parent.state.viewerToolMode = viewerToolMode;
@@ -1399,13 +1477,20 @@
       }
 
       // 2. Synchronize active cursor tool (Лапа: 1 / Рамка: 0 / Текст: 2)
-      try {
-        if (typeof window.setViewerToolMode === "function") {
-          window.setViewerToolMode(viewerToolMode);
-        } else {
-          app.pdfCursorTools?.switchTool(viewerToolMode === 1 ? 1 : 0);
-        }
-      } catch (_) {}
+      const applyActiveTool = () => {
+        try {
+          if (typeof window.setViewerToolMode === "function") {
+            window.setViewerToolMode(viewerToolMode);
+          } else {
+            const targetTool = (viewerToolMode === 1) ? 1 : 0;
+            app.pdfCursorTools?.switchTool(targetTool);
+          }
+        } catch (_) {}
+      };
+      applyActiveTool();
+      setTimeout(applyActiveTool, 20);
+      setTimeout(applyActiveTool, 80);
+      setTimeout(applyActiveTool, 250);
 
       // 3. Ensure findBar defaults to Highlight All
       if (app.findBar) {
@@ -1418,24 +1503,29 @@
       // 4. Freeze scale into a fixed numeric scale so page transitions NEVER auto-recalculate
       const freezeScale = () => {
         const current = app.pdfViewer.currentScale;
-        if (current && current > 0) {
+        if (current && current > 0.05) {
           lockedScale = current;
           app.pdfViewer.currentScaleValue = String(current);
         }
       };
 
       app.eventBus.on("pagesloaded", () => {
+        applyActiveTool();
         if (!lockedScale) {
           freezeScale();
         }
         document.querySelectorAll(".textLayer").forEach(tokenizeTextLayerWords);
       });
       app.eventBus.on("pagesinit", () => {
+        applyActiveTool();
         activeSelectionSnapshot = "";
         hideSelectionContextMenu();
         if (!lockedScale) {
           freezeScale();
         }
+      });
+      app.eventBus.on("secondarytoolbarreset", () => {
+        setTimeout(applyActiveTool, 0);
       });
       app.eventBus.on("pagechanging", () => {
         activeSelectionSnapshot = "";

@@ -1,13 +1,13 @@
-; F-Engineering Launcher v4.4.1 — Автономный однофайловый дистрибутив (Self-Extracting Single EXE)
+; F-Engineering Launcher v4.4.2 — Автономный однофайловый дистрибутив (Self-Extracting Single EXE)
 ; Инженерное бюро ООО «ФЕРО»
 ; Кодировка: UTF-8 with BOM
 
 [Setup]
 AppName=F-Engineering Launcher
-AppVersion=4.4.1
-VersionInfoVersion=4.4.1.0
+AppVersion=4.4.2
+VersionInfoVersion=4.4.2.0
 VersionInfoCompany=ООО "ФЕРО"
-VersionInfoDescription=F-Engineering Launcher v4.4.1 Setup
+VersionInfoDescription=F-Engineering Launcher v4.4.2 Setup
 VersionInfoProductName=F-Engineering Launcher
 AppPublisher=ООО "ФЕРО"
 AppPublisherURL=https://ferospb.info

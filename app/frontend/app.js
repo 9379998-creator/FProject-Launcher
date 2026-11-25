@@ -4561,8 +4561,10 @@ function fitPdfPage() {
     if (win && win.PDFViewerApplication && win.PDFViewerApplication.pdfViewer) {
       win.PDFViewerApplication.pdfViewer.currentScaleValue = "page-fit";
       setTimeout(() => {
-        const cur = win.PDFViewerApplication.pdfViewer.currentScale;
-        if (cur) win.PDFViewerApplication.pdfViewer.currentScaleValue = String(cur);
+        const cur = win?.PDFViewerApplication?.pdfViewer?.currentScale;
+        if (cur && win?.PDFViewerApplication?.pdfViewer) {
+          win.PDFViewerApplication.pdfViewer.currentScaleValue = String(cur);
+        }
       }, 100);
     }
     return;
@@ -4621,7 +4623,11 @@ function fitPdfPage() {
 function zoomPdf(factor, originX = null, originY = null) {
   if (els.pdfDocViewer && !els.pdfDocViewer.hidden) {
     const win = els.pdfDocFrame?.contentWindow;
-    if (win && win.PDFViewerApplication) {
+    if (win && win.PDFViewerApplication && win.PDFViewerApplication.pdfViewer) {
+      const cur = win.PDFViewerApplication.pdfViewer.currentScale;
+      if (!cur || cur <= 0.05 || isNaN(cur)) {
+        win.PDFViewerApplication.pdfViewer.currentScaleValue = "page-fit";
+      }
       if (factor > 1) {
         win.PDFViewerApplication.zoomIn();
       } else {
@@ -7655,6 +7661,12 @@ function initPdfDocFrameSync() {
         if (!app || !app.eventBus) return;
 
         applyActiveTool();
+        setTimeout(applyActiveTool, 30);
+        setTimeout(applyActiveTool, 100);
+        setTimeout(applyActiveTool, 300);
+
+        app.eventBus.on("pagesloaded", applyActiveTool);
+        app.eventBus.on("documentloaded", applyActiveTool);
 
         app.eventBus.on("pagechanging", (evt) => {
           const pageNum = evt.pageNumber;
