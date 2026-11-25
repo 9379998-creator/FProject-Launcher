@@ -6,7 +6,14 @@
   let cadCard = null;
   let zoneBox = null;
   let lastExportedCadPath = "";
-  let viewerToolMode = 0; // 0: AutoCAD Zone (Рамка), 1: Hand (Лапа), 2: Linear Text (Текст)
+  let viewerToolMode = (function() {
+    try {
+      if (window.parent && window.parent.state && window.parent.state.viewerToolMode !== undefined) {
+        return Number(window.parent.state.viewerToolMode);
+      }
+    } catch (_) {}
+    return 1; // Default to Hand (Лапа) to match Launcher control panel default
+  })();
   let isMouseDown = false;
   let isDragging = false;
   let zoneStart = { clientX: 0, clientY: 0, target: null };
@@ -223,6 +230,11 @@
       body.hand-mode-active .textLayer,
       body.hand-mode-active :is(span, .launcher-word) {
         cursor: grab !important;
+      }
+      body.hand-mode-active #viewerContainer:active,
+      body.hand-mode-active .page:active,
+      body.hand-mode-active .textLayer:active {
+        cursor: grabbing !important;
       }
 
       /* AutoCAD rectangular zone selection styling with word-level precision */
@@ -1123,6 +1135,12 @@
         } catch (_) {}
       }
       try {
+        if (window.parent && window.parent.state) {
+          window.parent.state.viewerToolMode = viewerToolMode;
+          if (window.parent.state.view) {
+            window.parent.state.view.panMode = (viewerToolMode === 1);
+          }
+        }
         if (window.parent && typeof window.parent.updateViewerToolButton === "function") {
           window.parent.updateViewerToolButton(viewerToolMode);
         }
@@ -1360,6 +1378,10 @@
         copyPdfSelection();
       }
     });
+
+    if (typeof window.setViewerToolMode === "function") {
+      window.setViewerToolMode(viewerToolMode);
+    }
   }
 
   function initPdfJsEnhancements() {
@@ -1376,9 +1398,13 @@
         app.pdfLinkService._ignoreDestinationZoom = true;
       }
 
-      // 2. Default tool: ALWAYS SELECT (Рамка) on load
+      // 2. Synchronize active cursor tool (Лапа: 1 / Рамка: 0 / Текст: 2)
       try {
-        app.pdfCursorTools?.switchTool(0); // CursorTool.SELECT
+        if (typeof window.setViewerToolMode === "function") {
+          window.setViewerToolMode(viewerToolMode);
+        } else {
+          app.pdfCursorTools?.switchTool(viewerToolMode === 1 ? 1 : 0);
+        }
       } catch (_) {}
 
       // 3. Ensure findBar defaults to Highlight All

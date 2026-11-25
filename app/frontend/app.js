@@ -56,6 +56,7 @@ const state = {
   activeDwgPath: "",
   viewMode: "standard",
   viewerDpi: 300,
+  viewerToolMode: 1, // 0: Рамка, 1: Лапа, 2: Текст
   activeNavZone: "tree",
   thumbScale: 1,
   treeScale: 1,
@@ -4415,11 +4416,11 @@ function showPdfPage(page, options = {}) {
     if (els.pdfDocViewer) els.pdfDocViewer.hidden = false;
     syncActionGridVisibility();
 
+    const activeToolMode = state.viewerToolMode ?? (state.view.panMode ? 1 : 0);
+    updateViewerToolButton(activeToolMode);
     const win = els.pdfDocFrame?.contentWindow;
-    if (win && typeof win.getViewerToolMode === "function") {
-      updateViewerToolButton(win.getViewerToolMode());
-    } else {
-      updateViewerToolButton(2);
+    if (win && typeof win.setViewerToolMode === "function") {
+      win.setViewerToolMode(activeToolMode);
     }
 
     const rawUrl = "/api/file/raw?path=" + encodeURIComponent(targetDocPath);
@@ -4539,7 +4540,11 @@ function updateViewTransform() {
 
 
 
+  const tm = state.viewerToolMode ?? (view.panMode ? 1 : 0);
   els.pdfStage.classList.toggle("pan-mode", view.panMode);
+  els.pdfStage.classList.toggle("tool-mode-hand", tm === 1);
+  els.pdfStage.classList.toggle("tool-mode-zone", tm === 0);
+  els.pdfStage.classList.toggle("tool-mode-text", tm === 2);
   els.pdfStage.classList.toggle("dragging", view.dragging);
   if (state.excelWorkbook) {
     els.excelSheetFrame.contentWindow?.postMessage({ type: "launcher-sheet-hand", value: view.panMode }, "*");
@@ -4727,6 +4732,8 @@ function setViewerMode(mode) {
   if (mode === "full") {
     setStageActive(true);
     if (els.viewerControls) els.viewerControls.hidden = false;
+    const activeToolMode = state.viewerToolMode ?? (state.view.panMode ? 1 : 0);
+    setViewerToolMode(activeToolMode);
   } else {
     setStageActive(false);
     if (els.pdfTocDrawer) els.pdfTocDrawer.hidden = true;
@@ -7634,9 +7641,20 @@ function initPdfDocFrameSync() {
       const win = els.pdfDocFrame.contentWindow;
       if (!win) return;
 
+      const applyActiveTool = () => {
+        const activeToolMode = state.viewerToolMode ?? (state.view.panMode ? 1 : 0);
+        updateViewerToolButton(activeToolMode);
+        if (win && typeof win.setViewerToolMode === "function") {
+          win.setViewerToolMode(activeToolMode);
+        }
+      };
+      applyActiveTool();
+
       const setupSync = () => {
         const app = win.PDFViewerApplication;
         if (!app || !app.eventBus) return;
+
+        applyActiveTool();
 
         app.eventBus.on("pagechanging", (evt) => {
           const pageNum = evt.pageNumber;
@@ -7645,9 +7663,12 @@ function initPdfDocFrameSync() {
 
         app.eventBus.on("cursortoolchanged", (evt) => {
           if (win && typeof win.getViewerToolMode === "function") {
-            updateViewerToolButton(win.getViewerToolMode());
-          } else {
-            updateViewerToolButton(evt.tool === 1 ? 1 : 0);
+            const m = win.getViewerToolMode();
+            if (m !== state.viewerToolMode) {
+              state.viewerToolMode = m;
+              state.view.panMode = (m === 1);
+              updateViewerToolButton(m);
+            }
           }
         });
 
@@ -7719,33 +7740,41 @@ function updateViewerToolButton(mode) {
 }
 window.updateViewerToolButton = updateViewerToolButton;
 
-function toggleViewerTool() {
-  const isWord = Boolean(els.wordViewer && !els.wordViewer.hidden);
-  const isExcel = Boolean(els.excelViewer && !els.excelViewer.hidden);
+function setViewerToolMode(mode) {
+  const m = Number(mode);
+  state.viewerToolMode = (m === 0 || m === 1 || m === 2) ? m : 1;
+  state.view.panMode = (state.viewerToolMode === 1);
 
-  if (isWord || isExcel) {
-    state.view.panMode = !state.view.panMode;
-    updateViewTransform();
-    updateViewerToolButton(state.view.panMode ? 1 : 0);
-    return;
+  updateViewerToolButton(state.viewerToolMode);
+
+  if (els.pdfStage) {
+    const tm = state.viewerToolMode;
+    els.pdfStage.classList.toggle("pan-mode", state.view.panMode);
+    els.pdfStage.classList.toggle("tool-mode-hand", tm === 1);
+    els.pdfStage.classList.toggle("tool-mode-zone", tm === 0);
+    els.pdfStage.classList.toggle("tool-mode-text", tm === 2);
   }
-
-  const isPdfViewerOpen = Boolean(els.pdfDocViewer && !els.pdfDocViewer.hidden);
-  if (isPdfViewerOpen) {
-    const win = els.pdfDocFrame?.contentWindow;
-    if (win && typeof win.getViewerToolMode === "function" && typeof win.setViewerToolMode === "function") {
-      const current = win.getViewerToolMode();
-      const next = current === 0 ? 2 : current === 2 ? 1 : 0;
-      win.setViewerToolMode(next);
-      updateViewerToolButton(next);
-      return;
-    }
-  }
-
-  // Standard Stage (PDF raster, DWG, Images)
-  state.view.panMode = !state.view.panMode;
   updateViewTransform();
-  updateViewerToolButton(state.view.panMode ? 1 : 0);
+
+  const win = els.pdfDocFrame?.contentWindow;
+  if (win && typeof win.setViewerToolMode === "function") {
+    win.setViewerToolMode(state.viewerToolMode);
+  }
+
+  if (els.excelSheetFrame?.contentWindow) {
+    els.excelSheetFrame.contentWindow.postMessage({ type: "launcher-sheet-hand", value: state.view.panMode }, "*");
+  }
+  if (els.wordDocFrame?.contentWindow) {
+    els.wordDocFrame.contentWindow.postMessage({ type: "launcher-sheet-hand", value: state.view.panMode }, "*");
+  }
+}
+window.setViewerToolMode = setViewerToolMode;
+
+function toggleViewerTool() {
+  const current = state.viewerToolMode ?? (state.view.panMode ? 1 : 0);
+  // Цикл: 1 (Лапа) -> 0 (Рамка) -> 2 (Текст) -> 1 (Лапа)
+  const next = current === 1 ? 0 : current === 0 ? 2 : 1;
+  setViewerToolMode(next);
 }
 
 if (els.viewToggleTool) {
