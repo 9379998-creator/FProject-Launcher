@@ -1,36 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <defs>
-    <!-- Премиальный фоновый градиент Apple Dark Titanium / Deep Graphite -->
-    <linearGradient id="appleBg" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#242427" />
-      <stop offset="100%" stop-color="#151517" />
-    </linearGradient>
-
-    <!-- Благородный пастельный тон System Gray 5 / Platinum для буквы F -->
-    <linearGradient id="appleF" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#F7F7FA" />
-      <stop offset="100%" stop-color="#DCDCE2" />
-    </linearGradient>
-
-    <!-- Деликатная тень под буквой для ощущения глубины -->
-    <filter id="softDepth" x="-15%" y="-15%" width="130%" height="130%">
-      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000000" flood-opacity="0.45" />
-    </filter>
-  </defs>
-
-  <!-- Внешний контур: Apple Squircle (суперэллипс) -->
-  <rect x="28" y="28" width="456" height="456" rx="112" ry="112" fill="url(#appleBg)" stroke="#38383C" stroke-width="3" />
+  <!-- Apple Squircle Background: Deep Matte Graphite #1D1D20 -->
+  <rect x="24" y="24" width="464" height="464" rx="114" fill="#1D1D20" stroke="#3A3A3E" stroke-width="3"/>
+  <rect x="26" y="26" width="460" height="460" rx="112" fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="2"/>
   
-  <!-- Внутренняя ультратонкая hairline фаска (Apple Chamfer Highlight) -->
-  <rect x="30" y="30" width="452" height="452" rx="110" ry="110" fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="2" />
-
-  <!-- Архитектурная английская монограмма 'F' в сером цвете FERO -->
-  <g filter="url(#softDepth)" fill="url(#appleF)">
-    <!-- Вертикальный пилон (ствол) -->
-    <rect x="166" y="124" width="64" height="264" rx="8" />
-    <!-- Верхняя полка -->
-    <rect x="166" y="124" width="188" height="60" rx="8" />
-    <!-- Средняя полка -->
-    <rect x="166" y="228" width="152" height="56" rx="8" />
+  <!-- Architectural Apple 'F' Monogram in System Gray 5 #E5E5EA -->
+  <g fill="#E5E5EA">
+    <!-- Vertical Stem -->
+    <rect x="164" y="120" width="68" height="272" rx="9"/>
+    <!-- Top Horizontal Bar -->
+    <rect x="164" y="120" width="192" height="64" rx="9"/>
+    <!-- Middle Horizontal Bar -->
+    <rect x="164" y="228" width="156" height="60" rx="9"/>
   </g>
 </svg>
