@@ -56,82 +56,39 @@
       <section class="viewer" aria-label="Область просмотра PDF">
         <div class="pdf-viewer empty" id="pdfViewer">
         <div class="welcome-panel" id="welcomePanel">
-          <div class="welcome-card">
-            <div class="welcome-header">
-              <div class="welcome-icon">
-                <svg viewBox="0 0 256 256" width="26" height="26" aria-hidden="true">
-                  <g fill="#262626">
-                    <rect x="79.25" y="47.5" width="22.5" height="17.5" rx="3"/>
-                    <rect x="116.75" y="47.5" width="22.5" height="17.5" rx="3"/>
-                    <rect x="154.25" y="47.5" width="22.5" height="17.5" rx="3"/>
-                    <rect x="79.25" y="191" width="22.5" height="17.5" rx="3"/>
-                    <rect x="116.75" y="191" width="22.5" height="17.5" rx="3"/>
-                    <rect x="154.25" y="191" width="22.5" height="17.5" rx="3"/>
-                    <rect x="53" y="63" width="150" height="130" rx="22"/>
-                  </g>
-                  <g fill="#E8762D">
-                    <rect x="98" y="93" width="20" height="70"/>
-                    <rect x="98" y="93" width="60" height="18"/>
-                    <rect x="98" y="119.5" width="50" height="16"/>
-                  </g>
-                </svg>
+          <div class="welcome-flat-container">
+            <div class="welcome-guide-grid">
+              <div class="welcome-guide-item">
+                <span class="welcome-guide-name">Загрузить</span>
+                <p class="welcome-guide-desc">Выбор папки с чертежами и документами через системный проводник Windows. Лаунчер сканирует каталог, индексирует файлы (PDF, DWG, DOC, XLS) и генерирует быстрые миниатюры. Исходные файлы на диске не перемещаются и не изменяются.</p>
               </div>
-              <div class="welcome-title-group">
-                <div class="welcome-title">F.E.R.O. Launcher v4</div>
-                <div class="welcome-subtitle">Консоль управления рабочей документацией и фасадными конструкциями</div>
+              <div class="welcome-guide-item">
+                <span class="welcome-guide-name">Отобразить</span>
+                <p class="welcome-guide-desc">Открытие структуры выбранного объекта. Слева разворачивается дерево томов, разделов и файлов с поиском и фильтрами по форматам, по центру — лента миниатюр чертежей.</p>
               </div>
-            </div>
-            <div class="welcome-divider"></div>
-            <div class="welcome-section-title">Назначение кнопок и элементов управления:</div>
-            <div class="welcome-grid">
-              <div class="welcome-item">
-                <span class="welcome-bullet">📥</span>
-                <div>
-                  <strong>Загрузить</strong>
-                  <p>Выбор папки с чертежами и документами через системный проводник Windows. Лаунчер сканирует каталог, индексирует файлы (PDF, DWG, DOC, XLS) и генерирует быстрые миниатюры. Исходные файлы на диске не перемещаются и не изменяются.</p>
-                </div>
+              <div class="welcome-guide-item">
+                <span class="welcome-guide-name">Обновить</span>
+                <p class="welcome-guide-desc">Повторное сканирование папки объекта на диске: автоматический контроль добавленных, изменённых и удалённых файлов без потери структуры и меток.</p>
               </div>
-              <div class="welcome-item">
-                <span class="welcome-bullet">📂</span>
-                <div>
-                  <strong>Отобразить</strong>
-                  <p>Открытие структуры выбранного объекта. Слева разворачивается дерево томов, разделов и файлов с поиском и фильтрами по форматам, справа — лента миниатюр чертежей.</p>
-                </div>
+              <div class="welcome-guide-item">
+                <span class="welcome-guide-name">Объекты</span>
+                <p class="welcome-guide-desc">Возврат из дерева файлов к общему реестру загруженных объектов.</p>
               </div>
-              <div class="welcome-item">
-                <span class="welcome-bullet">🔄</span>
-                <div>
-                  <strong>Обновить</strong>
-                  <p>Повторное сканирование папки объекта на диске. Лаунчер выполняет дифференциальный контроль: выявляет добавленные, удалённые и изменённые файлы без потери меток и структуры.</p>
-                </div>
+              <div class="welcome-guide-item">
+                <span class="welcome-guide-name">Назад</span>
+                <p class="welcome-guide-desc">Переход к предыдущему состоянию дерева или закрытой папке.</p>
               </div>
-              <div class="welcome-item">
-                <span class="welcome-bullet">❌</span>
-                <div>
-                  <strong>Исключить</strong>
-                  <p>Удаление объекта из списка лаунчера. Исходные файлы и папки на вашем компьютере остаются нетронутыми в полной сохранности.</p>
-                </div>
+              <div class="welcome-guide-item">
+                <span class="welcome-guide-name">Параметры</span>
+                <p class="welcome-guide-desc">Настройка внешних приложений для открытия файлов (AutoCAD, Word, Excel, Acrobat).</p>
               </div>
-              <div class="welcome-item">
-                <span class="welcome-bullet">⬅️</span>
-                <div>
-                  <strong>К объектам / Назад</strong>
-                  <p>Кнопка «К объектам» возвращает из дерева файлов к общему списку проектов. Кнопка «Назад» возвращает к предыдущему раскрытому узлу папок.</p>
-                </div>
+              <div class="welcome-guide-item">
+                <span class="welcome-guide-name">Исключить</span>
+                <p class="welcome-guide-desc">Удаление объекта из списка лаунчера (исходные папки и файлы на вашем компьютере остаются в полной сохранности).</p>
               </div>
-              <div class="welcome-item">
-                <span class="welcome-bullet">⌨️</span>
-                <div>
-                  <strong>Клавиша Escape — универсальный возврат</strong>
-                  <p>Клавиша <code>Escape</code> всегда делает шаг назад: из полноэкранного просмотра чертежа ➔ в ленту миниатюр; из дерева файлов ➔ возврат к списку объектов; со списка объектов ➔ снятие выделения. Несколько нажатий <code>Escape</code> всегда возвращают вас на этот начальный экран!</p>
-                </div>
-              </div>
-              <div class="welcome-item">
-                <span class="welcome-bullet">🔎</span>
-                <div>
-                  <strong>Масштабирование (дерево и чертежи)</strong>
-                  <p>Колёсико мыши над списками и чертежами или кнопки <code>−</code> / <code>100%</code> / <code>+</code> в верхней панели изменяют масштаб без расплывания окон. Нажатие на <code>100%</code> мгновенно сбрасывает масштаб к исходному состоянию.</p>
-                </div>
+              <div class="welcome-guide-item">
+                <span class="welcome-guide-name">Клавиша Escape</span>
+                <p class="welcome-guide-desc">Универсальный возврат на шаг назад: из чертежа ➔ в ленту миниатюр ➔ к списку объектов. Колёсико мыши или кнопки <code>−</code> / <code>100%</code> / <code>+</code> — масштабирование.</p>
               </div>
             </div>
           </div>
