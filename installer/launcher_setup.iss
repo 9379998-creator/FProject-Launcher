@@ -54,3 +54,66 @@ begin
   Exec('taskkill.exe', '/F /IM FEngineeringLauncher.exe', '', SW_HIDE, ewWaitUntilTerminated, ErrorCode);
   Result := True;
 end;
+
+procedure MigrateLegacyRuntime();
+var
+  OldRuntimeDir, NewRuntimeDir: String;
+  OldManifestsDir, NewManifestsDir: String;
+  OldDbDir, NewDbDir: String;
+  FindRec: TFindRec;
+  SrcFile, DstFile: String;
+begin
+  OldRuntimeDir := ExpandConstant('{localappdata}\FEngineering_Launcher\runtime');
+  NewRuntimeDir := ExpandConstant('{app}\runtime');
+
+  if not DirExists(OldRuntimeDir) then
+    Exit;
+
+  // 1. Манифесты ранее загруженных объектов (Data Continuity)
+  OldManifestsDir := OldRuntimeDir + '\manifests';
+  NewManifestsDir := NewRuntimeDir + '\manifests';
+  if DirExists(OldManifestsDir) then
+  begin
+    ForceDirectories(NewManifestsDir);
+    if FindFirst(OldManifestsDir + '\*.json', FindRec) then
+    begin
+      try
+        repeat
+          SrcFile := OldManifestsDir + '\' + FindRec.Name;
+          DstFile := NewManifestsDir + '\' + FindRec.Name;
+          if not FileExists(DstFile) then
+            FileCopy(SrcFile, DstFile, False);
+        until not FindNext(FindRec);
+      finally
+        FindClose(FindRec);
+      end;
+    end;
+  end;
+
+  // 2. Пользовательские настройки привязки программ
+  if FileExists(OldRuntimeDir + '\native_apps.json') and (not FileExists(NewRuntimeDir + '\native_apps.json')) then
+  begin
+    FileCopy(OldRuntimeDir + '\native_apps.json', NewRuntimeDir + '\native_apps.json', False);
+  end;
+
+  // 3. База данных launcher.sqlite
+  OldDbDir := OldRuntimeDir + '\db';
+  NewDbDir := NewRuntimeDir + '\db';
+  if FileExists(OldDbDir + '\launcher.sqlite') and (not FileExists(NewDbDir + '\launcher.sqlite')) then
+  begin
+    ForceDirectories(NewDbDir);
+    FileCopy(OldDbDir + '\launcher.sqlite', NewDbDir + '\launcher.sqlite', False);
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    try
+      MigrateLegacyRuntime();
+    except
+      // Исключения миграции не должны прерывать завершение установки
+    end;
+  end;
+end;

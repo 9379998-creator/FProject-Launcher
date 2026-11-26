@@ -507,7 +507,18 @@ def manifest_summary(manifest: dict) -> dict:
 def list_object_summaries() -> list[dict]:
     MANIFESTS_DIR.mkdir(parents=True, exist_ok=True)
     manifests: list[dict] = []
-    for path in MANIFESTS_DIR.glob("*.json"):
+    files = list(MANIFESTS_DIR.glob("*.json"))
+    if not files:
+        # Автоматическая миграция при пустом списке манифестов (Data Continuity)
+        try:
+            from app.backend.migration import migrate_legacy_data
+            report = migrate_legacy_data(RUNTIME_DIR)
+            if report.get("manifests_count", 0) > 0:
+                files = list(MANIFESTS_DIR.glob("*.json"))
+        except Exception as mig_err:
+            logger.debug("Automatic manifest migration skipped: %s", mig_err)
+
+    for path in files:
         try:
             manifest = json.loads(path.read_text(encoding="utf-8"))
             manifests.append(manifest_summary(manifest))
@@ -4967,6 +4978,15 @@ def main() -> None:
     PDF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     MANIFESTS_DIR.mkdir(exist_ok=True)
     (RUNTIME_DIR / "logs").mkdir(exist_ok=True)
+
+    # Бесшовная миграция данных предыдущих версий (Data Continuity & Migration)
+    try:
+        from app.backend.migration import migrate_legacy_data
+        mig_res = migrate_legacy_data(RUNTIME_DIR)
+        if mig_res.get("manifests_count", 0) > 0 or mig_res.get("native_apps_migrated") or mig_res.get("db_migrated"):
+            logger.info("Legacy data migration completed successfully: %s", mig_res)
+    except Exception as mig_err:
+        logger.warning("Legacy data migration error: %s", mig_err)
 
     # Изолированный шаг первичной инициализации при первом старте backend (startup lifecycle)
     try:
