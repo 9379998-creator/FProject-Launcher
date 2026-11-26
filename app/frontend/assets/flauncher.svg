@@ -1,16 +1,36 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="blueGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#00DFFF" />
-      <stop offset="100%" stop-color="#0066FF" />
+    <!-- Премиальный фоновый градиент Apple Dark Titanium / Deep Graphite -->
+    <linearGradient id="appleBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#242427" />
+      <stop offset="100%" stop-color="#151517" />
     </linearGradient>
+
+    <!-- Благородный пастельный тон System Gray 5 / Platinum для буквы F -->
+    <linearGradient id="appleF" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F7F7FA" />
+      <stop offset="100%" stop-color="#DCDCE2" />
+    </linearGradient>
+
+    <!-- Деликатная тень под буквой для ощущения глубины -->
+    <filter id="softDepth" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000000" flood-opacity="0.45" />
+    </filter>
   </defs>
-  <g fill="#121820" stroke="#00A3FF" stroke-width="4" stroke-opacity="0.8">
-    <rect x="16" y="16" width="224" height="224" rx="44"/>
-  </g>
-  <g fill="url(#blueGrad)">
-    <rect x="74" y="54" width="40" height="148" rx="6"/>
-    <rect x="74" y="54" width="116" height="38" rx="6"/>
-    <rect x="74" y="118" width="94" height="34" rx="6"/>
+
+  <!-- Внешний контур: Apple Squircle (суперэллипс) -->
+  <rect x="28" y="28" width="456" height="456" rx="112" ry="112" fill="url(#appleBg)" stroke="#38383C" stroke-width="3" />
+  
+  <!-- Внутренняя ультратонкая hairline фаска (Apple Chamfer Highlight) -->
+  <rect x="30" y="30" width="452" height="452" rx="110" ry="110" fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="2" />
+
+  <!-- Архитектурная английская монограмма 'F' в сером цвете FERO -->
+  <g filter="url(#softDepth)" fill="url(#appleF)">
+    <!-- Вертикальный пилон (ствол) -->
+    <rect x="166" y="124" width="64" height="264" rx="8" />
+    <!-- Верхняя полка -->
+    <rect x="166" y="124" width="188" height="60" rx="8" />
+    <!-- Средняя полка -->
+    <rect x="166" y="228" width="152" height="56" rx="8" />
   </g>
 </svg>
