@@ -2867,8 +2867,8 @@ body {
 }
 
 #secondaryToolbarToggle::before {
-  -webkit-mask-image: var(--toolbarButton-secondaryToolbarToggle-icon);
-          mask-image: var(--toolbarButton-secondaryToolbarToggle-icon);
+  -webkit-mask-image: var(--toolbarButton-sidebarToggle-icon);
+          mask-image: var(--toolbarButton-sidebarToggle-icon);
   transform: scaleX(var(--dir-factor));
 }
 

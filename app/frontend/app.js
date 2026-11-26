@@ -4446,7 +4446,7 @@ function showPdfPage(page, options = {}) {
     } else {
       els.pdfDocFrame.dataset.currentDoc = targetDocPath;
       els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
-      const viewerUrl = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum;
+      const viewerUrl = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum + "&pagemode=none";
       els.pdfDocFrame.src = viewerUrl;
     }
 
@@ -7717,7 +7717,7 @@ function openPdfJsSearch(text) {
       if (els.pdfDocFrame.dataset.currentDoc !== state.activeNativePath) {
         els.pdfDocFrame.dataset.currentDoc = state.activeNativePath;
         els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
-        els.pdfDocFrame.src = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum;
+        els.pdfDocFrame.src = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum + "&pagemode=none";
       }
     }
   }
@@ -7791,13 +7791,43 @@ function initPdfDocFrameSync() {
         const app = win.PDFViewerApplication;
         if (!app || !app.eventBus) return;
 
+        // Гарантированно закрываем боковую панель при открытии документа
+        try {
+          if (app.pdfSidebar && app.pdfSidebar.isOpen) {
+            app.pdfSidebar.close();
+          }
+        } catch (_) {}
+
+        // Крайняя правая кнопка тулбара PDF.js: управление боковой панелью (слои / листы)
+        try {
+          const secToggle = win.document?.getElementById("secondaryToolbarToggle");
+          if (secToggle && !secToggle.dataset.sidebarBound) {
+            secToggle.dataset.sidebarBound = "1";
+            secToggle.title = "Скрыть / показать боковую панель (слои и листы)";
+            secToggle.addEventListener("click", (e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              if (app.pdfSidebar) {
+                app.pdfSidebar.toggle();
+              }
+            }, true);
+          }
+        } catch (_) {}
+
         applyActiveTool();
         setTimeout(applyActiveTool, 30);
         setTimeout(applyActiveTool, 100);
         setTimeout(applyActiveTool, 300);
 
         app.eventBus.on("pagesloaded", applyActiveTool);
-        app.eventBus.on("documentloaded", applyActiveTool);
+        app.eventBus.on("documentloaded", () => {
+          applyActiveTool();
+          try {
+            if (app.pdfSidebar && app.pdfSidebar.isOpen) {
+              app.pdfSidebar.close();
+            }
+          } catch (_) {}
+        });
 
         app.eventBus.on("pagechanging", (evt) => {
           const pageNum = evt.pageNumber;
