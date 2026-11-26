@@ -191,9 +191,9 @@ with zipfile.ZipFile(ZIP_OUTPUT, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as 
 zip_mb = round(ZIP_OUTPUT.stat().st_size / (1024 * 1024), 1)
 print(f"[OK] Сборка завершена! Упаковано файлов: {file_count}, размер ZIP: {zip_mb} МБ ({ZIP_OUTPUT.stat().st_size:,} байт)")
 
-# 8. Деплой на корпоративный Google Диск (01_FERO-Launcher)
+# 8. Деплой на корпоративный Google Диск (04_FERO_Launcher)
 print("\n[7] Деплой релизных пакетов на Google Диск...")
-GDRIVE_DIR = Path(r"G:\Общие диски\022_F-Engineering\01_FERO-Launcher")
+GDRIVE_DIR = Path(r"G:\Общие диски\021_F-Engineering_Knowledge_Library\04_FERO_Launcher")
 if GDRIVE_DIR.exists():
     shutil.copy2(ZIP_OUTPUT, GDRIVE_DIR / "Fero_Launcher_v4.5.0_Portable.zip")
     shutil.copy2(ZIP_OUTPUT, GDRIVE_DIR / "Fero_Launcher_Portable.zip")

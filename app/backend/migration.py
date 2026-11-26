@@ -70,6 +70,8 @@ def get_candidate_legacy_runtime_dirs(current_runtime_dir: Path | None = None) -
         user_home / "Documents" / "Codex" / "FEngineering_Launcher_v3_CURRENT_COPY" / "runtime",
         user_home / "Documents" / "Codex" / "F.E.R.O.-Launcher" / "runtime",
         user_home / "Documents" / "Codex" / "f-engineering-launcher" / "runtime",
+        Path(r"G:\Общие диски\021_F-Engineering_Knowledge_Library\04_FERO_Launcher\runtime"),
+        Path(r"G:\Общие диски\022_F-Engineering\01_FERO-Launcher\runtime"),
     ]
     for dev_p in dev_paths:
         _add_candidate(dev_p)

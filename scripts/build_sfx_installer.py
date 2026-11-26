@@ -8,7 +8,7 @@ SRC_DIR = Path(r"C:\Users\a9379\.gemini\antigravity\scratch\dist_colleague\Fero_
 OUTPUT_DIR = Path(r"C:\Users\a9379\.gemini\antigravity\scratch\dist_colleague")
 SEVEN_ZIP = r"C:\Program Files\7-Zip\7z.exe"
 SFX_MODULE = r"C:\Program Files\7-Zip\7z.sfx"
-GDRIVE_DIR = Path(r"G:\Общие диски\022_F-Engineering\01_FERO-Launcher")
+GDRIVE_DIR = Path(r"G:\Общие диски\021_F-Engineering_Knowledge_Library\04_FERO_Launcher")
 
 print(f"[*] Packaging Fero-Launcher v4.5.0 into single self-extracting EXE...")
 print(f"    Source: {SRC_DIR}")

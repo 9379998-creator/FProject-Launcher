@@ -3,7 +3,7 @@
 > **Бренд и лейбл**: FERO / Fero Engineering  
 > **Официальный репозиторий**: [https://github.com/9379998-creator/Fero-Launcher](https://github.com/9379998-creator/Fero-Launcher)  
 > **Текущая версия**: 4.5.0 (Production Release)  
-> **Дистрибутивы для коллег**: `G:\Общие диски\022_F-Engineering\01_FERO-Launcher`
+> **Дистрибутивы для коллег**: `G:\Общие диски\021_F-Engineering_Knowledge_Library\04_FERO_Launcher`
 
 **Fero-Launcher** — флагманское локальное инженерное приложение продуктовой линейки **FERO** для каталогизации рабочей проектной документации, быстрого рендеринга и интерактивного просмотра чертежей (PDF, DWG, DXF, Office/Excel), сопоставления спецификаций и запуска расчётных модулей.
 
