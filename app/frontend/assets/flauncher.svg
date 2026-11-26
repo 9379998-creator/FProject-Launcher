@@ -3,13 +3,13 @@
   <rect x="24" y="24" width="464" height="464" rx="114" fill="#1D1D20" stroke="#3A3A3E" stroke-width="3"/>
   <rect x="26" y="26" width="460" height="460" rx="112" fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="2"/>
   
-  <!-- Architectural Apple 'F' Monogram in System Gray 5 #E5E5EA -->
-  <g fill="#E5E5EA">
-    <!-- Vertical Stem -->
-    <rect x="164" y="120" width="68" height="272" rx="9"/>
-    <!-- Top Horizontal Bar -->
-    <rect x="164" y="120" width="192" height="64" rx="9"/>
-    <!-- Middle Horizontal Bar -->
-    <rect x="164" y="228" width="156" height="60" rx="9"/>
+  <!-- Formula 1 Stylized Monogram 'F' in System Gray 5 #E5E5EA (15.5 deg lean, 1.5x thinner) -->
+  <g fill="#E5E5EA" transform="translate(20, 0) skewX(-15.5)">
+    <!-- Aerodynamic Racetrack Top Chicane & Stem -->
+    <rect x="174" y="150" width="44" height="244" rx="7"/>
+    <rect x="200" y="118" width="160" height="44" rx="7"/>
+    <path d="M 174 150 Q 174 118 206 118 L 214 118 L 214 162 L 174 162 Z"/>
+    <!-- Aerodynamic Middle Wing -->
+    <rect x="174" y="222" width="138" height="40" rx="7"/>
   </g>
 </svg>
