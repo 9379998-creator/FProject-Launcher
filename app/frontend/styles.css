@@ -222,9 +222,9 @@ button:disabled {
 }
 
 .stats {
-  border: 1px solid #d4d4d4;
-  border-radius: 2px;
-  background: #ffffff;
+  border: 1px solid #E5E5EA;
+  border-radius: 8px;
+  background: #F5F5F7;
 }
 
 .progress-panel {
@@ -236,9 +236,9 @@ button:disabled {
   max-width: 90vw;
   padding: 10px 14px;
   background: #ffffff;
-  border: 1px solid #707070;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-  border-radius: 4px;
+  border: 1px solid #D8D8DC;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
   z-index: 30000;
   box-sizing: border-box;
   pointer-events: auto;
@@ -426,42 +426,48 @@ button:disabled {
 textarea,
 .search-input {
   width: 100%;
-  border: 1px solid #abadb3;
-  border-radius: 2px;
-  color: #000000;
-  background: #ffffff;
-  font: 12px/1.35 "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  border: 1px solid #D8D8DC;
+  border-radius: 8px;
+  color: #1D1D1F;
+  background: #FFFFFF;
+  font: 12px/1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
 }
 
 textarea {
   min-height: 56px;
   resize: vertical;
-  padding: 4px 6px;
+  padding: 6px 8px;
   margin-bottom: 7px;
+  border-radius: 8px;
 }
 
 .search-input {
-  height: 23px;
-  min-height: 23px;
-  padding: 1px 6px;
-  margin-bottom: 5px;
-  border: 1px solid #abadb3;
-  border-radius: 2px;
+  height: 26px;
+  min-height: 26px;
+  padding: 2px 8px;
+  margin-bottom: 6px;
+  border: 1px solid #D8D8DC;
+  border-radius: 8px;
+  background: #F5F5F7;
   font-size: 11.5px;
+  outline: none !important;
+  transition: all 0.12s ease;
 }
 
 .search-input:focus,
 textarea:focus {
-  border-color: #0078d7;
-  outline: 1px solid #0078d7;
+  border-color: #B5B5BA;
+  background: #FFFFFF;
+  outline: none !important;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.04);
 }
 
 .object-list,
 .tree {
   min-height: 0;
   overflow: auto;
-  border: 1px solid #828790;
-  border-radius: 2px;
+  border: 1px solid #E5E5EA;
+  border-radius: 8px;
   background: #ffffff;
 }
 
@@ -480,37 +486,37 @@ textarea:focus {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  height: calc(22px * var(--tree-scale, 1));
-  min-height: calc(22px * var(--tree-scale, 1));
-  max-height: calc(22px * var(--tree-scale, 1));
+  height: calc(23px * var(--tree-scale, 1));
+  min-height: calc(23px * var(--tree-scale, 1));
+  max-height: calc(23px * var(--tree-scale, 1));
   width: fit-content;
   max-width: 100%;
-  padding: 0 6px 0 4px;
-  border-radius: 2px;
+  padding: 0 8px 0 6px;
+  border-radius: 7px;
   border: 1px solid transparent;
   cursor: pointer;
   user-select: none;
   font-size: calc(12px * var(--tree-scale, 1));
-  line-height: calc(22px * var(--tree-scale, 1));
-  color: #000000;
+  line-height: calc(23px * var(--tree-scale, 1));
+  color: #1D1D1F;
   transition: border-color 0.08s ease, background 0.08s ease;
 }
 
 .object-row:hover {
-  background: #f2f7fc;
-  border-color: #b8d6fb;
+  background: #F5F5F7;
+  border-color: #E5E5EA;
 }
 
 .object-row.selected {
-  background: #ebf4fc;
-  border-color: #3399ff;
+  background: #EBEBED;
+  border-color: #D1D1D6;
   color: #000000;
-  font-weight: 400;
+  font-weight: 500;
 }
 
 .object-row.selected:hover {
-  background: #e0f0fc;
-  border-color: #3399ff;
+  background: #E4E4E9;
+  border-color: #C7C7CC;
 }
 
 .object-row.selected .object-title {
@@ -576,9 +582,9 @@ textarea:focus {
   max-height: 45px;
   box-sizing: border-box;
   margin-bottom: 6px;
-  padding: 2px 4px;
-  border: 1px solid #abadb3;
-  border-radius: 2px;
+  padding: 3px 5px;
+  border: 1px solid #E5E5EA;
+  border-radius: 8px;
   background: #ffffff;
   overflow-y: auto;
   overflow-x: hidden;
@@ -588,18 +594,18 @@ textarea:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 18px;
-  min-height: 18px;
-  max-height: 18px;
+  height: 19px;
+  min-height: 19px;
+  max-height: 19px;
   box-sizing: border-box;
-  padding: 0 5px;
-  border: 1px solid #c0c2c6;
-  border-radius: 2px;
+  padding: 0 7px;
+  border: 1px solid #D8D8DC;
+  border-radius: 6px;
   font-size: 11px;
   font-weight: 400;
-  line-height: 16px;
-  color: #202020;
-  background: #fdfdfd;
+  line-height: 17px;
+  color: #1D1D1F;
+  background: #F5F5F7;
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
@@ -607,16 +613,16 @@ textarea:focus {
 }
 
 .format-chip:hover {
-  background: #e5f1fb;
-  border-color: #0078d7;
+  background: #EBEBED;
+  border-color: #C7C7CC;
   color: #000000;
 }
 
 .format-chip.active {
-  background: #cce8ff;
-  border-color: #005499;
-  color: #003366;
-  font-weight: 600;
+  background: #1D1D1F;
+  border-color: #1D1D1F;
+  color: #FFFFFF;
+  font-weight: 500;
 }
 
 .format-empty {
@@ -750,38 +756,38 @@ textarea:focus {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  height: calc(22px * var(--tree-scale, 1));
-  min-height: calc(22px * var(--tree-scale, 1));
-  max-height: calc(22px * var(--tree-scale, 1));
+  height: calc(23px * var(--tree-scale, 1));
+  min-height: calc(23px * var(--tree-scale, 1));
+  max-height: calc(23px * var(--tree-scale, 1));
   width: max-content;
   max-width: max-content;
-  padding: 0 6px 0 4px;
-  border-radius: 2px;
+  padding: 0 7px 0 5px;
+  border-radius: 6px;
   border: 1px solid transparent;
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
   font-size: calc(12px * var(--tree-scale, 1));
-  line-height: calc(22px * var(--tree-scale, 1));
-  color: #000000;
+  line-height: calc(23px * var(--tree-scale, 1));
+  color: #1D1D1F;
   transition: border-color 0.08s ease, background 0.08s ease;
 }
 
 .tree-row:hover {
-  background: #f2f7fc;
-  border-color: #b8d6fb;
+  background: #F5F5F7;
+  border-color: #E5E5EA;
 }
 
 .tree-row.selected {
-  background: #ebf4fc;
-  border-color: #3399ff;
+  background: #EBEBED;
+  border-color: #D1D1D6;
   color: #000000;
-  font-weight: 400;
+  font-weight: 500;
 }
 
 .tree-row.selected:hover {
-  background: #e0f0fc;
-  border-color: #3399ff;
+  background: #E4E4E9;
+  border-color: #C7C7CC;
 }
 
 /* Короткая подсветка строки дерева для файла активной миниатюры */
@@ -1163,26 +1169,28 @@ textarea:focus {
   height: auto;
   min-height: 0;
   margin: 0;
-  padding: 6px;
-  border: 1px solid #d4d7dc;
-  border-radius: 2px;
-  background: #ffffff;
+  padding: 8px;
+  border: 1px solid #E5E5EA;
+  border-radius: 8px;
+  background: #FFFFFF;
   text-align: left;
   user-select: none;
   -webkit-user-select: none;
   cursor: pointer;
-  transition: border-color 0.1s ease, background 0.1s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
 }
 
 .pdf-thumb:hover {
-  border-color: #b8d6fb;
-  background: #f2f7fc;
+  border-color: #C7C7CC;
+  background: #FAFAFC;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
 }
 
 .pdf-thumb.active {
-  border-color: #3399ff;
-  background: #ebf4fc;
-  box-shadow: 0 0 0 1px #3399ff;
+  border-color: #1D1D1F;
+  background: #F5F5F7;
+  box-shadow: 0 0 0 1px #1D1D1F;
 }
 
 .pdf-thumb.is-empty-dwg-sheet {
@@ -1209,7 +1217,8 @@ textarea:focus {
   max-height: calc(480px * var(--thumb-scale, 1));
   margin: 0 auto;
   object-fit: contain;
-  border: 1px solid #d4d7dc;
+  border: 1px solid #E5E5EA;
+  border-radius: 5px;
   background: #fff;
   -webkit-user-drag: none;
   user-select: none;
