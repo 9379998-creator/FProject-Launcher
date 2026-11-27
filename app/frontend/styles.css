@@ -82,10 +82,19 @@ html, body {
   letter-spacing: -0.01em;
   cursor: pointer;
   white-space: nowrap;
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.9);
   transition: all 0.12s cubic-bezier(0.25, 0.1, 0.25, 1);
   box-sizing: border-box;
   user-select: none;
+}
+
+.action-grid > button:focus,
+.action-grid > button:focus-visible,
+.action-grid > button:focus-within {
+  outline: none !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
 }
 
 .action-grid > button:hover:not(:disabled) {
@@ -110,9 +119,16 @@ html, body {
   color: #8E8E93 !important;
   opacity: 0.55 !important;
   box-shadow: none !important;
+  outline: none !important;
   cursor: default !important;
   transform: none !important;
   pointer-events: none !important;
+}
+
+/* Глобальное снятие грубой браузерной обводки (focus outline) для кнопок */
+button:focus,
+button:focus-visible {
+  outline: none !important;
 }
 
 

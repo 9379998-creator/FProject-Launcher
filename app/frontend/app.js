@@ -6958,7 +6958,12 @@ async function handleInitialDeepLink() {
 startHeartbeatLoop();
 setTimeout(checkUpdates, 3000);
 loadObjectSummaries()
-  .then(() => handleInitialDeepLink())
+  .then(() => {
+    handleInitialDeepLink();
+    if (document.activeElement && document.activeElement.tagName === "BUTTON") {
+      document.activeElement.blur();
+    }
+  })
   .catch((error) => {
     els.objectList.innerHTML = `<div class="empty-note">Ошибка загрузки списка: ${error.message}</div>`;
   });
