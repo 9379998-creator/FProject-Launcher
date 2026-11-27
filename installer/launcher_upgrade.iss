@@ -22,6 +22,7 @@ SolidCompression=yes
 
 ; Установка строго в профиль пользователя без запроса прав администратора
 PrivilegesRequired=lowest
+ArchitecturesInstallIn64BitMode=x64
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
@@ -55,10 +56,14 @@ Name: "{group}\Удалить Fero Launcher"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Fero Launcher"; Filename: "{app}\FEngineeringLauncher.exe"; IconFilename: "{app}\app\frontend\assets\flauncher.ico"
 
 [Run]
-Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden
+Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden skipifdoesntexist
 Filename: "{app}\FEngineeringLauncher.exe"; Flags: nowait postinstall skipifsilent
 
 [Code]
+// Нативное уведомление оболочки Windows Explorer об обновлении иконок
+procedure SHChangeNotify(wEventId: Longint; uFlags: Cardinal; dwItem1, dwItem2: Cardinal);
+  external 'SHChangeNotify@shell32.dll stdcall';
+
 function InitializeSetup(): Boolean;
 var
   ErrorCode: Integer;
@@ -67,6 +72,18 @@ begin
   Exec('taskkill.exe', '/F /IM FEngineeringLauncher.exe', '', SW_HIDE, ewWaitUntilTerminated, ErrorCode);
   Sleep(800);
   Result := True;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    try
+      // SHCNE_ASSOCCHANGED ($08000000): сброс кэша иконок и обновление рабочего стола
+      SHChangeNotify($08000000, 0, 0, 0);
+    except
+    end;
+  end;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
