@@ -5712,15 +5712,17 @@ els.backToObjects.addEventListener("click", () => {
   setMode("objects");
   loadObjectSummaries().catch(() => {});
 });
-els.backToTree.addEventListener("click", () => {
-  if (inWindow3()) {
-    exitWindow3();
-    return;
-  }
-  setViewerMode("standard");
-  setTreeBrowseMode(true);
-  renderTree();
-});
+if (els.backToTree) {
+  els.backToTree.addEventListener("click", () => {
+    if (inWindow3()) {
+      exitWindow3();
+      return;
+    }
+    setViewerMode("standard");
+    setTreeBrowseMode(true);
+    renderTree();
+  });
+}
 els.treeSearch.addEventListener("input", () => {
   renderTree();
 });
