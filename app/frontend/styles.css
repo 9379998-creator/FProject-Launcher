@@ -1159,8 +1159,9 @@ textarea:focus {
   overflow: auto;
   border-right: 0;
   background: #ffffff;
-  padding: 12px 18px;
+  padding: 5px 6px 6px 6px;
   user-select: none;
+  box-sizing: border-box;
 }
 
 .pdf-thumb {
@@ -1169,7 +1170,7 @@ textarea:focus {
   height: auto;
   min-height: 0;
   margin: 0;
-  padding: 8px;
+  padding: 6px;
   border: 1px solid #E5E5EA;
   border-radius: 8px;
   background: #FFFFFF;
@@ -1877,8 +1878,9 @@ textarea:focus {
 /* Обёртка миниатюры с кнопками пути: как в дереве, но для ленты */
 .thumb-wrap {
   position: relative;
-  max-width: 860px;
-  margin: 0 auto 14px;
+  width: 100%;
+  max-width: 100%;
+  margin: 0 0 10px;
 }
 
 .thumb-wrap .pdf-thumb {
