@@ -4,7 +4,7 @@ import shutil
 import ctypes
 from PIL import Image
 
-SOURCE_IMG = r"C:\Users\a9379\.gemini\antigravity\brain\3acc4eb7-0c1e-4118-8b72-ab9dd5251e93\.user_uploaded\media_1792129555096_35854596.png"
+SOURCE_IMG = r"G:\Общие диски\022_F-Engineering\02_Projects_2026\06_Л1_Купчино_ОД150\04_Узлы_конструктив_расчеты\fero_icon_apple_512.png"
 REPO_ROOT = r"C:\Users\a9379\.gemini\antigravity\scratch\fero-launcher-v4"
 ASSETS_DIR = os.path.join(REPO_ROOT, "app", "frontend", "assets")
 FRONTEND_DIR = os.path.join(REPO_ROOT, "app", "frontend")
