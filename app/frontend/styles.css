@@ -40,22 +40,19 @@ html, body {
 
 
 
-/* Полоса действий (серая как у Microsoft) */
+/* Верхняя панель действий лаунчера (Apple Minimalist) */
 .action-grid {
   display: flex;
   align-items: center;
-  gap: 3px;
-  height: 31px;
-  min-height: 31px;
-  padding: 0 8px;
-  background: #f0f2f5;
-  border-bottom: 1px solid #b8c0cc; /* Тонкая полоска снизу, продетая до конца */
-  box-shadow: 0 1px 0 #ffffff; /* Нижний выпуклый 3D-рельеф */
+  gap: 8px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0 12px;
+  background: #FAFAFC;
+  border-bottom: 1px solid #E5E5EA;
   box-sizing: border-box;
 }
 
-/* Кнопки действий: Объекты, Загрузить, Обновить, Отобразить, Исключить, Назад */
-/* Абсолютно одинаковые по своей ширине */
 /* Скрытие верхней полосы лаунчера (.action-grid) в Окне №3 для максимизации рабочего пространства */
 .action-grid[hidden],
 .action-grid.hidden,
@@ -64,76 +61,58 @@ html, body {
   display: none !important;
 }
 
+/* Кнопки действий: Объекты, Загрузить, Обновить, Рендер, Назад, Параметры, Исключить */
+/* Одинаковая ширина, элегантный Apple Squircle, деликатный микрообъём и отклик */
 .action-grid > button {
-  width: 82px;
-  min-width: 82px;
-  max-width: 82px;
-  height: 22px;
-  min-height: 22px;
+  width: 96px;
+  min-width: 96px;
+  max-width: 96px;
+  height: 28px;
+  min-height: 28px;
   padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
-  border: 1px solid #d4d7dc;
-  border-radius: 2px;
-  background: #fbfcfd;
-  color: #1e293b;
-  font: 11.5px/20px "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  border: 1px solid #DCDCE0;
+  border-radius: 7px;
+  background: #FFFFFF;
+  color: #1D1D1F;
+  font: 500 11.5px/26px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -0.01em;
   cursor: pointer;
   white-space: nowrap;
-  box-shadow: none;
-  transition: background 0.08s ease, border-color 0.08s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: all 0.12s cubic-bezier(0.25, 0.1, 0.25, 1);
   box-sizing: border-box;
+  user-select: none;
 }
 
 .action-grid > button:hover:not(:disabled) {
-  background: #e5f1fb;
-  border-color: #70c0e8;
+  background: #F5F5F7;
+  border-color: #C7C7CC;
   color: #000000;
+  box-shadow: 0 1.5px 3.5px rgba(0, 0, 0, 0.07), inset 0 1px 0 #FFFFFF;
 }
 
 .action-grid > button:active:not(:disabled) {
-  background: #cce4f7;
-  border-color: #005499;
-}
-
-/* Виджет масштабирования [−] [100%] [+] */
-.scale-widget {
-  display: inline-flex;
-  align-items: center;
-  margin-left: 6px;
-  gap: 2px;
-}
-
-.scale-widget .scale-btn {
-  height: 22px;
-  min-height: 22px;
-  padding: 0 8px;
-  border: 1px solid #d4d7dc;
-  border-radius: 2px;
-  background: #fbfcfd;
-  color: #1e293b;
-  font: 11.5px/20px "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  cursor: pointer;
-  white-space: nowrap;
-  box-shadow: none;
-  transition: background 0.08s ease, border-color 0.08s ease;
-  box-sizing: border-box;
-}
-
-.scale-widget .scale-reset {
-  min-width: 48px;
-  text-align: center;
-  font-weight: 600;
-}
-
-.scale-widget .scale-btn:hover:not(:disabled) {
-  background: #e5f1fb;
-  border-color: #70c0e8;
+  background: #EBEBED;
+  border-color: #B0B0B5;
+  box-shadow: inset 0 1px 2.5px rgba(0, 0, 0, 0.1);
+  transform: translateY(1px);
   color: #000000;
 }
 
-.scale-widget .scale-btn:active:not(:disabled) {
-  background: #cce4f7;
-  border-color: #005499;
+.action-grid > button:disabled,
+.action-grid button:disabled {
+  background: #F5F5F7 !important;
+  border-color: #E5E5EA !important;
+  color: #8E8E93 !important;
+  opacity: 0.55 !important;
+  box-shadow: none !important;
+  cursor: default !important;
+  transform: none !important;
+  pointer-events: none !important;
 }
 
 
@@ -195,19 +174,6 @@ html, body {
   border-color: #005499;
 }
 
-.scale-btn.scale-reset {
-  font-weight: 600;
-  min-width: 44px;
-  text-align: center;
-}
-
-.action-grid button:disabled {
-  background: transparent;
-  border-color: transparent;
-  color: #a0a4a8;
-  opacity: 0.5;
-  cursor: default;
-}
 
 button {
   min-height: 25px;
