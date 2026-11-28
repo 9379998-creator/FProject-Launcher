@@ -158,6 +158,10 @@ const els = {
   settingsOpenWinSettingsBtn: document.getElementById("settingsOpenWinSettingsBtn"),
   settingsDwgHint: document.getElementById("settingsDwgHint"),
   settingsSaveBtn: document.getElementById("settingsSaveBtn"),
+  btnHelp: document.getElementById("btnHelp"),
+  helpModal: document.getElementById("helpModal"),
+  helpCloseBtn: document.getElementById("helpCloseBtn"),
+  helpOkBtn: document.getElementById("helpOkBtn"),
 
 
 };
@@ -6459,6 +6463,10 @@ function handleGlobalEscape() {
     closeSettingsModal();
     return;
   }
+  if (els.helpModal && !els.helpModal.hidden) {
+    closeHelpModal();
+    return;
+  }
   if (!els.pdfPageImage.hidden && state.view.dragging) {
     state.view.dragging = false;
     updateViewTransform();
@@ -6959,6 +6967,21 @@ async function handleInitialDeepLink() {
 
 startHeartbeatLoop();
 setTimeout(checkUpdates, 3000);
+
+function openHelpModal() {
+  if (els.helpModal) els.helpModal.hidden = false;
+}
+function closeHelpModal() {
+  if (els.helpModal) els.helpModal.hidden = true;
+}
+if (els.btnHelp) els.btnHelp.addEventListener("click", openHelpModal);
+if (els.helpCloseBtn) els.helpCloseBtn.addEventListener("click", closeHelpModal);
+if (els.helpOkBtn) els.helpOkBtn.addEventListener("click", closeHelpModal);
+if (els.helpModal) {
+  els.helpModal.addEventListener("click", (e) => {
+    if (e.target === els.helpModal) closeHelpModal();
+  });
+}
 loadObjectSummaries()
   .then(() => {
     handleInitialDeepLink();

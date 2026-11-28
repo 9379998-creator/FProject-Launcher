@@ -1888,6 +1888,75 @@ textarea:focus {
 }
 
 
+/* Диалоговое окно "Справка" (Apple Minimalist) */
+.help-modal-dialog {
+  width: 620px;
+  max-width: 92vw;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+}
+
+.help-modal-body {
+  padding: 16px 20px;
+  overflow-y: auto;
+  max-height: calc(88vh - 110px);
+}
+
+.help-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #86868B;
+  margin: 14px 0 8px;
+}
+
+.help-section-title:first-child {
+  margin-top: 0;
+}
+
+.help-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.help-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  background: #F5F5F7;
+  border-radius: 6px;
+  border: 1px solid #E5E5EA;
+}
+
+.help-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 140px;
+  padding: 4px 10px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  color: #1D1D1F;
+  background: #FFFFFF;
+  border: 1px solid #D1D1D6;
+  border-radius: 5px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  white-space: nowrap;
+}
+
+.help-desc {
+  font-size: 12.5px;
+  color: #3C3C43;
+  line-height: 1.35;
+}
+
+
 /* Модальное окно "Параметры" */
 .modal-overlay {
   position: fixed;
