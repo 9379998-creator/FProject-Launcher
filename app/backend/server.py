@@ -34,6 +34,15 @@ try:
 except ImportError:  # pragma: no cover - reported through the local API
     openpyxl = None
 
+try:
+    from .license_guard import check_trial_status
+except (ImportError, ValueError):
+    try:
+        from license_guard import check_trial_status
+    except ImportError:
+        def check_trial_status():
+            return {"active": True, "trial_enabled": False, "message": "unrestricted"}
+
 logger = logging.getLogger("fero_server")
 
 
@@ -3551,6 +3560,16 @@ class LauncherHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
 
+        if parsed.path == "/api/license/status":
+            self.send_json(HTTPStatus.OK, check_trial_status())
+            return
+
+        trial_info = check_trial_status()
+        if trial_info.get("trial_enabled") and not trial_info.get("active"):
+            if parsed.path.startswith("/api/") and parsed.path not in ("/api/heartbeat", "/api/license/status", "/api/health"):
+                self.send_json(HTTPStatus.FORBIDDEN, {"error": trial_info.get("message", "Ознакомительный период истёк")})
+                return
+
         if parsed.path == "/api/heartbeat":
             params = parse_qs(parsed.query)
             client_id = params.get("id", ["default"])[0]
@@ -3754,6 +3773,12 @@ class LauncherHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+
+        trial_info = check_trial_status()
+        if trial_info.get("trial_enabled") and not trial_info.get("active"):
+            if parsed.path != "/api/heartbeat/close":
+                self.send_json(HTTPStatus.FORBIDDEN, {"error": trial_info.get("message", "Ознакомительный период истёк")})
+                return
 
         if parsed.path == "/api/heartbeat/close":
             try:

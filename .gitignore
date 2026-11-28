@@ -67,3 +67,4 @@ export_for_review/
 runtime/
 
 output_cad/
+dist_protected/

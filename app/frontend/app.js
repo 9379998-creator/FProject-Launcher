@@ -158,8 +158,11 @@ const els = {
   settingsOpenWinSettingsBtn: document.getElementById("settingsOpenWinSettingsBtn"),
   settingsDwgHint: document.getElementById("settingsDwgHint"),
   settingsSaveBtn: document.getElementById("settingsSaveBtn"),
-
-
+  shellSplitter: document.getElementById("shellSplitter"),
+  btnHelp: document.getElementById("btnHelp"),
+  helpModal: document.getElementById("helpModal"),
+  helpCloseBtn: document.getElementById("helpCloseBtn"),
+  helpOkBtn: document.getElementById("helpOkBtn"),
 };
 
 function text(value, fallback = "") {
@@ -1045,6 +1048,9 @@ async function excludeSelectedObject() {
     if (!response.ok) throw new Error(payload.error || "Объект не исключён");
     state.selectedObjectId = null;
     state.currentManifest = null;
+    try {
+      localStorage.removeItem("launcher_last_object_id");
+    } catch {}
     state.selectedPaths.clear();
     state.revealedPath = "";
     state.renderedPages = [];
@@ -2658,6 +2664,9 @@ async function openSelectedObject() {
   beaconPerf("pair-index", performance.now() - _piT0, `files=${(manifest.statistics || {}).files || 0} pdf=${_pdfCount} pairless=${state.pairless}`);
   setViewerMode("standard");
   setMode("tree");
+  try {
+    localStorage.setItem("launcher_last_object_id", object.id);
+  } catch {}
   updateViewerBanner(manifest.name || object.name);
   setTreeBrowseMode(true);
   renderFormats();
@@ -6459,6 +6468,16 @@ function handleGlobalEscape() {
     closeSettingsModal();
     return;
   }
+  if (els.helpModal && !els.helpModal.hidden) {
+    closeHelpModal();
+    return;
+  }
+  if (state.thumbScale && state.thumbScale > 1.05) {
+    state.thumbScale = 1;
+    els.pdfThumbs.style.setProperty("--thumb-scale", "1");
+    try { localStorage.setItem("launcher_thumb_scale", "1"); } catch {}
+    return;
+  }
   if (!els.pdfPageImage.hidden && state.view.dragging) {
     state.view.dragging = false;
     updateViewTransform();
@@ -6959,9 +6978,104 @@ async function handleInitialDeepLink() {
 
 startHeartbeatLoop();
 setTimeout(checkUpdates, 3000);
+initShellSplitter();
+
+function openHelpModal() {
+  if (els.helpModal) els.helpModal.hidden = false;
+}
+function closeHelpModal() {
+  if (els.helpModal) els.helpModal.hidden = true;
+}
+if (els.btnHelp) els.btnHelp.addEventListener("click", openHelpModal);
+if (els.helpCloseBtn) els.helpCloseBtn.addEventListener("click", closeHelpModal);
+if (els.helpOkBtn) els.helpOkBtn.addEventListener("click", closeHelpModal);
+if (els.helpModal) {
+  els.helpModal.addEventListener("click", (e) => {
+    if (e.target === els.helpModal) closeHelpModal();
+  });
+}
+
+function initShellSplitter() {
+  const splitter = els.shellSplitter || document.getElementById("shellSplitter");
+  const shell = document.getElementById("appShell") || document.querySelector(".shell");
+  if (!splitter || !shell) return;
+
+  const savedWidth = localStorage.getItem("launcher_sidebar_width");
+  if (savedWidth) {
+    const parsed = parseInt(savedWidth, 10);
+    if (!isNaN(parsed) && parsed >= 36) {
+      shell.style.setProperty("--sidebar-width", `${parsed}px`);
+    }
+  }
+
+  let isDragging = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  splitter.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    isDragging = true;
+    splitter.classList.add("active");
+    startX = e.clientX;
+    const sidebar = document.getElementById("sidebar");
+    startWidth = sidebar ? sidebar.getBoundingClientRect().width : 300;
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.querySelectorAll("iframe").forEach(f => f.style.pointerEvents = "none");
+
+    const onMouseMove = (moveEvent) => {
+      if (!isDragging) return;
+      const shellRect = shell.getBoundingClientRect();
+      const deltaX = moveEvent.clientX - startX;
+      let newWidth = startWidth + deltaX;
+
+      const minWidth = 36;
+      const maxWidth = Math.max(minWidth, shellRect.width - 36);
+      newWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
+
+      shell.style.setProperty("--sidebar-width", `${Math.round(newWidth)}px`);
+    };
+
+    const onMouseUp = () => {
+      if (!isDragging) return;
+      isDragging = false;
+      splitter.classList.remove("active");
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      document.querySelectorAll("iframe").forEach(f => f.style.pointerEvents = "");
+
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+
+      const sidebar = document.getElementById("sidebar");
+      if (sidebar) {
+        const finalWidth = Math.round(sidebar.getBoundingClientRect().width);
+        try {
+          localStorage.setItem("launcher_sidebar_width", String(finalWidth));
+        } catch {}
+      }
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  });
+}
+
 loadObjectSummaries()
   .then(() => {
     handleInitialDeepLink();
+    if (!state.currentManifest) {
+      const lastId = localStorage.getItem("launcher_last_object_id");
+      if (lastId) {
+        const lastObj = state.objects.find(o => o.id === lastId);
+        if (lastObj) {
+          state.selectedObjectId = lastObj.id;
+          updateObjectListSelection();
+          openSelectedObject().catch(console.error);
+        }
+      }
+    }
     if (document.activeElement && document.activeElement.tagName === "BUTTON") {
       document.activeElement.blur();
     }
