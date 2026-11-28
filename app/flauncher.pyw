@@ -51,10 +51,12 @@ def _resource_path(*relative: str) -> str:
 def _backend_python() -> str:
     """Интерпретатор для запуска backend-сервера (server.py).
 
-    Приоритет: встроенный runtime/python/pythonw.exe, затем сам текущий
-    интерпретатор / frozen EXE (который напрямую обрабатывает запуск
-    server.py и вспомогательных .py скриптов через встроенную среду).
+    Приоритет: системный Python 3.14 (pythonw.exe), встроенный runtime/python,
+    затем текущий sys.executable.
     """
+    for p in [r"C:\Python314\pythonw.exe", r"C:\Python314\python.exe"]:
+        if os.path.exists(p):
+            return p
     if os.path.exists(EMBEDDED_PYTHON):
         return EMBEDDED_PYTHON
     return sys.executable
@@ -296,17 +298,59 @@ def log(msg: str) -> None:
         pass
 
 
-def is_server_healthy(port: int) -> bool:
+def _raw_http_get_json(port: int, path: str, timeout: float) -> dict:
+    """Сырой TCP-запрос к loopback, минуя любой системный proxy/VPN-фильтр."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
     try:
-        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/health")
-        with urllib.request.urlopen(req, timeout=0.8) as resp:
-            if resp.status != 200:
-                return False
-            data = json.loads(resp.read().decode("utf-8"))
-            repo = data.get("repoRoot", "")
-            if repo and os.path.normcase(os.path.abspath(repo)) != os.path.normcase(os.path.abspath(REPO_ROOT)):
-                return False
-            return True
+        s.connect(("127.0.0.1", port))
+        req = (
+            f"GET {path} HTTP/1.0\r\n"
+            f"Host: 127.0.0.1:{port}\r\n"
+            "Connection: close\r\n\r\n"
+        )
+        s.sendall(req.encode("ascii"))
+        chunks: list[bytes] = []
+        while True:
+            chunk = s.recv(8192)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        raw = b"".join(chunks).decode("utf-8", errors="replace")
+    finally:
+        s.close()
+    if "\r\n\r\n" in raw:
+        head, _, body = raw.partition("\r\n\r\n")
+    else:
+        head, _, body = raw.partition("\n\n")
+    status_line = head.splitlines()[0] if head else ""
+    parts = status_line.split(" ", 2)
+    if len(parts) < 2 or parts[1] != "200":
+        raise RuntimeError(f"HTTP {parts[1] if len(parts) > 1 else '?'} from {path}")
+    return json.loads(body)
+
+
+def is_port_listening(port: int) -> bool:
+    """Мгновенная проверка доступности порта на 127.0.0.1."""
+    try:
+        s = socket.create_connection(("127.0.0.1", port), timeout=0.05)
+        s.close()
+        return True
+    except OSError:
+        return False
+
+
+def is_server_healthy(port: int) -> bool:
+    if not is_port_listening(port):
+        return False
+    try:
+        data = _raw_http_get_json(port, "/api/health", timeout=1.5)
+        if data.get("status") != "ok":
+            return False
+        repo = data.get("repoRoot", "")
+        if repo and os.path.normcase(os.path.abspath(repo)) != os.path.normcase(os.path.abspath(REPO_ROOT)):
+            return False
+        return True
     except Exception:
         return False
 
@@ -454,7 +498,7 @@ def find_or_start_server() -> tuple[int, subprocess.Popen | None]:
     # Привязываем дочерний процесс сервера к Windows Job Object с авто-завершением
     assign_process_to_job(server_proc)
 
-    deadline = time.time() + 20
+    deadline = time.time() + 15
     while time.time() < deadline:
         if server_proc.poll() is not None:
             log(f"Backend process pid {server_proc.pid} exited prematurely with return code {server_proc.returncode}!")
@@ -462,7 +506,7 @@ def find_or_start_server() -> tuple[int, subprocess.Popen | None]:
         if is_server_healthy(target_port):
             log(f"Server on port {target_port} became healthy (pid {server_proc.pid})")
             return target_port, server_proc
-        time.sleep(0.3)
+        time.sleep(0.05)
 
     log(f"Warning: server on port {target_port} health check timed out, attempting to use it anyway")
     return target_port, server_proc
@@ -472,26 +516,24 @@ READINESS_TIMEOUT_SECONDS = 25
 
 
 def fetch_json(url: str, timeout: float):
-    """GET JSON; raise on non-200 status or unparseable body."""
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
-        if resp.status != 200:
-            raise RuntimeError(f"HTTP {resp.status} for {url}")
-        return json.loads(resp.read().decode("utf-8"))
+    """GET JSON через сырой socket (обходит VPN/WFP на 127.0.0.1)."""
+    parsed = urllib.parse.urlsplit(url)
+    port = parsed.port or 8780
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+    return _raw_http_get_json(port, path, timeout)
 
 
 def wait_for_objects_ready(base_url: str, timeout_seconds: float) -> tuple[bool, str]:
-    """Poll GET /api/objects until HTTP 200 with parsed JSON.
-
-    Bounded by timeout_seconds; polls the real condition (no fixed sleep
-    used as synchronization, only a short poll interval inside the loop).
-    """
+    """Poll GET /api/objects until HTTP 200 with parsed JSON."""
     deadline = time.time() + max(0.1, timeout_seconds)
     last_error = "not attempted"
     parsed_base = urllib.parse.urlsplit(base_url)
-    api_objects_url = f"{parsed_base.scheme}://{parsed_base.netloc}/api/objects"
+    port = parsed_base.port or 8780
     while True:
         try:
-            data = fetch_json(api_objects_url, timeout=5)
+            data = _raw_http_get_json(port, "/api/objects", timeout=1.5)
             if isinstance(data, dict):
                 return True, f"objects ready ({len(data.get('items', []))} items)"
             last_error = "unexpected payload (not a JSON object)"
@@ -499,7 +541,7 @@ def wait_for_objects_ready(base_url: str, timeout_seconds: float) -> tuple[bool,
             last_error = f"{type(e).__name__}: {e}"
         if time.time() >= deadline:
             return False, last_error
-        time.sleep(0.3)
+        time.sleep(0.1)
 
 
 def startup_error_html(reason: str) -> str:
@@ -529,6 +571,167 @@ def show_startup_error(message: str) -> None:
         webview.start()
     except Exception as e:
         log(f"startup error window failed: {e}")
+
+
+_splash_hwnd = None
+_splash_thread = None
+_splash_wnd_proc_ref = None
+
+
+def show_native_splash():
+    """Мгновенное окно-заставка (Win32 Splash Screen) в стиле Apple Minimalist."""
+    global _splash_hwnd, _splash_thread, _splash_wnd_proc_ref
+    if os.name != "nt":
+        return
+    try:
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+        kernel32 = ctypes.windll.kernel32
+
+        LRESULT = ctypes.c_int64
+        WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+        user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.DefWindowProcW.restype = LRESULT
+
+        class WNDCLASSEXW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.UINT),
+                ("style", wintypes.UINT),
+                ("lpfnWndProc", WNDPROC),
+                ("cbClsExtra", ctypes.c_int),
+                ("cbWndExtra", ctypes.c_int),
+                ("hInstance", wintypes.HINSTANCE),
+                ("hIcon", wintypes.HICON),
+                ("hCursor", wintypes.HICON),
+                ("hbrBackground", wintypes.HBRUSH),
+                ("lpszMenuName", wintypes.LPCWSTR),
+                ("lpszClassName", wintypes.LPCWSTR),
+                ("hIconSm", wintypes.HICON),
+            ]
+
+        class PAINTSTRUCT(ctypes.Structure):
+            _fields_ = [
+                ("hdc", wintypes.HDC),
+                ("fErase", wintypes.BOOL),
+                ("rcPaint", wintypes.RECT),
+                ("fRestore", wintypes.BOOL),
+                ("fIncUpdate", wintypes.BOOL),
+                ("rgbReserved", wintypes.BYTE * 32),
+            ]
+
+        class MSG(ctypes.Structure):
+            _fields_ = [
+                ("hwnd", wintypes.HWND),
+                ("message", wintypes.UINT),
+                ("wParam", wintypes.WPARAM),
+                ("lParam", wintypes.LPARAM),
+                ("time", wintypes.DWORD),
+                ("pt", wintypes.POINT),
+            ]
+
+        class_name = f"FPS_SplashClass_{os.getpid()}"
+
+        def _wnd_proc(hwnd, msg, wparam, lparam):
+            if msg == 0x000F:  # WM_PAINT
+                ps = PAINTSTRUCT()
+                hdc = user32.BeginPaint(hwnd, ctypes.byref(ps))
+                rect = wintypes.RECT()
+                user32.GetClientRect(hwnd, ctypes.byref(rect))
+
+                brush = gdi32.CreateSolidBrush(0x00F7F5F5)
+                user32.FillRect(hdc, ctypes.byref(rect), brush)
+                gdi32.DeleteObject(brush)
+
+                pen = gdi32.CreatePen(0, 1, 0x00D6D1D1)
+                old_pen = gdi32.SelectObject(hdc, pen)
+                null_brush = gdi32.GetStockObject(5)
+                old_brush = gdi32.SelectObject(hdc, null_brush)
+                gdi32.Rectangle(hdc, 0, 0, rect.right, rect.bottom)
+                gdi32.SelectObject(hdc, old_pen)
+                gdi32.SelectObject(hdc, old_brush)
+                gdi32.DeleteObject(pen)
+
+                gdi32.SetBkMode(hdc, 1)
+                gdi32.SetTextColor(hdc, 0x001F1D1D)
+
+                hfont_title = gdi32.CreateFontW(22, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
+                old_font = gdi32.SelectObject(hdc, hfont_title)
+                r_title = wintypes.RECT(0, 36, rect.right, 70)
+                user32.DrawTextW(hdc, TITLE, -1, ctypes.byref(r_title), 0x0001 | 0x0004)
+
+                hfont_sub = gdi32.CreateFontW(15, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
+                gdi32.SelectObject(hdc, hfont_sub)
+                gdi32.SetTextColor(hdc, 0x008B8686)
+                r_sub = wintypes.RECT(0, 74, rect.right, 105)
+                user32.DrawTextW(hdc, "Запуск системы…", -1, ctypes.byref(r_sub), 0x0001 | 0x0004)
+
+                gdi32.SelectObject(hdc, old_font)
+                gdi32.DeleteObject(hfont_title)
+                gdi32.DeleteObject(hfont_sub)
+
+                user32.EndPaint(hwnd, ctypes.byref(ps))
+                return 0
+            elif msg == 0x0020:  # WM_SETCURSOR
+                user32.SetCursor(user32.LoadCursorW(0, 32650))
+                return 1
+            elif msg == 0x0010:  # WM_CLOSE
+                user32.DestroyWindow(hwnd)
+                return 0
+            elif msg == 0x0002:  # WM_DESTROY
+                user32.PostQuitMessage(0)
+                return 0
+            return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        _splash_wnd_proc_ref = WNDPROC(_wnd_proc)
+
+        def _splash_worker():
+            global _splash_hwnd
+            hinstance = kernel32.GetModuleHandleW(None)
+            hcursor = user32.LoadCursorW(0, 32650)
+            wcex = WNDCLASSEXW()
+            wcex.cbSize = ctypes.sizeof(WNDCLASSEXW)
+            wcex.style = 3
+            wcex.lpfnWndProc = _splash_wnd_proc_ref
+            wcex.hInstance = hinstance
+            wcex.hCursor = hcursor
+            wcex.lpszClassName = class_name
+            user32.RegisterClassExW(ctypes.byref(wcex))
+
+            width, height = 380, 140
+            x = (user32.GetSystemMetrics(0) - width) // 2
+            y = (user32.GetSystemMetrics(1) - height) // 2
+
+            hwnd = user32.CreateWindowExW(
+                0x00000008 | 0x00000080,
+                class_name,
+                "Launcher Splash",
+                0x80000000 | 0x10000000,
+                x, y, width, height,
+                0, 0, hinstance, 0
+            )
+            _splash_hwnd = hwnd
+            user32.ShowWindow(hwnd, 5)
+            user32.UpdateWindow(hwnd)
+
+            msg = MSG()
+            while user32.GetMessageW(ctypes.byref(msg), 0, 0, 0) > 0:
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+
+        _splash_thread = threading.Thread(target=_splash_worker, daemon=True)
+        _splash_thread.start()
+    except Exception as e:
+        log(f"Splash screen error: {e}")
+
+
+def close_native_splash():
+    global _splash_hwnd
+    if _splash_hwnd and os.name == "nt":
+        try:
+            ctypes.windll.user32.PostMessageW(_splash_hwnd, 0x0010, 0, 0)
+        except Exception:
+            pass
+        _splash_hwnd = None
 
 
 def focus_existing_window() -> bool:
@@ -619,6 +822,7 @@ def main():
     if check_rapid_duplicate_launch(cli_args.open_path, cli_args.object_id):
         return
 
+    show_native_splash()
     readiness_deadline = time.time() + READINESS_TIMEOUT_SECONDS
 
     port, server_proc = find_or_start_server()
@@ -643,21 +847,18 @@ def main():
         if file_name:
             window_title = f"{file_name} — {TITLE}"
 
-    # D1: objects readiness gate — no window exists yet.
-    remaining = max(0.1, readiness_deadline - time.time())
-    objects_ok, objects_detail = wait_for_objects_ready(base_url, remaining)
-    if not objects_ok:
-        log(f"Objects readiness failed: {objects_detail}")
-        if count_other_active_gui_windows() == 0:
-            shutdown_server(server_proc, port)
-        show_startup_error(f"objects endpoint failure: {objects_detail}")
-        return
-    log(f"Readiness: backend healthy, {objects_detail}")
+    # D1: backend is healthy. Быстрая проверка объектов без блокировки окна:
+    try:
+        objects_ok, objects_detail = wait_for_objects_ready(base_url, timeout_seconds=1.5)
+        log(f"Readiness: backend healthy, {objects_detail}")
+    except Exception as e:
+        log(f"Objects probe note: {e}")
 
-    # D2: hidden window — never shown before all gates pass. No fullscreen.
+    # D2: window with splash feedback
     try:
         import webview
     except Exception as e:
+        close_native_splash()
         log(f"pywebview import failed: {e}, falling back to browser window")
         open_browser_window(base_url)
         return
@@ -666,7 +867,7 @@ def main():
     window = webview.create_window(
         window_title,
         base_url,
-        hidden=True,
+        hidden=False,
         width=1400,
         height=900,
         min_size=(1024, 700),
@@ -684,6 +885,7 @@ def main():
     # Координированное завершение: закрытие окна проверяет, есть ли другие открытые окна
     try:
         def _on_window_closed(*args, **kwargs):
+            close_native_splash()
             other = count_other_active_gui_windows()
             if other > 0:
                 log(f"Window closed event received. Other launcher GUI windows ({other}) still active; leaving backend on port {port} alive.")
@@ -701,6 +903,7 @@ def main():
             remaining = max(0.1, readiness_deadline - time.time())
             if frontend_ready.wait(timeout=remaining):
                 log("Readiness gates passed (health+objects+loaded); showing window once")
+                close_native_splash()
                 window.show()
                 try:
                     window.maximize()
@@ -709,6 +912,7 @@ def main():
             else:
                 reason = "frontend load timeout"
                 log(f"Readiness failed: {reason}")
+                close_native_splash()
                 try:
                     window.resize(620, 360)
                 except Exception:
@@ -719,6 +923,7 @@ def main():
                     log(f"load_html failed: {e}")
                 window.show()
         except Exception as e:
+            close_native_splash()
             log(f"gatekeeper failed: {e}")
 
     gatekeeper = threading.Thread(target=_gatekeeper, daemon=True)
