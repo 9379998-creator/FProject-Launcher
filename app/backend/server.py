@@ -3587,7 +3587,7 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "status": "ok",
-                    "service": "Fero Project Shell (FPS)",
+                    "service": "FERO Project Shell (FPS)",
                     "version": VERSION,
                     "repoRoot": str(REPO_ROOT),
                     "runtime": str(RUNTIME_DIR),
@@ -5039,7 +5039,7 @@ def main() -> None:
             sys.exit(48)
         raise
     dt = time.time() - t_start
-    print(f"[{time.strftime('%H:%M:%S')}] Fero Project Shell (FPS) bound to port {args.port} in {dt:.3f}s: http://{args.host}:{args.port}/", flush=True)
+    print(f"[{time.strftime('%H:%M:%S')}] FERO Project Shell (FPS) bound to port {args.port} in {dt:.3f}s: http://{args.host}:{args.port}/", flush=True)
     start_server_idle_watchdog()
     server.serve_forever()
 

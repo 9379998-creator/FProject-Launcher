@@ -20,14 +20,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
     "   $s = $wsh.CreateShortcut((Join-Path $folder $name)); " ^
     "   if ($pyw) { $s.TargetPath = $pyw; $s.Arguments = '\"' + $app + '\"'; } elseif (Test-Path $vbs) { $s.TargetPath = 'wscript.exe'; $s.Arguments = '\"' + $vbs + '\"'; } else { $s.TargetPath = $runCmd; }; " ^
     "   $s.WorkingDirectory = '%~dp0'; " ^
-    "   $s.Description = 'Fero Project Shell (FPS)'; " ^
+    "   $s.Description = 'FERO Project Shell (FPS)'; " ^
     "   if (Test-Path $ico) { $s.IconLocation = $ico + ',0'; }; " ^
     "   $s.Save(); " ^
     "}; " ^
-    "& $makeShortcut $desktop 'Fero Project Shell.lnk'; " ^
-    "& $makeShortcut $programs 'Fero Project Shell.lnk'; " ^
-    "& $makeShortcut $startMenu 'Fero Project Shell.lnk'; " ^
-    "& $makeShortcut $recent 'Fero Project Shell.lnk'; " ^
+    "& $makeShortcut $desktop 'FERO Project Shell.lnk'; " ^
+    "& $makeShortcut $programs 'FERO Project Shell.lnk'; " ^
+    "& $makeShortcut $startMenu 'FERO Project Shell.lnk'; " ^
+    "& $makeShortcut $recent 'FERO Project Shell.lnk'; " ^
     "Write-Host ''; " ^
     "Write-Host '  [OK] Ярлык успешно создан:' -ForegroundColor Green; " ^
     "Write-Host '       1. На Рабочем столе' -ForegroundColor Cyan; " ^

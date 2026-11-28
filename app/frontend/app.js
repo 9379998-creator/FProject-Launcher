@@ -4427,9 +4427,70 @@ function showPdfPage(page, options = {}) {
 
   clearExcelViewer();
   const targetDocPath = thumbPathForPage(page);
+  const isPdf = Boolean(targetDocPath && targetDocPath.toLowerCase().endsWith(".pdf") &&
+    page.previewType !== "IMAGE" &&
+    page.previewType !== "VIDEO" &&
+    page.previewType !== "TXT" &&
+    page.previewType !== "HTML" &&
+    page.type !== "missing-preview" &&
+    page.type !== "native-file");
 
-  // Для всех документов с растровым превью (PDF, DWG-пары, изображения) используем
-  // мгновенный 150 DPI кэш + фоновый апгрейд до 300 DPI без тяжёлой загрузки сырого PDF через PDF.js
+  if (isPdf) {
+    if (els.mediaVideoViewer) {
+      try { els.mediaVideoViewer.pause(); } catch (_) {}
+      els.mediaVideoViewer.hidden = true;
+      els.mediaVideoViewer.removeAttribute("src");
+    }
+    if (els.txtViewer) els.txtViewer.hidden = true;
+    if (els.wordViewer) els.wordViewer.hidden = true;
+    if (els.htmlViewer) els.htmlViewer.hidden = true;
+    if (els.pdfPageImage) {
+      els.pdfPageImage.hidden = true;
+      els.pdfPageImage.removeAttribute("src");
+    }
+    const canvas = document.getElementById("pdfPageCanvas");
+    if (canvas) canvas.hidden = true;
+    els.viewerEmpty.hidden = true;
+    els.pdfViewer.classList.remove("empty");
+    els.viewerControls.hidden = state.viewMode !== "full";
+    if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
+
+    setActiveNativePath(targetDocPath);
+    revealPathInTree(targetDocPath, { updateSelection: true, skipScroll: skipTreeScroll });
+
+    if (els.pdfDocViewer) els.pdfDocViewer.hidden = false;
+    syncActionGridVisibility();
+
+    const activeToolMode = state.viewerToolMode ?? (state.view.panMode ? 1 : 0);
+    updateViewerToolButton(activeToolMode);
+    const win = els.pdfDocFrame?.contentWindow;
+    if (win && typeof win.setViewerToolMode === "function") {
+      win.setViewerToolMode(activeToolMode);
+    }
+
+    const rawUrl = "/api/file/raw?path=" + encodeURIComponent(targetDocPath);
+    const targetPageNum = Number(page.page) || 1;
+
+    if (els.pdfDocFrame.dataset.currentDoc === targetDocPath) {
+      const frameWin = els.pdfDocFrame.contentWindow;
+      if (frameWin && frameWin.PDFViewerApplication && frameWin.PDFViewerApplication.initialized) {
+        frameWin.PDFViewerApplication.page = targetPageNum;
+      } else {
+        els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
+      }
+    } else {
+      els.pdfDocFrame.dataset.currentDoc = targetDocPath;
+      els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
+      const viewerUrl = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum + "&pagemode=none";
+      els.pdfDocFrame.src = viewerUrl;
+    }
+
+    updateActivePdfThumb();
+    updatePagePosition(page);
+    return;
+  }
+
+  // Non-PDF documents (DWG, images, fallback)
   if (els.mediaVideoViewer) {
     try { els.mediaVideoViewer.pause(); } catch (_) {}
     els.mediaVideoViewer.hidden = true;
@@ -4437,12 +4498,10 @@ function showPdfPage(page, options = {}) {
   }
   if (els.txtViewer) els.txtViewer.hidden = true;
   if (els.wordViewer) els.wordViewer.hidden = true;
-  if (els.htmlViewer) els.htmlViewer.hidden = true;
   if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
   if (els.pdfDocFrame) {
     els.pdfDocFrame.dataset.currentDoc = "";
     els.pdfDocFrame.dataset.targetPage = "";
-    els.pdfDocFrame.removeAttribute("src");
   }
   const canvas = document.getElementById("pdfPageCanvas");
   if (canvas) canvas.hidden = true;
@@ -7253,7 +7312,7 @@ document.getElementById("menuView")?.addEventListener("click", () => {
   if (els.scaleResetBtn) els.scaleResetBtn.click();
 });
 document.getElementById("menuHelp")?.addEventListener("click", () => {
-  showToast("Fero Project Shell (FPS) — Справка");
+  showToast("FERO Project Shell (FPS) — Справка");
   if (inTreeMode()) {
     stopDiffPolling();
     setMode("objects");
@@ -7973,7 +8032,7 @@ loadAppSettings().catch(() => {});
 // Если заголовок без версии — окно старое, его надо закрыть и открыть заново.
 try {
   const vm = String((typeof document !== "undefined" && document.currentScript && document.currentScript.src) || "").match(/[?&]v=([^&]+)/);
-  if (vm) document.title = `Fero Project Shell (FPS) · ${decodeURIComponent(vm[1])}`;
+  if (vm) document.title = `FERO Project Shell (FPS) · ${decodeURIComponent(vm[1])}`;
 } catch (e) {}
 
 

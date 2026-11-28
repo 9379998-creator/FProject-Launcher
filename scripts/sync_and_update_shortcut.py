@@ -56,7 +56,7 @@ for folder in [desktop, programs]:
     if not os.path.exists(folder):
         continue
     # Remove any old naming variants
-    for old_name in ["F-Engineering Launcher.lnk", "Fero Launcher.lnk", "FProject Launcher.lnk"]:
+    for old_name in ["F-Engineering Launcher.lnk", "Fero Launcher.lnk", "FProject Launcher.lnk", "Fero Project Shell.lnk"]:
         old_p = os.path.join(folder, old_name)
         if os.path.exists(old_p):
             try:
@@ -65,12 +65,12 @@ for folder in [desktop, programs]:
             except Exception:
                 pass
 
-    lnk_path = os.path.join(folder, "Fero Project Shell.lnk")
+    lnk_path = os.path.join(folder, "FERO Project Shell.lnk")
     sc = wsh.CreateShortcut(lnk_path)
     sc.TargetPath = pythonw_exe
     sc.Arguments = f'"{flauncher_pyw}"'
     sc.WorkingDirectory = dst_root
-    sc.Description = "Fero Project Shell (FPS)"
+    sc.Description = "FERO Project Shell (FPS)"
     sc.IconLocation = f"{ico_path},0"
     sc.Save()
     print(f"Created/Updated shortcut: {lnk_path}")

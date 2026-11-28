@@ -65,7 +65,7 @@ def _backend_python() -> str:
 BACKEND = _resource_path("app", "backend", "server.py")
 ICON = _resource_path("app", "frontend", "assets", "flauncher.ico")
 EMBEDDED_PYTHON = os.path.join(REPO_ROOT, "runtime", "python", "pythonw.exe")
-TITLE = "Fero Project Shell (FPS)"
+TITLE = "FERO Project Shell (FPS)"
 GUI_MUTEX_PORT = 8799
 LOGS_DIR = os.path.join(REPO_ROOT, "runtime", "logs")
 
@@ -560,9 +560,9 @@ def startup_error_html(reason: str) -> str:
     safe = safe.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return (
         "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
-        "<title>Fero Project Shell — ошибка запуска</title></head>"
+        "<title>FERO Project Shell — ошибка запуска</title></head>"
         "<body style='font-family:Segoe UI,sans-serif;background:#0f172a;color:#e2e8f0;padding:32px'>"
-        "<h2>Fero Project Shell не смог запуститься</h2>"
+        "<h2>FERO Project Shell не смог запуститься</h2>"
         f"<p>Причина: {safe}</p>"
         "<p>Проверьте backend (http://127.0.0.1:8780/api/health) и перезапустите ярлык.</p>"
         "</body></html>"
@@ -673,7 +673,7 @@ def show_native_splash():
                 hfont_title = gdi32.CreateFontW(22, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
                 old_font = gdi32.SelectObject(hdc, hfont_title)
                 r_title = wintypes.RECT(0, 36, rect.right, 70)
-                user32.DrawTextW(hdc, "Fero Project Shell (FPS)", -1, ctypes.byref(r_title), 0x0001 | 0x0004)
+                user32.DrawTextW(hdc, "FERO Project Shell (FPS)", -1, ctypes.byref(r_title), 0x0001 | 0x0004)
 
                 hfont_sub = gdi32.CreateFontW(15, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
                 gdi32.SelectObject(hdc, hfont_sub)
@@ -764,7 +764,7 @@ def close_native_splash():
 def focus_existing_window() -> bool:
     try:
         user32 = ctypes.windll.user32
-        for t in [TITLE, "Fero Project Shell (FPS)", "Fero Project Shell", "Fero-Launcher", "F.E.R.O. Launcher v4", "F.E.R.O. Launcher", "FLauncher"]:
+        for t in [TITLE, "FERO Project Shell (FPS)", "Fero Project Shell (FPS)", "FERO Project Shell", "Fero Project Shell", "Fero-Launcher", "F.E.R.O. Launcher v4", "F.E.R.O. Launcher", "FLauncher"]:
             hwnd = user32.FindWindowW(None, t)
             if hwnd:
                 user32.ShowWindow(hwnd, 9)  # SW_RESTORE
