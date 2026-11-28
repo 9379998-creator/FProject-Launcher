@@ -393,24 +393,7 @@ def reap_stale_server(port: int = 8780) -> None:
     except Exception:
         pass
 
-    # 3. Гарантированно гасим accoreconsole.exe и фоновые acad.exe (/Automation)
-    if os.name == "nt":
-        for cmd in (
-            ["taskkill", "/F", "/IM", "accoreconsole.exe"],
-            ["taskkill", "/F", "/FI", "WINDOWTITLE eq ", "/IM", "acad.exe"],
-        ):
-            try:
-                subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    timeout=5,
-                    close_fds=True,
-                    **hidden_process_kwargs(),
-                )
-            except Exception:
-                pass
-
-    # 4. Если порт все еще удерживается зомби-дескриптором, отзываем дескрипторы
+    # 3. Если порт все еще удерживается зомби-дескриптором, отзываем дескрипторы
     pids_remaining = get_pids_on_port(port)
     for r_pid in pids_remaining:
         if r_pid != my_pid:
@@ -425,23 +408,22 @@ def find_or_start_server() -> tuple[int, subprocess.Popen | None]:
         log("Found healthy server on primary port 8780, reusing instance")
         return target_port, None
 
-    # Даём паузу на случай, если процесс сервера был только что запущен другим окном
+    # 2. Если порт занят, даём короткую паузу (вдруг сервер только что стартовал)
     if not is_port_free(target_port):
-        for _ in range(5):
-            time.sleep(0.3)
+        for _ in range(6):
+            time.sleep(0.25)
             if is_server_healthy(target_port):
                 log("Server became healthy during grace check, reusing instance")
                 return target_port, None
 
-    # 2. Если порт 8780 занят, но НЕ здоров — принудительно зачищаем старые процессы
-    log("Port 8780 is occupied or unhealthy; reaping stale server process tree...")
-    reap_stale_server(target_port)
-    wait_deadline = time.time() + 3.0
-    while time.time() < wait_deadline:
-        if is_port_free(target_port):
-            break
-        time.sleep(0.3)
+        # Порт занят, но НЕ здоров — только тогда зачищаем старые процессы на этом порту
+        log("Port 8780 is occupied and unhealthy; freeing port...")
         reap_stale_server(target_port)
+        wait_deadline = time.time() + 2.0
+        while time.time() < wait_deadline:
+            if is_port_free(target_port):
+                break
+            time.sleep(0.2)
 
     log(f"Starting backend on port {target_port}")
     python_exe = _backend_python()
@@ -604,29 +586,42 @@ def count_other_active_gui_windows() -> int:
 
 
 def check_rapid_duplicate_launch(open_path: str, object_id: str) -> bool:
-    """Защита от случайного быстрого даблклика по ярлыку (интервал < 3.5 с с одинаковыми параметрами)."""
+    """Защита от случайного быстрого даблклика по ярлыку (интервал < 12 с с одинаковыми параметрами)."""
     try:
         import tempfile
         lock_file = os.path.join(tempfile.gettempdir(), "flauncher_last_launch.json")
         now = time.time()
         key = f"{object_id}|{open_path}"
         if os.path.exists(lock_file):
-            with open(lock_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            last_time = data.get("time", 0)
-            last_key = data.get("key", "")
-            if (now - last_time) < 3.5 and last_key == key:
-                log(f"Throttled rapid duplicate launch (<3.5s) for key: {key}")
-                focus_existing_window()
-                return True
+            try:
+                with open(lock_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                last_time = data.get("time", 0)
+                last_key = data.get("key", "")
+                last_pid = data.get("pid", 0)
+                if (now - last_time) < 12.0 and last_key == key:
+                    if last_pid and last_pid != os.getpid():
+                        import psutil
+                        if psutil.pid_exists(last_pid):
+                            log(f"Throttled duplicate launch (<12s, pid {last_pid} alive) for key: {key}")
+                            focus_existing_window()
+                            return True
+            except Exception:
+                pass
         with open(lock_file, "w", encoding="utf-8") as f:
-            json.dump({"time": now, "key": key}, f)
+            json.dump({"time": now, "key": key, "pid": os.getpid()}, f)
     except Exception:
         pass
     return False
 
 
 def main():
+    if os.name == "nt":
+        try:
+            ctypes.windll.user32.SetCursor(ctypes.windll.user32.LoadCursorW(0, 32650))  # IDC_APPSTARTING
+        except Exception:
+            pass
+
     import argparse
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--open-path", dest="open_path", default="")
@@ -673,7 +668,7 @@ def main():
         return
     log(f"Readiness: backend healthy, {objects_detail}")
 
-    # D2: hidden window — never shown before all gates pass. No fullscreen.
+    # D2: pywebview window is created with fast visual feedback
     try:
         import webview
     except Exception as e:
@@ -685,7 +680,7 @@ def main():
     window = webview.create_window(
         window_title,
         base_url,
-        hidden=True,
+        hidden=False,
         width=1400,
         height=900,
         min_size=(1024, 700),
@@ -714,13 +709,10 @@ def main():
         log(f"Could not bind on_closed event: {e}")
 
     def _gatekeeper():
-        # Exactly one show(): ready path maximizes after the gate,
-        # timeout path shows the same window small with an error.
         try:
             remaining = max(0.1, readiness_deadline - time.time())
             if frontend_ready.wait(timeout=remaining):
-                log("Readiness gates passed (health+objects+loaded); showing window once")
-                window.show()
+                log("Readiness gates passed (health+objects+loaded); maximizing window")
                 try:
                     window.maximize()
                 except Exception as e:
@@ -736,7 +728,6 @@ def main():
                     window.load_html(startup_error_html(reason))
                 except Exception as e:
                     log(f"load_html failed: {e}")
-                window.show()
         except Exception as e:
             log(f"gatekeeper failed: {e}")
 

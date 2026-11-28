@@ -70,8 +70,6 @@ def get_candidate_legacy_runtime_dirs(current_runtime_dir: Path | None = None) -
         user_home / "Documents" / "Codex" / "FEngineering_Launcher_v3_CURRENT_COPY" / "runtime",
         user_home / "Documents" / "Codex" / "F.E.R.O.-Launcher" / "runtime",
         user_home / "Documents" / "Codex" / "f-engineering-launcher" / "runtime",
-        Path(r"G:\Общие диски\021_F-Engineering_Knowledge_Library\04_FERO_Launcher\runtime"),
-        Path(r"G:\Общие диски\022_F-Engineering\01_FERO-Launcher\runtime"),
     ]
     for dev_p in dev_paths:
         _add_candidate(dev_p)
@@ -163,12 +161,26 @@ def migrate_legacy_data(target_runtime_dir: Path | None = None) -> dict[str, Any
         target_runtime_dir = RUNTIME_DIR
 
     target_runtime_dir = Path(target_runtime_dir)
+    done_marker = target_runtime_dir / ".migration_done"
+    if done_marker.exists():
+        return {
+            "success": True,
+            "candidates_found": 0,
+            "manifests_count": 0,
+            "native_apps_migrated": False,
+            "db_migrated": False,
+        }
+
     target_manifests = target_runtime_dir / "manifests"
     target_apps = target_runtime_dir / "native_apps.json"
     target_db = target_runtime_dir / "db" / "launcher.sqlite"
 
     candidates = get_candidate_legacy_runtime_dirs(target_runtime_dir)
     if not candidates:
+        try:
+            done_marker.touch()
+        except Exception:
+            pass
         return {
             "success": True,
             "candidates_found": 0,
@@ -180,6 +192,10 @@ def migrate_legacy_data(target_runtime_dir: Path | None = None) -> dict[str, Any
     migrated_manifests = migrate_manifests(candidates, target_manifests)
     migrated_apps = migrate_native_apps_config(candidates, target_apps)
     migrated_db = migrate_database(candidates, target_db)
+    try:
+        done_marker.touch()
+    except Exception:
+        pass
 
     return {
         "success": True,

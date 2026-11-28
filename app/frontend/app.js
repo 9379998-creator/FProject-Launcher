@@ -2636,7 +2636,7 @@ function renderTree() {
   updateTreeFilterSummary();
 }
 
-async function openSelectedObject() {
+async function openSelectedObject(options = {}) {
   const object = selectedObject();
   if (!object) return;
   const controller = createOperationController();
@@ -2680,19 +2680,62 @@ async function openSelectedObject() {
   startDiffPolling();
   finishProgress("Структура открыта");
 
-  // Автоматический показ ленты чертежей/документов, чтобы Окно 2 никогда не оставалось пустым
-  const lastPath = localStorage.getItem("launcher_last_path");
-  const allNodes = getCachedFlatNodes();
-  let restoredNode = null;
-  if (lastPath) {
-    const normLast = lastPath.replace(/\//g, "\\").toLowerCase();
-    restoredNode = allNodes.find((n) => n.type === "file" && (n.path || "").replace(/\//g, "\\").toLowerCase() === normLast);
-  }
-  if (restoredNode) {
-    selectNode(restoredNode);
+  if (options && options.isStartupRestore) {
+    // Восстановление рабочего состояния при перезапуске лаунчера:
+    const wasRendered = localStorage.getItem("launcher_last_rendered_object_id") === object.id;
+    const lastViewedFile = localStorage.getItem("launcher_last_viewed_file");
+    const lastViewedPage = parseInt(localStorage.getItem("launcher_last_viewed_page") || "1", 10);
+
+    if (wasRendered) {
+      renderSelectedFiles({ isRestore: true }).then(() => {
+        if (lastViewedFile) {
+          restoreViewedFile(lastViewedFile, lastViewedPage);
+        }
+      }).catch(console.error);
+    } else if (lastViewedFile) {
+      restoreViewedFile(lastViewedFile, lastViewedPage);
+    } else {
+      els.pdfViewer.classList.add("empty");
+    }
   } else {
-    renderSelectedFiles().catch(() => {});
+    // Обычный переход в объект при клике в Окне 1:
+    // Дерево файлов раскрыто чисто, без случайного выбора DWG и без запуска тяжелого рендера (Rule 6)
+    els.pdfViewer.classList.add("empty");
+    try {
+      localStorage.removeItem("launcher_last_rendered_object_id");
+      localStorage.removeItem("launcher_last_viewed_file");
+      localStorage.removeItem("launcher_last_path");
+    } catch {}
   }
+}
+
+function restoreViewedFile(targetPath, targetPage = 1) {
+  if (!targetPath) return;
+  const normTarget = targetPath.replace(/\//g, "\\").toLowerCase();
+  const allNodes = getCachedFlatNodes();
+  const matchedNode = allNodes.find((n) => n.type === "file" && (n.path || "").replace(/\//g, "\\").toLowerCase() === normTarget);
+  if (!matchedNode) return;
+
+  const ext = (matchedNode.extension || "").toUpperCase();
+  if (ext === "DWG") {
+    const pair = findPdfPairForDwg(matchedNode, state.pdfPairIndex, { fuzzy: false });
+    if (!pair) {
+      return;
+    }
+  }
+
+  if (state.renderedPages?.length) {
+    const pageObj = state.renderedPages.find((p) => {
+      const pPath = (p.previewFor?.path || p.sourcePath || p.documentPath || p.path || "").replace(/\//g, "\\").toLowerCase();
+      return pPath === normTarget && (targetPage <= 1 || p.page === targetPage);
+    });
+    if (pageObj) {
+      showPdfPage(pageObj, { skipTreeScroll: true, activateStage: true });
+      return;
+    }
+  }
+
+  previewFileDirectly(matchedNode, { fullView: true }).catch(console.error);
 }
 
 function collectPreviewFilesForDisplay() {
@@ -2767,13 +2810,12 @@ function collectPreviewFilesForDisplay() {
         });
       } else {
         result.push({
-          ...node,
-          previewType: "DWG_MODEL",
-          previewFor: {
-            type: "DWG",
-            name: node.name,
-            path: node.path,
-          },
+          type: "native-file",
+          name: node.name,
+          documentPath: node.path,
+          sourcePath: node.path,
+          sourceType: "DWG",
+          message: "Файл чертежа DWG (без пары PDF). Открыть в AutoCAD через кнопку действия.",
         });
       }
     } else if (ext === "TXT" && !directSourcePaths.has(node.path)) {
@@ -3212,6 +3254,10 @@ function renderExcelWorkbookRail() {
 async function activateExcelWorkbook(index) {
   const workbook = state.excelWorkbooks[index];
   if (!workbook) return;
+  try {
+    const wbPath = workbook.path || workbook.sourcePath || "";
+    if (wbPath) localStorage.setItem("launcher_last_viewed_file", wbPath);
+  } catch {}
   setStageActive(true);
   state.excelWorkbook = workbook;
   state.excelWorkbookIndex = index;
@@ -3369,6 +3415,10 @@ function forwardWordDocContextMenu() {
 async function activateWordDocument(index) {
   const docItem = state.wordDocs[index];
   if (!docItem) return;
+  try {
+    const docPath = docItem.path || docItem.sourcePath || "";
+    if (docPath) localStorage.setItem("launcher_last_viewed_file", docPath);
+  } catch {}
   setStageActive(true);
   state.wordDoc = docItem;
   state.wordDocIndex = index;
@@ -4230,6 +4280,13 @@ async function renderPdfJsPage(pageObj) {
 function showPdfPage(page, options = {}) {
   const key = pageKey(page);
   state.activePageKey = key;
+  try {
+    const docPath = page.previewFor?.path || page.sourcePath || page.documentPath || page.path || "";
+    if (docPath) {
+      localStorage.setItem("launcher_last_viewed_file", docPath);
+      localStorage.setItem("launcher_last_viewed_page", String(page.page || 1));
+    }
+  } catch {}
   const skipTreeScroll = Boolean(options?.skipTreeScroll);
   if (els.txtViewer) els.txtViewer.hidden = true;
   state.activeTxtPath = "";
@@ -5132,9 +5189,29 @@ async function renderSelectedFiles(options = {}) {
   const htmlItems = previewItems.filter((item) => item.previewType === "HTML");
   if (htmlItems.length === previewItems.length && htmlItems.length > 0) {
     await renderHtmlDocuments(htmlItems);
+    if (state.currentManifest?.id) {
+      try { localStorage.setItem("launcher_last_rendered_object_id", state.currentManifest.id); } catch {}
+    }
+    return;
+  }
+  if (excelItems.length === previewItems.length && excelItems.length > 0) {
+    await renderExcelWorkbooks(excelItems);
+    if (state.currentManifest?.id) {
+      try { localStorage.setItem("launcher_last_rendered_object_id", state.currentManifest.id); } catch {}
+    }
+    return;
+  }
+  if (wordItems.length === previewItems.length && wordItems.length > 0) {
+    await renderWordDocuments(wordItems);
+    if (state.currentManifest?.id) {
+      try { localStorage.setItem("launcher_last_rendered_object_id", state.currentManifest.id); } catch {}
+    }
     return;
   }
   await renderSelectedPdfFiles(previewItems, options);
+  if (state.currentManifest?.id) {
+    try { localStorage.setItem("launcher_last_rendered_object_id", state.currentManifest.id); } catch {}
+  }
 }
 
 async function renderSelectedPdfFiles(previewItems = collectPreviewFilesForDisplay(), options = {}) {
@@ -7223,7 +7300,7 @@ loadObjectSummaries()
         if (lastObj) {
           state.selectedObjectId = lastObj.id;
           updateObjectListSelection();
-          openSelectedObject().catch(console.error);
+          openSelectedObject({ isStartupRestore: true }).catch(console.error);
         }
       }
     }
