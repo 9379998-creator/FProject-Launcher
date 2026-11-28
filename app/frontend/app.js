@@ -7701,7 +7701,7 @@ loadAppSettings().catch(() => {});
 // Если заголовок без версии — окно старое, его надо закрыть и открыть заново.
 try {
   const vm = String((typeof document !== "undefined" && document.currentScript && document.currentScript.src) || "").match(/[?&]v=([^&]+)/);
-  if (vm) document.title = `Fero-Launcher · ${decodeURIComponent(vm[1])}`;
+  if (vm) document.title = `FERO Project Shell (FPS) · ${decodeURIComponent(vm[1])}`;
 } catch (e) {}
 
 

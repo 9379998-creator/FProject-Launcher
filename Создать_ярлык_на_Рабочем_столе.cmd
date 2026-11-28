@@ -18,16 +18,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
     "$makeShortcut = { param($folder, $name); " ^
     "   if (-not $folder -or -not (Test-Path $folder)) { return }; " ^
     "   $s = $wsh.CreateShortcut((Join-Path $folder $name)); " ^
-    "   if (Test-Path $vbs) { $s.TargetPath = 'wscript.exe'; $s.Arguments = '\"' + $vbs + '\"'; } elseif ($pyw) { $s.TargetPath = $pyw; $s.Arguments = '\"' + $app + '\"'; } else { $s.TargetPath = $runCmd; }; " ^
+    "   if ($pyw) { $s.TargetPath = $pyw; $s.Arguments = '\"' + $app + '\"'; } elseif (Test-Path $vbs) { $s.TargetPath = 'wscript.exe'; $s.Arguments = '\"' + $vbs + '\"'; } else { $s.TargetPath = $runCmd; }; " ^
     "   $s.WorkingDirectory = '%~dp0'; " ^
-    "   $s.Description = 'FProject Launcher'; " ^
+    "   $s.Description = 'FERO Project Shell (FPS)'; " ^
     "   if (Test-Path $ico) { $s.IconLocation = $ico + ',0'; }; " ^
     "   $s.Save(); " ^
     "}; " ^
-    "& $makeShortcut $desktop 'FProject Launcher.lnk'; " ^
-    "& $makeShortcut $programs 'FProject Launcher.lnk'; " ^
-    "& $makeShortcut $startMenu 'FProject Launcher.lnk'; " ^
-    "& $makeShortcut $recent 'FProject Launcher.lnk'; " ^
+    "& $makeShortcut $desktop 'FERO Project Shell.lnk'; " ^
+    "& $makeShortcut $programs 'FERO Project Shell.lnk'; " ^
+    "& $makeShortcut $startMenu 'FERO Project Shell.lnk'; " ^
+    "& $makeShortcut $recent 'FERO Project Shell.lnk'; " ^
     "Write-Host ''; " ^
     "Write-Host '  [OK] Ярлык успешно создан:' -ForegroundColor Green; " ^
     "Write-Host '       1. На Рабочем столе' -ForegroundColor Cyan; " ^

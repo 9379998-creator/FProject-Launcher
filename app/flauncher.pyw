@@ -65,7 +65,7 @@ def _backend_python() -> str:
 BACKEND = _resource_path("app", "backend", "server.py")
 ICON = _resource_path("app", "frontend", "assets", "flauncher.ico")
 EMBEDDED_PYTHON = os.path.join(REPO_ROOT, "runtime", "python", "pythonw.exe")
-TITLE = "Fero-Launcher"
+TITLE = "FERO Project Shell (FPS)"
 GUI_MUTEX_PORT = 8799
 LOGS_DIR = os.path.join(REPO_ROOT, "runtime", "logs")
 
@@ -549,9 +549,9 @@ def startup_error_html(reason: str) -> str:
     safe = safe.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return (
         "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
-        "<title>F-Engineering Launcher — ошибка запуска</title></head>"
+        "<title>FERO Project Shell — ошибка запуска</title></head>"
         "<body style='font-family:Segoe UI,sans-serif;background:#0f172a;color:#e2e8f0;padding:32px'>"
-        "<h2>Launcher не смог запуститься</h2>"
+        "<h2>FERO Project Shell не смог запуститься</h2>"
         f"<p>Причина: {safe}</p>"
         "<p>Проверьте backend (http://127.0.0.1:8780/api/health) и перезапустите ярлык.</p>"
         "</body></html>"
@@ -737,7 +737,7 @@ def close_native_splash():
 def focus_existing_window() -> bool:
     try:
         user32 = ctypes.windll.user32
-        for t in [TITLE, "F.E.R.O. Launcher v4", "F.E.R.O. Launcher", "FLauncher"]:
+        for t in [TITLE, "FERO Project Shell (FPS)", "Fero Project Shell (FPS)", "Fero-Launcher", "F.E.R.O. Launcher v4", "F.E.R.O. Launcher", "FLauncher"]:
             hwnd = user32.FindWindowW(None, t)
             if hwnd:
                 user32.ShowWindow(hwnd, 9)  # SW_RESTORE
