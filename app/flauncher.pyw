@@ -789,22 +789,30 @@ def count_other_active_gui_windows() -> int:
 
 
 def check_rapid_duplicate_launch(open_path: str, object_id: str) -> bool:
-    """Защита от случайного быстрого даблклика по ярлыку (интервал < 600 мс с одинаковыми параметрами)."""
+    """Защита от случайного быстрого даблклика по ярлыку (интервал < 12 с с одинаковыми параметрами)."""
     try:
         import tempfile
         lock_file = os.path.join(tempfile.gettempdir(), "flauncher_last_launch.json")
         now = time.time()
         key = f"{object_id}|{open_path}"
         if os.path.exists(lock_file):
-            with open(lock_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            last_time = data.get("time", 0)
-            last_key = data.get("key", "")
-            if (now - last_time) < 0.6 and last_key == key:
-                log(f"Throttled rapid duplicate launch (<600ms) for key: {key}")
-                return True
+            try:
+                with open(lock_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                last_time = data.get("time", 0)
+                last_key = data.get("key", "")
+                last_pid = data.get("pid", 0)
+                if (now - last_time) < 12.0 and last_key == key:
+                    if last_pid and last_pid != os.getpid():
+                        import psutil
+                        if psutil.pid_exists(last_pid):
+                            log(f"Throttled duplicate launch (<12s, pid {last_pid} alive) for key: {key}")
+                            focus_existing_window()
+                            return True
+            except Exception:
+                pass
         with open(lock_file, "w", encoding="utf-8") as f:
-            json.dump({"time": now, "key": key}, f)
+            json.dump({"time": now, "key": key, "pid": os.getpid()}, f)
     except Exception:
         pass
     return False
