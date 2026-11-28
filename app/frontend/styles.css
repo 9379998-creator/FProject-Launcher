@@ -1968,12 +1968,31 @@ textarea:focus {
 
 /* Диалоговое окно "Справка" (Apple Minimalist) */
 .help-modal-dialog {
-  width: 580px;
+  width: 620px;
+  max-width: 92vw;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
   border-radius: 8px;
 }
 
 .help-modal-body {
   padding: 16px 20px;
+  overflow-y: auto;
+  max-height: calc(88vh - 110px);
+}
+
+.help-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #86868B;
+  margin: 14px 0 8px;
+}
+
+.help-section-title:first-child {
+  margin-top: 0;
 }
 
 .help-grid {

@@ -3587,7 +3587,7 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "status": "ok",
-                    "service": "F.E.R.O. Launcher v4",
+                    "service": "Fero Project Shell (FPS)",
                     "version": VERSION,
                     "repoRoot": str(REPO_ROOT),
                     "runtime": str(RUNTIME_DIR),
@@ -5036,7 +5036,7 @@ def main() -> None:
             print(f"ERROR: Port {args.port} is already in use by another process: {err}", file=sys.stderr, flush=True)
             sys.exit(48)
         raise
-    print(f"Fero-Launcher: http://{args.host}:{args.port}/", flush=True)
+    print(f"Fero Project Shell (FPS): http://{args.host}:{args.port}/", flush=True)
     start_server_idle_watchdog()
     server.serve_forever()
 

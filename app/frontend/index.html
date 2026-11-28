@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Fero-Launcher</title>
+  <title>Fero Project Shell (FPS)</title>
   <link rel="icon" href="favicon.ico" type="image/x-icon">
-  <link rel="stylesheet" href="styles.css?v=20261127-apple-equal-zone-paddings">
+  <link rel="stylesheet" href="styles.css?v=20261128-apple-fps-rebrand">
 </head>
 <body>
   <div class="app-window">
     <div class="action-grid" id="actionGrid" aria-label="Действия с объектом">
       <button id="backToObjects" type="button" title="Вернуться к списку загруженных объектов">Объекты</button>
-      <button id="loadObject" type="button" title="Добавить новый объект в Launcher через системный диалог выбора папки Windows. Исходная папка не переносится и не меняется.">Загрузить</button>
+      <button id="loadObject" type="button" title="Добавить новый объект в Fero Project Shell через системный диалог выбора папки Windows. Исходная папка не переносится и не меняется.">Загрузить</button>
       <button id="refreshObject" type="button" disabled title="Проверить выбранный объект заново: сравнить с предыдущим сканом и показать добавленные, изменённые и удалённые файлы без потери контекста.">Обновить</button>
       <button id="displayObject" type="button" disabled title="Рендеринг и открытие выбранного объекта: структура томов, дерево файлов и чертежи">Рендер</button>
-      <button id="btnSettings" type="button" title="Параметры лаунчера и ассоциации программ">Параметры</button>
-      <button id="excludeObject" type="button" disabled title="Убрать объект из списка Launcher. Исходная папка не удаляется.">Исключить</button>
+      <button id="btnSettings" type="button" title="Параметры Fero Project Shell и ассоциации программ">Параметры</button>
+      <button id="excludeObject" type="button" disabled title="Убрать объект из списка Fero Project Shell. Исходная папка не удаляется.">Исключить</button>
       <button id="btnHelp" type="button" title="Справка по горячим клавишам и навигации">Справка</button>
       <button id="btnResetSplitter" type="button" title="Разделить экран пополам (50 / 50)">50 / 50</button>
     </div>
@@ -149,30 +149,63 @@
   <div class="modal-overlay" id="helpModal" hidden>
     <div class="modal-dialog help-modal-dialog" role="dialog" aria-labelledby="helpModalTitle" aria-modal="true">
       <div class="modal-header">
-        <span id="helpModalTitle">Справка — Горячие клавиши и навигация</span>
+        <span id="helpModalTitle">Справка — Fero Project Shell (FPS)</span>
         <button type="button" class="modal-close" id="helpCloseBtn" title="Закрыть (Escape)">✕</button>
       </div>
       <div class="modal-body help-modal-body">
+        <div class="help-section-title">Панель действий (Назначение кнопок)</div>
         <div class="help-grid">
           <div class="help-item">
-            <kbd class="help-key">Ctrl + Колёсико</kbd>
-            <span class="help-desc">Плавное масштабирование чертежей в ленте (Окно 2) и листа на весь экран (Окно 3)</span>
+            <kbd class="help-key">Объекты</kbd>
+            <span class="help-desc">Возврат из дерева файлов к общему списку всех добавленных объектов</span>
+          </div>
+          <div class="help-item">
+            <kbd class="help-key">Загрузить</kbd>
+            <span class="help-desc">Выбор рабочей папки проекта через проводник Windows без переноса файлов</span>
+          </div>
+          <div class="help-item">
+            <kbd class="help-key">Обновить</kbd>
+            <span class="help-desc">Повторный скан объекта: сверка с исходной папкой, выявление добавленных и удалённых файлов</span>
+          </div>
+          <div class="help-item">
+            <kbd class="help-key">Рендер</kbd>
+            <span class="help-desc">Открытие структуры объекта и генерация ленты чертежей (PDF, пары DWG–PDF, Word, Excel)</span>
+          </div>
+          <div class="help-item">
+            <kbd class="help-key">Параметры</kbd>
+            <span class="help-desc">Настройка ассоциаций для открытия чертежей и документов в нативных программах Windows</span>
+          </div>
+          <div class="help-item">
+            <kbd class="help-key">Исключить</kbd>
+            <span class="help-desc">Удаление выбранного объекта из списка шелла (исходная папка на диске остаётся нетронутой)</span>
           </div>
           <div class="help-item">
             <kbd class="help-key">50 / 50</kbd>
-            <span class="help-desc">Мгновенный возврат ширины окон 1 и 2 ровно пополам (кнопка в панели или 2× клик по границе)</span>
+            <span class="help-desc">Мгновенный возврат ширины окон 1 и 2 ровно пополам (дублируется двойным кликом по разделителю)</span>
+          </div>
+          <div class="help-item">
+            <kbd class="help-key">Справка</kbd>
+            <span class="help-desc">Вызов данного информационного окна с описанием кнопок и горячих клавиш</span>
+          </div>
+        </div>
+
+        <div class="help-section-title">Горячие клавиши и навигация</div>
+        <div class="help-grid">
+          <div class="help-item">
+            <kbd class="help-key">Ctrl + Колёсико</kbd>
+            <span class="help-desc">Плавное масштабирование чертежей в ленте (Окно 2) и листа на весь экран (Окно 3) строго к курсору мыши</span>
           </div>
           <div class="help-item">
             <kbd class="help-key">Escape</kbd>
-            <span class="help-desc">Сброс масштаба в 100% («Вписать») / возврат из листа в ленту / закрытие окон</span>
+            <span class="help-desc">Сброс масштаба в 100% («Вписать») / возврат из листа в ленту миниатюр / закрытие модальных окон</span>
           </div>
           <div class="help-item">
             <kbd class="help-key">Разделитель ⟷</kbd>
-            <span class="help-desc">Перетаскивание границы влево (широкий просмотр чертежей) или вправо (чтение шифров)</span>
+            <span class="help-desc">Перетаскивание границы влево (широкий просмотр) или вправо (чтение шифров); 2× клик — сброс 50/50</span>
           </div>
           <div class="help-item">
             <kbd class="help-key">Двойной клик / Enter</kbd>
-            <span class="help-desc">Детальный просмотр чертежа на весь экран в Окне 3 с качеством 300 DPI</span>
+            <span class="help-desc">Детальный просмотр чертежа на весь экран в Окне 3 с высоким качеством 300 DPI</span>
           </div>
           <div class="help-item">
             <kbd class="help-key">Стрелки ↑ / ↓</kbd>
@@ -180,7 +213,7 @@
           </div>
           <div class="help-item">
             <kbd class="help-key">Ctrl + N</kbd>
-            <span class="help-desc">Открыть выбранный чертёж в отдельном независимом окне лаунчера</span>
+            <span class="help-desc">Открыть выбранный чертёж в отдельном независимом окне лаунчера для параллельного сравнения</span>
           </div>
         </div>
       </div>
