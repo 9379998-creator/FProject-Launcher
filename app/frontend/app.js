@@ -163,6 +163,7 @@ const els = {
   helpCloseBtn: document.getElementById("helpCloseBtn"),
   helpOkBtn: document.getElementById("helpOkBtn"),
   btnResetSplitter: document.getElementById("btnResetSplitter"),
+  btnResetZoom: document.getElementById("btnResetZoom"),
   shellSplitter: document.getElementById("shellSplitter"),
 
 
@@ -4710,7 +4711,7 @@ function updateScaleIndicator() {
 
 function zoomThumbs(factor, originX = null, originY = null) {
   const oldScale = state.thumbScale || 1;
-  const newScale = Math.min(8.0, Math.max(0.3, Number((oldScale * factor).toFixed(2))));
+  const newScale = Math.min(10.5, Math.max(0.3, Number((oldScale * factor).toFixed(2))));
   if (newScale === oldScale) return;
 
   if (els.pdfThumbs) {
@@ -6392,6 +6393,38 @@ els.pdfThumbs.addEventListener("wheel", (event) => {
   event.stopPropagation();
   zoomThumbs(event.deltaY < 0 ? 1.15 : 0.87, event.clientX, event.clientY);
 }, { passive: false });
+
+if (els.btnResetZoom) {
+  els.btnResetZoom.addEventListener("click", () => {
+    state.treeScale = 1;
+    document.documentElement.style.setProperty("--tree-scale", "1");
+
+    state.thumbScale = 1;
+    if (els.pdfThumbs) {
+      els.pdfThumbs.style.setProperty("--thumb-scale", "1");
+      els.pdfThumbs.classList.remove("can-pan");
+      els.pdfThumbs.scrollLeft = 0;
+    }
+
+    try {
+      localStorage.setItem("launcher_tree_scale", "1");
+      localStorage.setItem("launcher_thumb_scale", "1");
+    } catch {}
+
+    if (state.excelWorkbook) {
+      state.view.rotation = 0;
+      els.excelSheetFrame?.contentWindow?.postMessage({ type: "launcher-sheet-rotate", value: 0 }, "*");
+      els.excelSheetFrame?.contentWindow?.postMessage({ type: "launcher-sheet-fit" }, "*");
+    } else if (!els.pdfPageImage.hidden || (document.getElementById("pdfPageCanvas") && !document.getElementById("pdfPageCanvas").hidden)) {
+      state.view.rotation = 0;
+      state.view.userZoomed = false;
+      fitPdfPage();
+    }
+
+    updateScaleIndicator();
+    showToast("Масштаб сброшен: 100%");
+  });
+}
 
 // Панель управления масштабом (кнопки −, 100%, + в верхней панели)
 // 100% работает везде во всех окнах: в левом поле, во втором поле, а при просмотре чертежа дублирует «Вписать»
