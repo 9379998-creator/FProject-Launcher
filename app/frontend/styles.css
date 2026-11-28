@@ -1184,6 +1184,23 @@ textarea:focus {
   box-sizing: border-box;
 }
 
+.pdf-thumbs.can-pan {
+  cursor: grab;
+  touch-action: none;
+}
+
+.pdf-thumbs.can-pan .pdf-thumb {
+  cursor: grab;
+}
+
+.pdf-thumbs.can-pan.is-dragging,
+.pdf-thumbs.can-pan:active,
+.pdf-thumbs.is-dragging,
+.pdf-thumbs.is-dragging * {
+  cursor: grabbing !important;
+  touch-action: none;
+}
+
 .pdf-thumb {
   display: block;
   width: 100%;
@@ -1908,6 +1925,34 @@ textarea:focus {
   margin: 0;
 }
 
+
+/* Стартовое пустое окно (Apple Minimalist - Вариант 2) */
+.welcome-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 60px 20px;
+  margin: auto;
+}
+
+.welcome-empty-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: #1D1D1F;
+  margin: 0 0 8px;
+  letter-spacing: -0.01em;
+}
+
+.welcome-empty-desc {
+  font-size: 13px;
+  font-weight: 400;
+  color: #86868B;
+  margin: 0;
+  max-width: 460px;
+  line-height: 1.45;
+}
 
 /* Диалоговое окно "Справка" (Apple Minimalist) */
 .help-modal-dialog {

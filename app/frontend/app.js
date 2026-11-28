@@ -6500,12 +6500,87 @@ try {
     document.documentElement.style.setProperty("--tree-scale", String(state.treeScale));
   }
   const savedThumbScale = parseFloat(localStorage.getItem("launcher_thumb_scale") || "1");
-  if (savedThumbScale && savedThumbScale >= 0.4 && savedThumbScale <= 5) {
+  if (savedThumbScale && savedThumbScale >= 0.3 && savedThumbScale <= 14.0) {
     state.thumbScale = savedThumbScale;
     els.pdfThumbs.style.setProperty("--thumb-scale", String(state.thumbScale));
+    els.pdfThumbs.classList.toggle("can-pan", state.thumbScale > 1.02);
   }
   updateScaleIndicator();
 } catch {}
+
+// Панорамирование миниатюр (лапа) в Окне 2 через PointerEvents и setPointerCapture (GrabToPan)
+let thumbsDragging = false;
+let thumbsPointerId = null;
+let thumbsStartX = 0;
+let thumbsStartY = 0;
+let thumbsScrollLeft = 0;
+let thumbsScrollTop = 0;
+let thumbsMoved = false;
+
+els.pdfThumbs.addEventListener("dragstart", (e) => e.preventDefault());
+
+els.pdfThumbs.addEventListener("pointerdown", (e) => {
+  const canPan = state.thumbScale > 1.02 || e.button === 1 || e.target === els.pdfThumbs;
+  if (!canPan || (e.button !== 0 && e.button !== 1)) return;
+
+  thumbsDragging = true;
+  thumbsPointerId = e.pointerId;
+  thumbsMoved = false;
+  thumbsStartX = e.clientX;
+  thumbsStartY = e.clientY;
+  thumbsScrollLeft = els.pdfThumbs.scrollLeft;
+  thumbsScrollTop = els.pdfThumbs.scrollTop;
+
+  try {
+    els.pdfThumbs.setPointerCapture(e.pointerId);
+  } catch (_) {}
+
+  els.pdfThumbs.classList.add("is-dragging");
+  document.body.style.userSelect = "none";
+  e.preventDefault();
+});
+
+els.pdfThumbs.addEventListener("pointermove", (e) => {
+  if (!thumbsDragging || (thumbsPointerId !== null && e.pointerId !== thumbsPointerId)) return;
+  const dx = e.clientX - thumbsStartX;
+  const dy = e.clientY - thumbsStartY;
+  if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+    thumbsMoved = true;
+  }
+  els.pdfThumbs.scrollLeft = thumbsScrollLeft - dx;
+  els.pdfThumbs.scrollTop = thumbsScrollTop - dy;
+  e.preventDefault();
+});
+
+function endThumbsDrag(e) {
+  if (!thumbsDragging) return;
+  if (thumbsPointerId !== null) {
+    try {
+      els.pdfThumbs.releasePointerCapture(thumbsPointerId);
+    } catch (_) {}
+    thumbsPointerId = null;
+  }
+  thumbsDragging = false;
+  els.pdfThumbs.classList.remove("is-dragging");
+  document.body.style.userSelect = "";
+}
+
+els.pdfThumbs.addEventListener("pointerup", endThumbsDrag);
+els.pdfThumbs.addEventListener("pointercancel", endThumbsDrag);
+
+els.pdfThumbs.addEventListener("click", (e) => {
+  if (thumbsMoved) {
+    e.preventDefault();
+    e.stopPropagation();
+    thumbsMoved = false;
+  }
+}, true);
+
+els.pdfStage.addEventListener("dragstart", (e) => e.preventDefault());
+if (els.pdfPageImage) {
+  els.pdfPageImage.draggable = false;
+  els.pdfPageImage.addEventListener("dragstart", (e) => e.preventDefault());
+}
 
 let pdfDragMoved = false;
 
