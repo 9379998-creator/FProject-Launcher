@@ -17,6 +17,7 @@
       <button id="btnSettings" type="button" title="Параметры FERO Project Shell и ассоциации программ">Параметры</button>
       <button id="excludeObject" type="button" disabled title="Убрать объект из списка FERO Project Shell. Исходная папка не удаляется.">Исключить</button>
       <button id="btnHelp" type="button" title="Справка по кнопкам, горячим клавишам и навигации">Справка</button>
+      <button id="btnResetSplitter" type="button" title="Разделить экран пополам (50 / 50)">50 / 50</button>
     </div>
     <div class="progress-panel" id="progressPanel" hidden>
       <div class="progress-head" id="progressHead">
@@ -47,6 +48,8 @@
           <div class="tree" id="objectTree"></div>
         </section>
       </aside>
+
+      <div class="shell-splitter" id="shellSplitter" role="separator" aria-orientation="vertical" title="Перетащите для изменения ширины окон"></div>
 
       <section class="viewer" aria-label="Область просмотра PDF">
         <div class="pdf-viewer empty" id="pdfViewer">

@@ -137,7 +137,7 @@ button:focus-visible {
 .shell {
   flex: 1;
   display: grid;
-  grid-template-columns: 50% 50%;
+  grid-template-columns: var(--sidebar-width, 50%) 6px minmax(0, 1fr);
   height: auto;
   min-height: 0;
   overflow: hidden;
@@ -148,8 +148,29 @@ button:focus-visible {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.shell.full-view .sidebar {
+.shell.full-view .sidebar,
+.shell.full-view .shell-splitter {
   display: none !important;
+}
+
+.shell-splitter {
+  width: 6px;
+  height: 100%;
+  background: #e5e5ea;
+  border-left: 1px solid #d4d7dc;
+  border-right: 1px solid #d4d7dc;
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 0.12s ease;
+  z-index: 5;
+  box-sizing: border-box;
+}
+
+.shell-splitter:hover,
+.shell-splitter.active {
+  background: #c8c8cd;
+  border-color: #b5b5ba;
 }
 
 .sidebar {
@@ -158,7 +179,6 @@ button:focus-visible {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border-right: 1px solid #d4d7dc;
   background: #f5f6f8;
   padding: 5px 6px 6px 6px;
 }

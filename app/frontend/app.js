@@ -162,6 +162,8 @@ const els = {
   helpModal: document.getElementById("helpModal"),
   helpCloseBtn: document.getElementById("helpCloseBtn"),
   helpOkBtn: document.getElementById("helpOkBtn"),
+  btnResetSplitter: document.getElementById("btnResetSplitter"),
+  shellSplitter: document.getElementById("shellSplitter"),
 
 
 };
@@ -6980,6 +6982,89 @@ if (els.helpOkBtn) els.helpOkBtn.addEventListener("click", closeHelpModal);
 if (els.helpModal) {
   els.helpModal.addEventListener("click", (e) => {
     if (e.target === els.helpModal) closeHelpModal();
+  });
+}
+
+initShellSplitter();
+
+function initShellSplitter() {
+  const splitter = els.shellSplitter || document.getElementById("shellSplitter");
+  const shell = document.getElementById("appShell") || document.querySelector(".shell");
+  if (!splitter || !shell) return;
+
+  const resetSplitter = () => {
+    shell.style.setProperty("--sidebar-width", "50%");
+    try {
+      localStorage.removeItem("launcher_sidebar_width");
+    } catch {}
+    showToast("Окна разделены пополам (50 / 50)");
+  };
+
+  const btnReset = els.btnResetSplitter || document.getElementById("btnResetSplitter");
+  if (btnReset) {
+    btnReset.addEventListener("click", resetSplitter);
+  }
+  splitter.addEventListener("dblclick", resetSplitter);
+
+  const savedWidth = localStorage.getItem("launcher_sidebar_width");
+  if (savedWidth) {
+    const parsed = parseInt(savedWidth, 10);
+    if (!isNaN(parsed) && parsed >= 36) {
+      shell.style.setProperty("--sidebar-width", `${parsed}px`);
+    }
+  }
+
+  let isDragging = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  splitter.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    isDragging = true;
+    splitter.classList.add("active");
+    startX = e.clientX;
+    const sidebar = document.getElementById("sidebar");
+    startWidth = sidebar ? sidebar.getBoundingClientRect().width : 300;
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.querySelectorAll("iframe").forEach(f => f.style.pointerEvents = "none");
+
+    const onMouseMove = (moveEvent) => {
+      if (!isDragging) return;
+      const shellRect = shell.getBoundingClientRect();
+      const deltaX = moveEvent.clientX - startX;
+      let newWidth = startWidth + deltaX;
+
+      const minWidth = 36;
+      const maxWidth = Math.max(minWidth, shellRect.width - 36);
+      newWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
+
+      shell.style.setProperty("--sidebar-width", `${Math.round(newWidth)}px`);
+    };
+
+    const onMouseUp = () => {
+      if (!isDragging) return;
+      isDragging = false;
+      splitter.classList.remove("active");
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      document.querySelectorAll("iframe").forEach(f => f.style.pointerEvents = "");
+
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+
+      const sidebar = document.getElementById("sidebar");
+      if (sidebar) {
+        const finalWidth = Math.round(sidebar.getBoundingClientRect().width);
+        try {
+          localStorage.setItem("launcher_sidebar_width", String(finalWidth));
+        } catch {}
+      }
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
   });
 }
 loadObjectSummaries()
