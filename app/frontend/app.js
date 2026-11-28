@@ -4708,12 +4708,68 @@ function updateScaleIndicator() {
   }
 }
 
-function zoomThumbs(factor) {
-  state.thumbScale = Math.min(5, Math.max(0.4, Number((state.thumbScale * factor).toFixed(2))));
-  els.pdfThumbs.style.setProperty("--thumb-scale", String(state.thumbScale));
-  try {
-    localStorage.setItem("launcher_thumb_scale", String(state.thumbScale));
-  } catch {}
+function zoomThumbs(factor, originX = null, originY = null) {
+  const oldScale = state.thumbScale || 1;
+  const newScale = Math.min(8.0, Math.max(0.3, Number((oldScale * factor).toFixed(2))));
+  if (newScale === oldScale) return;
+
+  if (els.pdfThumbs) {
+    const rect = els.pdfThumbs.getBoundingClientRect();
+    const clientX = (originX !== null && originX !== undefined) ? originX : (rect.left + rect.width / 2);
+    const clientY = (originY !== null && originY !== undefined) ? originY : (rect.top + rect.height / 2);
+
+    // Точная привязка масштабирования к самому изображению/холсту под курсором (Zero-drift anchoring)
+    const elUnder = document.elementFromPoint(clientX, clientY);
+    const cardEl = (elUnder && els.pdfThumbs.contains(elUnder) && elUnder !== els.pdfThumbs)
+      ? (elUnder.closest(".pdf-thumb, .thumb-wrap") || elUnder)
+      : null;
+    const targetEl = cardEl ? (cardEl.querySelector("img, canvas") || cardEl) : null;
+
+    if (targetEl) {
+      const beforeRect = targetEl.getBoundingClientRect();
+      const fracX = beforeRect.width > 0 ? (clientX - beforeRect.left) / beforeRect.width : 0.5;
+      const fracY = beforeRect.height > 0 ? (clientY - beforeRect.top) / beforeRect.height : 0.5;
+
+      state.thumbScale = newScale;
+      els.pdfThumbs.style.setProperty("--thumb-scale", String(state.thumbScale));
+      els.pdfThumbs.classList.toggle("can-pan", state.thumbScale > 1.02);
+      try {
+        localStorage.setItem("launcher_thumb_scale", String(state.thumbScale));
+      } catch {}
+
+      const afterRect = targetEl.getBoundingClientRect();
+      const newScreenX = afterRect.left + fracX * afterRect.width;
+      const newScreenY = afterRect.top + fracY * afterRect.height;
+
+      els.pdfThumbs.scrollLeft += (newScreenX - clientX);
+      els.pdfThumbs.scrollTop += (newScreenY - clientY);
+    } else {
+      const mouseX = clientX - rect.left;
+      const mouseY = clientY - rect.top;
+      const oldScrollLeft = els.pdfThumbs.scrollLeft;
+      const oldScrollTop = els.pdfThumbs.scrollTop;
+      const oldScrollWidth = els.pdfThumbs.scrollWidth;
+      const oldScrollHeight = els.pdfThumbs.scrollHeight;
+
+      state.thumbScale = newScale;
+      els.pdfThumbs.style.setProperty("--thumb-scale", String(state.thumbScale));
+      els.pdfThumbs.classList.toggle("can-pan", state.thumbScale > 1.02);
+      try {
+        localStorage.setItem("launcher_thumb_scale", String(state.thumbScale));
+      } catch {}
+
+      const newScrollWidth = els.pdfThumbs.scrollWidth;
+      const newScrollHeight = els.pdfThumbs.scrollHeight;
+
+      const ratioX = oldScrollWidth > 0 ? (newScrollWidth / oldScrollWidth) : (newScale / oldScale);
+      const ratioY = oldScrollHeight > 0 ? (newScrollHeight / oldScrollHeight) : (newScale / oldScale);
+
+      els.pdfThumbs.scrollLeft = Math.max(0, Math.round((oldScrollLeft + mouseX) * ratioX - mouseX));
+      els.pdfThumbs.scrollTop = Math.max(0, Math.round((oldScrollTop + mouseY) * ratioY - mouseY));
+    }
+  } else {
+    state.thumbScale = newScale;
+  }
   updateScaleIndicator();
 }
 
@@ -6334,7 +6390,7 @@ els.pdfThumbs.addEventListener("wheel", (event) => {
   if (!event.ctrlKey || !event.deltaY) return;
   event.preventDefault();
   event.stopPropagation();
-  zoomThumbs(event.deltaY < 0 ? 1.15 : 0.87);
+  zoomThumbs(event.deltaY < 0 ? 1.15 : 0.87, event.clientX, event.clientY);
 }, { passive: false });
 
 // Панель управления масштабом (кнопки −, 100%, + в верхней панели)

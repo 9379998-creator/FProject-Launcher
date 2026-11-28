@@ -1898,8 +1898,8 @@ textarea:focus {
 /* Обёртка миниатюры с кнопками пути: как в дереве, но для ленты */
 .thumb-wrap {
   position: relative;
-  width: 100%;
-  max-width: 100%;
+  width: calc(100% * var(--thumb-scale, 1));
+  min-width: 100%;
   margin: 0 0 10px;
 }
 
