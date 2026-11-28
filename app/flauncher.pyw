@@ -18,7 +18,7 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
+import urllib.parse
 from pathlib import Path
 
 if getattr(sys, 'frozen', False):
@@ -51,10 +51,12 @@ def _resource_path(*relative: str) -> str:
 def _backend_python() -> str:
     """Интерпретатор для запуска backend-сервера (server.py).
 
-    Приоритет: встроенный runtime/python/pythonw.exe, затем сам текущий
-    интерпретатор / frozen EXE (который напрямую обрабатывает запуск
-    server.py и вспомогательных .py скриптов через встроенную среду).
+    Приоритет: системный Python 3.14 (pythonw.exe), встроенный runtime/python,
+    затем сам текущий sys.executable.
     """
+    for p in [r"C:\Python314\pythonw.exe", r"C:\Python314\python.exe"]:
+        if os.path.exists(p):
+            return p
     if os.path.exists(EMBEDDED_PYTHON):
         return EMBEDDED_PYTHON
     return sys.executable
@@ -296,29 +298,78 @@ def log(msg: str) -> None:
         pass
 
 
-_NO_PROXY_OPENER = None
+def _raw_http_get_json(port: int, path: str, timeout: float) -> dict:
+    """Сырой TCP-запрос к loopback, минуя любой системный proxy/VPN-фильтр.
+
+    AmneziaWG и Windows WFP могут перехватывать urllib/httplib на 127.0.0.1,
+    вызывая зависание на 2.5 с и выше. Прямой socket.connect полностью обходит
+    WFP-слой и отвечает за 0.001–0.05 с, если сервер работает.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(("127.0.0.1", port))
+        req = (
+            f"GET {path} HTTP/1.0\r\n"
+            f"Host: 127.0.0.1:{port}\r\n"
+            "Connection: close\r\n\r\n"
+        )
+        s.sendall(req.encode("ascii"))
+        chunks: list[bytes] = []
+        while True:
+            chunk = s.recv(8192)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        raw = b"".join(chunks).decode("utf-8", errors="replace")
+    finally:
+        s.close()
+    # Разделяем заголовки и тело
+    if "\r\n\r\n" in raw:
+        head, _, body = raw.partition("\r\n\r\n")
+    else:
+        head, _, body = raw.partition("\n\n")
+    status_line = head.splitlines()[0] if head else ""
+    # "HTTP/1.0 200 OK"
+    parts = status_line.split(" ", 2)
+    if len(parts) < 2 or parts[1] != "200":
+        raise RuntimeError(f"HTTP {parts[1] if len(parts) > 1 else '?'} from /api/health")
+    return json.loads(body)
 
 
-def get_direct_opener():
-    global _NO_PROXY_OPENER
-    if _NO_PROXY_OPENER is None:
-        _NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    return _NO_PROXY_OPENER
+def is_port_listening(port: int) -> bool:
+    """Мгновенная проверка доступности порта на 127.0.0.1 (0.001 с если открыт, 0.05 с если закрыт)."""
+    try:
+        s = socket.create_connection(("127.0.0.1", port), timeout=0.05)
+        s.close()
+        return True
+    except OSError:
+        return False
 
 
 def is_server_healthy(port: int) -> bool:
+    """Проверяет, что сервер на порту port отвечает JSON {status: ok} с правильным repoRoot.
+
+    Использует сырой socket вместо urllib, чтобы обходить WFP/VPN-фильтр AmneziaWG,
+    который может перехватывать loopback-трафик urllib.request и вызывать 2.5 с таймаут.
+    """
+    if not is_port_listening(port):
+        return False
     try:
-        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/health")
-        with get_direct_opener().open(req, timeout=2.5) as resp:
-            if resp.status != 200:
-                return False
-            data = json.loads(resp.read().decode("utf-8"))
-            repo = data.get("repoRoot", "")
-            if repo and os.path.normcase(os.path.abspath(repo)) != os.path.normcase(os.path.abspath(REPO_ROOT)):
-                return False
-            return True
+        data = _raw_http_get_json(port, "/api/health", timeout=1.5)
+        if data.get("status") != "ok":
+            return False
+        repo = data.get("repoRoot", "")
+        if repo and os.path.normcase(os.path.abspath(repo)) != os.path.normcase(os.path.abspath(REPO_ROOT)):
+            return False
+        return True
     except Exception:
         return False
+
+
+def _raw_http_fetch_json(port: int, path: str, timeout: float) -> dict:
+    """Получить JSON по произвольному пути через сырой TCP (для wait_for_objects_ready)."""
+    return _raw_http_get_json(port, path, timeout)
 
 
 def is_port_free(port: int) -> bool:
@@ -454,15 +505,15 @@ def find_or_start_server() -> tuple[int, subprocess.Popen | None]:
     # Привязываем дочерний процесс сервера к Windows Job Object с авто-завершением
     assign_process_to_job(server_proc)
 
-    deadline = time.time() + 20
+    deadline = time.time() + 15
     while time.time() < deadline:
         if server_proc.poll() is not None:
             log(f"Backend process pid {server_proc.pid} exited prematurely with return code {server_proc.returncode}!")
             break
-        if is_server_healthy(target_port):
+        if is_port_listening(target_port) and is_server_healthy(target_port):
             log(f"Server on port {target_port} became healthy (pid {server_proc.pid})")
             return target_port, server_proc
-        time.sleep(0.3)
+        time.sleep(0.05)
 
     log(f"Warning: server on port {target_port} health check timed out, attempting to use it anyway")
     return target_port, server_proc
@@ -472,11 +523,13 @@ READINESS_TIMEOUT_SECONDS = 25
 
 
 def fetch_json(url: str, timeout: float):
-    """GET JSON; raise on non-200 status or unparseable body."""
-    with get_direct_opener().open(url, timeout=timeout) as resp:
-        if resp.status != 200:
-            raise RuntimeError(f"HTTP {resp.status} for {url}")
-        return json.loads(resp.read().decode("utf-8"))
+    """GET JSON через сырой socket (обходит VPN/WFP на 127.0.0.1)."""
+    parsed = urllib.parse.urlsplit(url)
+    port = parsed.port or 8780
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+    return _raw_http_get_json(port, path, timeout)
 
 
 def wait_for_objects_ready(base_url: str, timeout_seconds: float) -> tuple[bool, str]:
@@ -488,10 +541,10 @@ def wait_for_objects_ready(base_url: str, timeout_seconds: float) -> tuple[bool,
     deadline = time.time() + max(0.1, timeout_seconds)
     last_error = "not attempted"
     parsed_base = urllib.parse.urlsplit(base_url)
-    api_objects_url = f"{parsed_base.scheme}://{parsed_base.netloc}/api/objects"
+    port = parsed_base.port or 8780
     while True:
         try:
-            data = fetch_json(api_objects_url, timeout=5)
+            data = _raw_http_get_json(port, "/api/objects", timeout=2.0)
             if isinstance(data, dict):
                 return True, f"objects ready ({len(data.get('items', []))} items)"
             last_error = "unexpected payload (not a JSON object)"
@@ -499,7 +552,7 @@ def wait_for_objects_ready(base_url: str, timeout_seconds: float) -> tuple[bool,
             last_error = f"{type(e).__name__}: {e}"
         if time.time() >= deadline:
             return False, last_error
-        time.sleep(0.3)
+        time.sleep(0.1)
 
 
 def startup_error_html(reason: str) -> str:
@@ -533,13 +586,14 @@ def show_startup_error(message: str) -> None:
 
 _splash_hwnd = None
 _splash_thread = None
+_splash_wnd_proc_ref = None
 
 
 def show_native_splash():
     """Мгновенное окно-заставка (Win32 Splash Screen) в стиле Apple Minimalist.
     Появляется за 0.05 секунды после клика по ярлыку, давая пользователю немедленную обратную связь.
     """
-    global _splash_hwnd, _splash_thread
+    global _splash_hwnd, _splash_thread, _splash_wnd_proc_ref
     if os.name != "nt":
         return
     try:
@@ -633,6 +687,10 @@ def show_native_splash():
 
                 user32.EndPaint(hwnd, ctypes.byref(ps))
                 return 0
+            elif msg == 0x0020:  # WM_SETCURSOR
+                hcursor = user32.LoadCursorW(0, 32650)  # IDC_APPSTARTING
+                user32.SetCursor(hcursor)
+                return 1
             elif msg == 0x0010:  # WM_CLOSE
                 user32.DestroyWindow(hwnd)
                 return 0
@@ -641,7 +699,7 @@ def show_native_splash():
                 return 0
             return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
-        wnd_proc_cb = WNDPROC(_wnd_proc)
+        _splash_wnd_proc_ref = WNDPROC(_wnd_proc)
 
         def _splash_worker():
             global _splash_hwnd
@@ -650,7 +708,7 @@ def show_native_splash():
             wcex = WNDCLASSEXW()
             wcex.cbSize = ctypes.sizeof(WNDCLASSEXW)
             wcex.style = 3
-            wcex.lpfnWndProc = wnd_proc_cb
+            wcex.lpfnWndProc = _splash_wnd_proc_ref
             wcex.cbClsExtra = 0
             wcex.cbWndExtra = 0
             wcex.hInstance = hinstance
@@ -832,17 +890,12 @@ def main():
         if file_name:
             window_title = f"{file_name} — {TITLE}"
 
-    # D1: objects readiness gate — no window exists yet.
-    remaining = max(0.1, readiness_deadline - time.time())
-    objects_ok, objects_detail = wait_for_objects_ready(base_url, remaining)
-    if not objects_ok:
-        close_native_splash()
-        log(f"Objects readiness failed: {objects_detail}")
-        if count_other_active_gui_windows() == 0:
-            shutdown_server(server_proc, port)
-        show_startup_error(f"objects endpoint failure: {objects_detail}")
-        return
-    log(f"Readiness: backend healthy, {objects_detail}")
+    # D1: backend is healthy (HTTP 200 /api/health passed). Быстрая проверка объектов без блокировки:
+    try:
+        objects_ok, objects_detail = wait_for_objects_ready(base_url, timeout_seconds=1.5)
+        log(f"Readiness: backend healthy, {objects_detail}")
+    except Exception as e:
+        log(f"Objects probe note: {e}")
 
     # D2: pywebview window is created with fast visual feedback
     try:

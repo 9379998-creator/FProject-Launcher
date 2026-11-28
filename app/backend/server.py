@@ -4993,6 +4993,8 @@ class SingleInstanceHTTPServer(ThreadingHTTPServer):
 
 
 def main() -> None:
+    t_start = time.time()
+    print(f"[{time.strftime('%H:%M:%S')}] backend main() starting...", flush=True)
     parser = argparse.ArgumentParser(description="Run Fero-Launcher local server.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8780)
@@ -5036,7 +5038,8 @@ def main() -> None:
             print(f"ERROR: Port {args.port} is already in use by another process: {err}", file=sys.stderr, flush=True)
             sys.exit(48)
         raise
-    print(f"Fero Project Shell (FPS): http://{args.host}:{args.port}/", flush=True)
+    dt = time.time() - t_start
+    print(f"[{time.strftime('%H:%M:%S')}] Fero Project Shell (FPS) bound to port {args.port} in {dt:.3f}s: http://{args.host}:{args.port}/", flush=True)
     start_server_idle_watchdog()
     server.serve_forever()
 
