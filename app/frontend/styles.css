@@ -1233,9 +1233,10 @@ textarea:focus {
 
 .pdf-thumb img {
   display: block;
-  width: auto;
+  width: min(100%, calc(480px * var(--img-ratio, 1.414) * var(--thumb-scale, 1)));
+  height: auto;
   max-width: 100%;
-  max-height: calc(480px * var(--thumb-scale, 1));
+  max-height: none;
   margin: 0 auto;
   object-fit: contain;
   border: 1px solid #E5E5EA;

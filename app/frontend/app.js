@@ -3635,6 +3635,11 @@ function createPageThumbElement(page) {
     img.src = page.url;
     img.alt = page.name;
     img.draggable = false;
+    img.addEventListener("load", () => {
+      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+        img.style.setProperty("--img-ratio", (img.naturalWidth / img.naturalHeight).toFixed(4));
+      }
+    });
     if (page.url && page.url.includes("/dwg/")) {
       const isReady = (page.bytes > 0) && !page.url.includes("header_thumb.png") && !page.url.includes("placeholder");
       img.dataset.dwgLoaded = isReady ? "1" : "0";
