@@ -4711,7 +4711,7 @@ function updateScaleIndicator() {
 
 function zoomThumbs(factor, originX = null, originY = null) {
   const oldScale = state.thumbScale || 1;
-  const newScale = Math.min(10.5, Math.max(0.3, Number((oldScale * factor).toFixed(2))));
+  const newScale = Math.min(14.0, Math.max(0.3, Number((oldScale * factor).toFixed(2))));
   if (newScale === oldScale) return;
 
   if (els.pdfThumbs) {
