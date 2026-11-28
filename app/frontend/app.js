@@ -3652,7 +3652,7 @@ function createPageThumbElement(page) {
     thumb.append(missing);
   } else {
     const img = document.createElement("img");
-    img.loading = "eager";
+    img.loading = "lazy";
     img.src = page.url;
     img.alt = page.name;
     img.draggable = false;
@@ -4480,16 +4480,8 @@ function showPdfPage(page, options = {}) {
       }
     } else {
       els.pdfDocFrame.dataset.currentDoc = targetDocPath;
-      const frameWin = els.pdfDocFrame.contentWindow;
-      const app = frameWin?.PDFViewerApplication;
-      if (app && app.initialized && typeof app.open === "function") {
-        app.open({ url: rawUrl }).catch(() => {
-          els.pdfDocFrame.src = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum + "&pagemode=none";
-        });
-      } else {
-        const viewerUrl = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum + "&pagemode=none";
-        els.pdfDocFrame.src = viewerUrl;
-      }
+      const viewerUrl = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum + "&pagemode=none";
+      els.pdfDocFrame.src = viewerUrl;
     }
 
     updateActivePdfThumb();
