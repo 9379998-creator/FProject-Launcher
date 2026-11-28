@@ -3652,7 +3652,7 @@ function createPageThumbElement(page) {
     thumb.append(missing);
   } else {
     const img = document.createElement("img");
-    img.loading = "lazy";
+    img.loading = "eager";
     img.src = page.url;
     img.alt = page.name;
     img.draggable = false;
@@ -3700,10 +3700,12 @@ function createPageThumbElement(page) {
     event.stopPropagation();
     state._userNavigatedDwgPage = true;
     state.activeNavZone = "thumbs";
-    showPdfPage(page);
-    const docPath = thumbPathForPage(page);
-    if (docPath) {
-      revealPathInTree(docPath, { updateSelection: true, skipScroll: false });
+    if (state.activePageKey !== pageKey(page)) {
+      showPdfPage(page);
+      const docPath = thumbPathForPage(page);
+      if (docPath) {
+        revealPathInTree(docPath, { updateSelection: true, skipScroll: false });
+      }
     }
     setViewerMode("full");
   });
@@ -5435,12 +5437,10 @@ async function renderSelectedPdfFiles(previewItems = collectPreviewFilesForDispl
           payload = { documents: excelDocs, totalPages: excelDocs.length, renderedPages: excelDocs.length, dpi: PDF_PREVIEW_DPI, errors: [] };
         } else {
           const endpoint = isDwg ? "/api/dwg/model-render" : "/api/pdf/render";
-          const _totalItems = itemsToFetch.reduce((s, f) => s + (f.pages || 1), 0);
-            const _autoFirstOnly = _totalItems > 50;
-            const requestBody = {
+          const requestBody = {
             files: itemsToFetch.map((file) => file.path),
             dpi: PDF_PREVIEW_DPI,
-            firstPageOnly: _autoFirstOnly,
+            firstPageOnly: false,
             force: Boolean(options?.force),
           };
 
@@ -5691,7 +5691,7 @@ async function loadMorePdfFiles(itemsToRender) {
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files: itemsToFetch.map((file) => file.path), dpi: PDF_PREVIEW_DPI, firstPageOnly: (itemsToFetch.reduce((s, f) => s + (f.pages || 1), 0) > 50) }),
+        body: JSON.stringify({ files: itemsToFetch.map((file) => file.path), dpi: PDF_PREVIEW_DPI, firstPageOnly: false }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
@@ -7499,10 +7499,12 @@ function showFileContextMenu(clientX, clientY, target) {
       },
     });
 
-    // 3. В DWG перевести
+    items.push({ sep: true });
+
+    // 3. Экспорт зоны в DWG
     items.push({
       icon: "\uD83D\uDCD0",
-      label: "\u0412 DWG \u043F\u0435\u0440\u0435\u0432\u0435\u0441\u0442\u0438",
+      label: "\u042D\u043A\u0441\u043F\u043E\u0440\u0442 \u0437\u043E\u043D\u044B \u0432 DWG",
       hint: "",
       disabled: !canCad,
       run: () => {
