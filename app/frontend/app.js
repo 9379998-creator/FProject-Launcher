@@ -1612,6 +1612,9 @@ function selectNode(node, event = {}, options = {}) {
     if (selectedItem && selectedItem.type === "file") {
       setActiveNativePath(selectedItem.path);
       state.revealedPath = selectedItem.path;
+      try {
+        localStorage.setItem("launcher_last_path", selectedItem.path);
+      } catch {}
       if (!options.deferPreview) syncSelectionToPreview(selectedItem);
     } else {
       setActiveNativePath("");
@@ -2676,6 +2679,20 @@ async function openSelectedObject() {
   beaconPerf("tree-render", performance.now() - _trT0, `rows=${state.visibleRows.length}`);
   startDiffPolling();
   finishProgress("Структура открыта");
+
+  // Автоматический показ ленты чертежей/документов, чтобы Окно 2 никогда не оставалось пустым
+  const lastPath = localStorage.getItem("launcher_last_path");
+  const allNodes = getCachedFlatNodes();
+  let restoredNode = null;
+  if (lastPath) {
+    const normLast = lastPath.replace(/\//g, "\\").toLowerCase();
+    restoredNode = allNodes.find((n) => n.type === "file" && (n.path || "").replace(/\//g, "\\").toLowerCase() === normLast);
+  }
+  if (restoredNode) {
+    selectNode(restoredNode);
+  } else {
+    renderSelectedFiles().catch(() => {});
+  }
 }
 
 function collectPreviewFilesForDisplay() {
@@ -2845,6 +2862,11 @@ function collectPreviewFilesForDisplay() {
               && (candidate.path.startsWith(prefixBack) || candidate.path.startsWith(prefixSlash)))
             .forEach(addPreviewFile);
         }
+      });
+    } else {
+      // Если в дереве ничего конкретно не выбрано — собираем превью всех файлов объекта
+      allNodes.forEach((node) => {
+        if (node.type === "file") addPreviewFile(node);
       });
     }
   } finally {
@@ -4714,7 +4736,7 @@ function updateScaleIndicator() {
 
 function zoomThumbs(factor, originX = null, originY = null) {
   const oldScale = state.thumbScale || 1;
-  const newScale = Math.min(5, Math.max(0.4, Number((oldScale * factor).toFixed(2))));
+  const newScale = Math.min(8.0, Math.max(0.3, Number((oldScale * factor).toFixed(2))));
   if (newScale === oldScale) return;
 
   if (els.pdfThumbs) {
@@ -6362,7 +6384,7 @@ els.pdfThumbs.addEventListener("wheel", (event) => {
   if (!event.ctrlKey || !event.deltaY) return;
   event.preventDefault();
   event.stopPropagation();
-  zoomThumbs(event.deltaY < 0 ? 1.15 : 0.87, event.clientX, event.clientY);
+  zoomThumbs(event.deltaY < 0 ? 1.18 : 0.85, event.clientX, event.clientY);
 }, { passive: false });
 
 // Панель управления масштабом (кнопки −, 100%, + в верхней панели)
@@ -6434,9 +6456,10 @@ try {
     document.documentElement.style.setProperty("--tree-scale", String(state.treeScale));
   }
   const savedThumbScale = parseFloat(localStorage.getItem("launcher_thumb_scale") || "1");
-  if (savedThumbScale && savedThumbScale >= 0.4 && savedThumbScale <= 5) {
+  if (savedThumbScale && savedThumbScale >= 0.3 && savedThumbScale <= 8.0) {
     state.thumbScale = savedThumbScale;
     els.pdfThumbs.style.setProperty("--thumb-scale", String(state.thumbScale));
+    els.pdfThumbs.classList.toggle("can-pan", state.thumbScale > 1.05);
   }
   updateScaleIndicator();
 } catch {}

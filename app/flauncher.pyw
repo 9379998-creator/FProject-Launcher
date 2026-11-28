@@ -296,10 +296,20 @@ def log(msg: str) -> None:
         pass
 
 
+_NO_PROXY_OPENER = None
+
+
+def get_direct_opener():
+    global _NO_PROXY_OPENER
+    if _NO_PROXY_OPENER is None:
+        _NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return _NO_PROXY_OPENER
+
+
 def is_server_healthy(port: int) -> bool:
     try:
         req = urllib.request.Request(f"http://127.0.0.1:{port}/api/health")
-        with urllib.request.urlopen(req, timeout=0.8) as resp:
+        with get_direct_opener().open(req, timeout=2.5) as resp:
             if resp.status != 200:
                 return False
             data = json.loads(resp.read().decode("utf-8"))
@@ -415,6 +425,14 @@ def find_or_start_server() -> tuple[int, subprocess.Popen | None]:
         log("Found healthy server on primary port 8780, reusing instance")
         return target_port, None
 
+    # Даём паузу на случай, если процесс сервера был только что запущен другим окном
+    if not is_port_free(target_port):
+        for _ in range(5):
+            time.sleep(0.3)
+            if is_server_healthy(target_port):
+                log("Server became healthy during grace check, reusing instance")
+                return target_port, None
+
     # 2. Если порт 8780 занят, но НЕ здоров — принудительно зачищаем старые процессы
     log("Port 8780 is occupied or unhealthy; reaping stale server process tree...")
     reap_stale_server(target_port)
@@ -473,7 +491,7 @@ READINESS_TIMEOUT_SECONDS = 25
 
 def fetch_json(url: str, timeout: float):
     """GET JSON; raise on non-200 status or unparseable body."""
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
+    with get_direct_opener().open(url, timeout=timeout) as resp:
         if resp.status != 200:
             raise RuntimeError(f"HTTP {resp.status} for {url}")
         return json.loads(resp.read().decode("utf-8"))
@@ -586,7 +604,7 @@ def count_other_active_gui_windows() -> int:
 
 
 def check_rapid_duplicate_launch(open_path: str, object_id: str) -> bool:
-    """Защита от случайного быстрого даблклика по ярлыку (интервал < 600 мс с одинаковыми параметрами)."""
+    """Защита от случайного быстрого даблклика по ярлыку (интервал < 3.5 с с одинаковыми параметрами)."""
     try:
         import tempfile
         lock_file = os.path.join(tempfile.gettempdir(), "flauncher_last_launch.json")
@@ -597,8 +615,9 @@ def check_rapid_duplicate_launch(open_path: str, object_id: str) -> bool:
                 data = json.load(f)
             last_time = data.get("time", 0)
             last_key = data.get("key", "")
-            if (now - last_time) < 0.6 and last_key == key:
-                log(f"Throttled rapid duplicate launch (<600ms) for key: {key}")
+            if (now - last_time) < 3.5 and last_key == key:
+                log(f"Throttled rapid duplicate launch (<3.5s) for key: {key}")
+                focus_existing_window()
                 return True
         with open(lock_file, "w", encoding="utf-8") as f:
             json.dump({"time": now, "key": key}, f)
