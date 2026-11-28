@@ -1099,7 +1099,7 @@ textarea:focus {
   width: 100%;
   height: 100%;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
 }
 
 .shell:not(.full-view) .pdf-viewer.stage-active .pdf-thumbs {
@@ -1182,6 +1182,19 @@ textarea:focus {
   padding: 5px 6px 6px 6px;
   user-select: none;
   box-sizing: border-box;
+}
+
+.pdf-thumbs.can-pan {
+  cursor: grab;
+}
+
+.pdf-thumbs.can-pan .pdf-thumb {
+  cursor: grab;
+}
+
+.pdf-thumbs.can-pan.is-dragging,
+.pdf-thumbs.can-pan:active {
+  cursor: grabbing;
 }
 
 .pdf-thumb {
@@ -1310,6 +1323,8 @@ textarea:focus {
   overflow: hidden;
   padding: 14px;
   user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
   background: #ffffff;
   contain: layout style;
 }
@@ -1327,6 +1342,13 @@ textarea:focus {
   will-change: transform;
   -webkit-user-drag: none;
   user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.pdf-stage.dragging img,
+.pdf-stage.dragging canvas {
+  pointer-events: none;
 }
 
 .pdf-stage img[hidden], .pdf-stage canvas[hidden] {

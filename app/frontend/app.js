@@ -159,6 +159,7 @@ const els = {
   settingsDwgHint: document.getElementById("settingsDwgHint"),
   settingsSaveBtn: document.getElementById("settingsSaveBtn"),
   shellSplitter: document.getElementById("shellSplitter"),
+  btnResetSplitter: document.getElementById("btnResetSplitter"),
   btnHelp: document.getElementById("btnHelp"),
   helpModal: document.getElementById("helpModal"),
   helpCloseBtn: document.getElementById("helpCloseBtn"),
@@ -4657,7 +4658,7 @@ function zoomPdf(factor, originX = null, originY = null) {
   }
   const isStageViewing = state.viewMode === "full" || els.pdfViewer?.classList.contains("stage-active");
   if (!isStageViewing) {
-    zoomThumbs(factor);
+    zoomThumbs(factor, originX, originY);
     return;
   }
   if (state.excelWorkbook) {
@@ -4711,12 +4712,36 @@ function updateScaleIndicator() {
   }
 }
 
-function zoomThumbs(factor) {
-  state.thumbScale = Math.min(5, Math.max(0.4, Number((state.thumbScale * factor).toFixed(2))));
-  els.pdfThumbs.style.setProperty("--thumb-scale", String(state.thumbScale));
-  try {
-    localStorage.setItem("launcher_thumb_scale", String(state.thumbScale));
-  } catch {}
+function zoomThumbs(factor, originX = null, originY = null) {
+  const oldScale = state.thumbScale || 1;
+  const newScale = Math.min(5, Math.max(0.4, Number((oldScale * factor).toFixed(2))));
+  if (newScale === oldScale) return;
+
+  if (els.pdfThumbs) {
+    const rect = els.pdfThumbs.getBoundingClientRect();
+    const clientX = (originX !== null && originX !== undefined) ? originX : (rect.left + rect.width / 2);
+    const clientY = (originY !== null && originY !== undefined) ? originY : (rect.top + rect.height / 2);
+
+    const mouseX = clientX - rect.left;
+    const mouseY = clientY - rect.top;
+
+    const contentX = els.pdfThumbs.scrollLeft + mouseX;
+    const contentY = els.pdfThumbs.scrollTop + mouseY;
+
+    const ratio = newScale / oldScale;
+
+    state.thumbScale = newScale;
+    els.pdfThumbs.style.setProperty("--thumb-scale", String(state.thumbScale));
+    els.pdfThumbs.classList.toggle("can-pan", state.thumbScale > 1.05);
+    try {
+      localStorage.setItem("launcher_thumb_scale", String(state.thumbScale));
+    } catch {}
+
+    els.pdfThumbs.scrollLeft = Math.max(0, (contentX * ratio) - mouseX);
+    els.pdfThumbs.scrollTop = Math.max(0, (contentY * ratio) - mouseY);
+  } else {
+    state.thumbScale = newScale;
+  }
   updateScaleIndicator();
 }
 
@@ -6337,7 +6362,7 @@ els.pdfThumbs.addEventListener("wheel", (event) => {
   if (!event.ctrlKey || !event.deltaY) return;
   event.preventDefault();
   event.stopPropagation();
-  zoomThumbs(event.deltaY < 0 ? 1.15 : 0.87);
+  zoomThumbs(event.deltaY < 0 ? 1.15 : 0.87, event.clientX, event.clientY);
 }, { passive: false });
 
 // Панель управления масштабом (кнопки −, 100%, + в верхней панели)
@@ -6416,13 +6441,71 @@ try {
   updateScaleIndicator();
 } catch {}
 
+// Панорамирование миниатюр (лапа) в Окне 2 при масштабе > 100% или средней кнопкой мыши
+let thumbsDragging = false;
+let thumbsStartX = 0;
+let thumbsStartY = 0;
+let thumbsScrollLeft = 0;
+let thumbsScrollTop = 0;
+let thumbsMoved = false;
+
+els.pdfThumbs.addEventListener("mousedown", (e) => {
+  if (e.button === 1 || (e.button === 0 && (state.thumbScale > 1.05 || e.target === els.pdfThumbs))) {
+    thumbsDragging = true;
+    thumbsMoved = false;
+    thumbsStartX = e.clientX;
+    thumbsStartY = e.clientY;
+    thumbsScrollLeft = els.pdfThumbs.scrollLeft;
+    thumbsScrollTop = els.pdfThumbs.scrollTop;
+    els.pdfThumbs.classList.add("is-dragging");
+    document.body.style.userSelect = "none";
+  }
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!thumbsDragging) return;
+  const dx = e.clientX - thumbsStartX;
+  const dy = e.clientY - thumbsStartY;
+  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+    thumbsMoved = true;
+  }
+  els.pdfThumbs.scrollLeft = thumbsScrollLeft - dx;
+  els.pdfThumbs.scrollTop = thumbsScrollTop - dy;
+});
+
+window.addEventListener("mouseup", () => {
+  if (!thumbsDragging) return;
+  thumbsDragging = false;
+  els.pdfThumbs.classList.remove("is-dragging");
+  document.body.style.userSelect = "";
+});
+
+els.pdfThumbs.addEventListener("click", (e) => {
+  if (thumbsMoved) {
+    e.preventDefault();
+    e.stopPropagation();
+    thumbsMoved = false;
+  }
+}, true);
+
+// Запрет нативного drag-and-drop браузера для исключения задержек перетаскивания (Zero Drag Delay)
+els.pdfStage.addEventListener("dragstart", (e) => e.preventDefault());
+if (els.pdfPageImage) {
+  els.pdfPageImage.draggable = false;
+  els.pdfPageImage.addEventListener("dragstart", (e) => e.preventDefault());
+}
+
 let pdfDragMoved = false;
+let pdfStageCachedW = 0;
+let pdfStageCachedH = 0;
+let pdfContentCachedW = 0;
+let pdfContentCachedH = 0;
 
 els.pdfStage.addEventListener("pointerdown", (event) => {
   if (event.target.closest(".viewer-controls, .pdf-toc-drawer, .excel-tabs-bar, input, button")) return;
   const canvas = document.getElementById("pdfPageCanvas");
   const isCanvasActive = canvas && !canvas.hidden;
-  if ((els.pdfPageImage.hidden && !isCanvasActive) || event.button !== 0) return;
+  if ((els.pdfPageImage.hidden && !isCanvasActive) || (event.button !== 0 && event.button !== 1)) return;
   event.preventDefault();
   state.view.dragging = true;
   pdfDragMoved = false;
@@ -6430,30 +6513,58 @@ els.pdfStage.addEventListener("pointerdown", (event) => {
   state.view.dragStartY = event.clientY;
   state.view.dragPanX = state.view.panX;
   state.view.dragPanY = state.view.panY;
-  els.pdfStage.setPointerCapture(event.pointerId);
-  updateViewTransform();
+
+  // Кэшируем размеры для мгновенного отклика без синхронных пересчётов макета (Zero Latency)
+  const stageRect = els.pdfStage.getBoundingClientRect();
+  pdfStageCachedW = stageRect.width;
+  pdfStageCachedH = stageRect.height;
+  pdfContentCachedW = isCanvasActive ? Number(canvas.dataset.naturalWidth || 1000) : (els.pdfPageImage.naturalWidth || 1000);
+  pdfContentCachedH = isCanvasActive ? Number(canvas.dataset.naturalHeight || 1000) : (els.pdfPageImage.naturalHeight || 1000);
+
+  try {
+    els.pdfStage.setPointerCapture(event.pointerId);
+  } catch (_) {}
+  els.pdfStage.classList.add("dragging");
+  document.body.style.cursor = "grabbing";
 });
 
 els.pdfStage.addEventListener("pointermove", (event) => {
   if (!state.view.dragging) return;
+  event.preventDefault();
   const dx = event.clientX - state.view.dragStartX;
   const dy = event.clientY - state.view.dragStartY;
-  if (!pdfDragMoved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
+  if (!pdfDragMoved && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) {
     pdfDragMoved = true;
   }
-  state.view.panX = state.view.dragPanX + dx;
-  state.view.panY = state.view.dragPanY + dy;
-  updateViewTransform();
+
+  // Мгновенный пересчёт панорамирования на базе кэшированных размеров
+  const rotated = Math.abs(state.view.rotation % 180) === 90;
+  const w = (rotated ? pdfContentCachedH : pdfContentCachedW) * state.view.scale;
+  const h = (rotated ? pdfContentCachedW : pdfContentCachedH) * state.view.scale;
+  const marginX = Math.min(70, w / 2);
+  const marginY = Math.min(70, h / 2);
+  const maxX = Math.max(0, w / 2 + pdfStageCachedW / 2 - marginX);
+  const maxY = Math.max(0, h / 2 + pdfStageCachedH / 2 - marginY);
+
+  state.view.panX = Math.min(maxX, Math.max(-maxX, state.view.dragPanX + dx));
+  state.view.panY = Math.min(maxY, Math.max(-maxY, state.view.dragPanY + dy));
+
+  const tr = `translate(-50%, -50%) translate(${state.view.panX}px, ${state.view.panY}px) rotate(${state.view.rotation}deg) scale(${state.view.scale})`;
+  els.pdfPageImage.style.transform = tr;
+  const canvas = document.getElementById("pdfPageCanvas");
+  if (canvas && !canvas.hidden) canvas.style.transform = tr;
 });
 
 function endPdfDrag(event) {
   if (!state.view.dragging) return;
   state.view.dragging = false;
   try {
-    els.pdfStage.releasePointerCapture(event.pointerId);
-  } catch {
-    // Pointer capture may already be released by the browser.
-  }
+    if (event && event.pointerId !== undefined) {
+      els.pdfStage.releasePointerCapture(event.pointerId);
+    }
+  } catch (_) {}
+  els.pdfStage.classList.remove("dragging");
+  document.body.style.cursor = "";
   updateViewTransform();
 }
 
@@ -6475,7 +6586,10 @@ function handleGlobalEscape() {
   if (state.thumbScale && state.thumbScale > 1.05) {
     state.thumbScale = 1;
     els.pdfThumbs.style.setProperty("--thumb-scale", "1");
+    els.pdfThumbs.classList.remove("can-pan");
+    els.pdfThumbs.scrollLeft = 0;
     try { localStorage.setItem("launcher_thumb_scale", "1"); } catch {}
+    updateScaleIndicator();
     return;
   }
   if (!els.pdfPageImage.hidden && state.view.dragging) {
@@ -6999,6 +7113,20 @@ function initShellSplitter() {
   const splitter = els.shellSplitter || document.getElementById("shellSplitter");
   const shell = document.getElementById("appShell") || document.querySelector(".shell");
   if (!splitter || !shell) return;
+
+  const resetSplitter = () => {
+    shell.style.setProperty("--sidebar-width", "50%");
+    try {
+      localStorage.removeItem("launcher_sidebar_width");
+    } catch {}
+    showToast("Окна разделены пополам (50 / 50)");
+  };
+
+  const btnReset = els.btnResetSplitter || document.getElementById("btnResetSplitter");
+  if (btnReset) {
+    btnReset.addEventListener("click", resetSplitter);
+  }
+  splitter.addEventListener("dblclick", resetSplitter);
 
   const savedWidth = localStorage.getItem("launcher_sidebar_width");
   if (savedWidth) {

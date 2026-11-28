@@ -17,6 +17,7 @@
       <button id="btnSettings" type="button" title="Параметры лаунчера и ассоциации программ">Параметры</button>
       <button id="excludeObject" type="button" disabled title="Убрать объект из списка Launcher. Исходная папка не удаляется.">Исключить</button>
       <button id="btnHelp" type="button" title="Справка по горячим клавишам и навигации">Справка</button>
+      <button id="btnResetSplitter" type="button" title="Разделить экран пополам (50 / 50)">50 / 50</button>
     </div>
     <div class="progress-panel" id="progressPanel" hidden>
       <div class="progress-head" id="progressHead">
@@ -68,8 +69,8 @@
           <section class="pdf-doc-viewer" id="pdfDocViewer" hidden aria-label="Просмотр PDF документа">
             <iframe class="pdf-doc-frame" id="pdfDocFrame" title="PDF Просмотрщик" loading="lazy"></iframe>
           </section>
-          <img id="pdfPageImage" alt="" hidden>
-          <canvas id="pdfPageCanvas" hidden></canvas>
+          <img id="pdfPageImage" alt="" hidden draggable="false" ondragstart="return false;">
+          <canvas id="pdfPageCanvas" hidden draggable="false" ondragstart="return false;"></canvas>
           <video id="mediaVideoViewer" controls hidden></video>
           <div class="txt-viewer" id="txtViewer" hidden><pre id="txtContent"></pre></div>
           <section class="excel-viewer" id="excelViewer" hidden aria-label="Просмотр Excel-книги">
@@ -158,6 +159,10 @@
             <span class="help-desc">Плавное масштабирование чертежей в ленте (Окно 2) и листа на весь экран (Окно 3)</span>
           </div>
           <div class="help-item">
+            <kbd class="help-key">50 / 50</kbd>
+            <span class="help-desc">Мгновенный возврат ширины окон 1 и 2 ровно пополам (кнопка в панели или 2× клик по границе)</span>
+          </div>
+          <div class="help-item">
             <kbd class="help-key">Escape</kbd>
             <span class="help-desc">Сброс масштаба в 100% («Вписать») / возврат из листа в ленту / закрытие окон</span>
           </div>
@@ -191,6 +196,6 @@
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'lib/pdfjs/pdf.worker.min.js';
   </script>
-  <script src="app.js?v=20261126-escape-single-press"></script>
+  <script src="app.js?v=20261128-splitter-50-pan-zoom"></script>
 </body>
 </html>
