@@ -1186,6 +1186,7 @@ textarea:focus {
 
 .pdf-thumbs.can-pan {
   cursor: grab;
+  touch-action: none;
 }
 
 .pdf-thumbs.can-pan .pdf-thumb {
@@ -1193,8 +1194,11 @@ textarea:focus {
 }
 
 .pdf-thumbs.can-pan.is-dragging,
-.pdf-thumbs.can-pan:active {
-  cursor: grabbing;
+.pdf-thumbs.can-pan:active,
+.pdf-thumbs.is-dragging,
+.pdf-thumbs.is-dragging * {
+  cursor: grabbing !important;
+  touch-action: none;
 }
 
 .pdf-thumb {

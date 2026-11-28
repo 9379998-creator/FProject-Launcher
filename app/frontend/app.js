@@ -2680,62 +2680,8 @@ async function openSelectedObject(options = {}) {
   startDiffPolling();
   finishProgress("Структура открыта");
 
-  if (options && options.isStartupRestore) {
-    // Восстановление рабочего состояния при перезапуске лаунчера:
-    const wasRendered = localStorage.getItem("launcher_last_rendered_object_id") === object.id;
-    const lastViewedFile = localStorage.getItem("launcher_last_viewed_file");
-    const lastViewedPage = parseInt(localStorage.getItem("launcher_last_viewed_page") || "1", 10);
-
-    if (wasRendered) {
-      renderSelectedFiles({ isRestore: true }).then(() => {
-        if (lastViewedFile) {
-          restoreViewedFile(lastViewedFile, lastViewedPage);
-        }
-      }).catch(console.error);
-    } else if (lastViewedFile) {
-      restoreViewedFile(lastViewedFile, lastViewedPage);
-    } else {
-      els.pdfViewer.classList.add("empty");
-    }
-  } else {
-    // Обычный переход в объект при клике в Окне 1:
-    // Дерево файлов раскрыто чисто, без случайного выбора DWG и без запуска тяжелого рендера (Rule 6)
-    els.pdfViewer.classList.add("empty");
-    try {
-      localStorage.removeItem("launcher_last_rendered_object_id");
-      localStorage.removeItem("launcher_last_viewed_file");
-      localStorage.removeItem("launcher_last_path");
-    } catch {}
-  }
-}
-
-function restoreViewedFile(targetPath, targetPage = 1) {
-  if (!targetPath) return;
-  const normTarget = targetPath.replace(/\//g, "\\").toLowerCase();
-  const allNodes = getCachedFlatNodes();
-  const matchedNode = allNodes.find((n) => n.type === "file" && (n.path || "").replace(/\//g, "\\").toLowerCase() === normTarget);
-  if (!matchedNode) return;
-
-  const ext = (matchedNode.extension || "").toUpperCase();
-  if (ext === "DWG") {
-    const pair = findPdfPairForDwg(matchedNode, state.pdfPairIndex, { fuzzy: false });
-    if (!pair) {
-      return;
-    }
-  }
-
-  if (state.renderedPages?.length) {
-    const pageObj = state.renderedPages.find((p) => {
-      const pPath = (p.previewFor?.path || p.sourcePath || p.documentPath || p.path || "").replace(/\//g, "\\").toLowerCase();
-      return pPath === normTarget && (targetPage <= 1 || p.page === targetPage);
-    });
-    if (pageObj) {
-      showPdfPage(pageObj, { skipTreeScroll: true, activateStage: true });
-      return;
-    }
-  }
-
-  previewFileDirectly(matchedNode, { fullView: true }).catch(console.error);
+  // Окно 1 отображает структуру файлов объекта, Окно 2 остаётся в чистом готовом режиме
+  els.pdfViewer.classList.add("empty");
 }
 
 function collectPreviewFilesForDisplay() {
@@ -4801,23 +4747,54 @@ function zoomThumbs(factor, originX = null, originY = null) {
     const clientX = (originX !== null && originX !== undefined) ? originX : (rect.left + rect.width / 2);
     const clientY = (originY !== null && originY !== undefined) ? originY : (rect.top + rect.height / 2);
 
-    const mouseX = clientX - rect.left;
-    const mouseY = clientY - rect.top;
+    // Точная привязка масштабирования к элементу под курсором (Zero-drift anchoring)
+    const elUnder = document.elementFromPoint(clientX, clientY);
+    const targetEl = (elUnder && els.pdfThumbs.contains(elUnder) && elUnder !== els.pdfThumbs)
+      ? (elUnder.closest(".pdf-thumb, .thumb-wrap") || elUnder)
+      : null;
 
-    const contentX = els.pdfThumbs.scrollLeft + mouseX;
-    const contentY = els.pdfThumbs.scrollTop + mouseY;
+    if (targetEl) {
+      const beforeRect = targetEl.getBoundingClientRect();
+      const fracX = beforeRect.width > 0 ? (clientX - beforeRect.left) / beforeRect.width : 0.5;
+      const fracY = beforeRect.height > 0 ? (clientY - beforeRect.top) / beforeRect.height : 0.5;
 
-    const ratio = newScale / oldScale;
+      state.thumbScale = newScale;
+      els.pdfThumbs.style.setProperty("--thumb-scale", String(state.thumbScale));
+      els.pdfThumbs.classList.toggle("can-pan", state.thumbScale > 1.02);
+      try {
+        localStorage.setItem("launcher_thumb_scale", String(state.thumbScale));
+      } catch {}
 
-    state.thumbScale = newScale;
-    els.pdfThumbs.style.setProperty("--thumb-scale", String(state.thumbScale));
-    els.pdfThumbs.classList.toggle("can-pan", state.thumbScale > 1.05);
-    try {
-      localStorage.setItem("launcher_thumb_scale", String(state.thumbScale));
-    } catch {}
+      const afterRect = targetEl.getBoundingClientRect();
+      const newScreenX = afterRect.left + fracX * afterRect.width;
+      const newScreenY = afterRect.top + fracY * afterRect.height;
 
-    els.pdfThumbs.scrollLeft = Math.max(0, (contentX * ratio) - mouseX);
-    els.pdfThumbs.scrollTop = Math.max(0, (contentY * ratio) - mouseY);
+      els.pdfThumbs.scrollLeft += Math.round(newScreenX - clientX);
+      els.pdfThumbs.scrollTop += Math.round(newScreenY - clientY);
+    } else {
+      const mouseX = clientX - rect.left;
+      const mouseY = clientY - rect.top;
+      const oldScrollLeft = els.pdfThumbs.scrollLeft;
+      const oldScrollTop = els.pdfThumbs.scrollTop;
+      const oldScrollWidth = els.pdfThumbs.scrollWidth;
+      const oldScrollHeight = els.pdfThumbs.scrollHeight;
+
+      state.thumbScale = newScale;
+      els.pdfThumbs.style.setProperty("--thumb-scale", String(state.thumbScale));
+      els.pdfThumbs.classList.toggle("can-pan", state.thumbScale > 1.02);
+      try {
+        localStorage.setItem("launcher_thumb_scale", String(state.thumbScale));
+      } catch {}
+
+      const newScrollWidth = els.pdfThumbs.scrollWidth;
+      const newScrollHeight = els.pdfThumbs.scrollHeight;
+
+      const ratioX = oldScrollWidth > 0 ? (newScrollWidth / oldScrollWidth) : (newScale / oldScale);
+      const ratioY = oldScrollHeight > 0 ? (newScrollHeight / oldScrollHeight) : (newScale / oldScale);
+
+      els.pdfThumbs.scrollLeft = Math.max(0, Math.round((oldScrollLeft + mouseX) * ratioX - mouseX));
+      els.pdfThumbs.scrollTop = Math.max(0, Math.round((oldScrollTop + mouseY) * ratioY - mouseY));
+    }
   } else {
     state.thumbScale = newScale;
   }
@@ -6541,44 +6518,66 @@ try {
   updateScaleIndicator();
 } catch {}
 
-// Панорамирование миниатюр (лапа) в Окне 2 при масштабе > 100% или средней кнопкой мыши
+// Панорамирование миниатюр (лапа) в Окне 2 через PointerEvents и setPointerCapture (GrabToPan)
 let thumbsDragging = false;
+let thumbsPointerId = null;
 let thumbsStartX = 0;
 let thumbsStartY = 0;
 let thumbsScrollLeft = 0;
 let thumbsScrollTop = 0;
 let thumbsMoved = false;
 
-els.pdfThumbs.addEventListener("mousedown", (e) => {
-  if (e.button === 1 || (e.button === 0 && (state.thumbScale > 1.05 || e.target === els.pdfThumbs))) {
-    thumbsDragging = true;
-    thumbsMoved = false;
-    thumbsStartX = e.clientX;
-    thumbsStartY = e.clientY;
-    thumbsScrollLeft = els.pdfThumbs.scrollLeft;
-    thumbsScrollTop = els.pdfThumbs.scrollTop;
-    els.pdfThumbs.classList.add("is-dragging");
-    document.body.style.userSelect = "none";
-  }
+// Запрет нативного drag-and-drop для всех картинок и элементов ленты
+els.pdfThumbs.addEventListener("dragstart", (e) => e.preventDefault());
+
+els.pdfThumbs.addEventListener("pointerdown", (e) => {
+  const canPan = state.thumbScale > 1.02 || e.button === 1 || e.target === els.pdfThumbs;
+  if (!canPan || (e.button !== 0 && e.button !== 1)) return;
+
+  thumbsDragging = true;
+  thumbsPointerId = e.pointerId;
+  thumbsMoved = false;
+  thumbsStartX = e.clientX;
+  thumbsStartY = e.clientY;
+  thumbsScrollLeft = els.pdfThumbs.scrollLeft;
+  thumbsScrollTop = els.pdfThumbs.scrollTop;
+
+  try {
+    els.pdfThumbs.setPointerCapture(e.pointerId);
+  } catch (_) {}
+
+  els.pdfThumbs.classList.add("is-dragging");
+  document.body.style.userSelect = "none";
+  e.preventDefault();
 });
 
-window.addEventListener("mousemove", (e) => {
-  if (!thumbsDragging) return;
+els.pdfThumbs.addEventListener("pointermove", (e) => {
+  if (!thumbsDragging || (thumbsPointerId !== null && e.pointerId !== thumbsPointerId)) return;
   const dx = e.clientX - thumbsStartX;
   const dy = e.clientY - thumbsStartY;
-  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+  if (dx !== 0 || dy !== 0) {
     thumbsMoved = true;
   }
   els.pdfThumbs.scrollLeft = thumbsScrollLeft - dx;
   els.pdfThumbs.scrollTop = thumbsScrollTop - dy;
+  e.preventDefault();
 });
 
-window.addEventListener("mouseup", () => {
+function endThumbsDrag(e) {
   if (!thumbsDragging) return;
+  if (thumbsPointerId !== null) {
+    try {
+      els.pdfThumbs.releasePointerCapture(thumbsPointerId);
+    } catch (_) {}
+    thumbsPointerId = null;
+  }
   thumbsDragging = false;
   els.pdfThumbs.classList.remove("is-dragging");
   document.body.style.userSelect = "";
-});
+}
+
+els.pdfThumbs.addEventListener("pointerup", endThumbsDrag);
+els.pdfThumbs.addEventListener("pointercancel", endThumbsDrag);
 
 els.pdfThumbs.addEventListener("click", (e) => {
   if (thumbsMoved) {
@@ -7293,17 +7292,6 @@ function initShellSplitter() {
 loadObjectSummaries()
   .then(() => {
     handleInitialDeepLink();
-    if (!state.currentManifest) {
-      const lastId = localStorage.getItem("launcher_last_object_id");
-      if (lastId) {
-        const lastObj = state.objects.find(o => o.id === lastId);
-        if (lastObj) {
-          state.selectedObjectId = lastObj.id;
-          updateObjectListSelection();
-          openSelectedObject({ isStartupRestore: true }).catch(console.error);
-        }
-      }
-    }
     if (document.activeElement && document.activeElement.tagName === "BUTTON") {
       document.activeElement.blur();
     }

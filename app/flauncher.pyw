@@ -531,6 +531,178 @@ def show_startup_error(message: str) -> None:
         log(f"startup error window failed: {e}")
 
 
+_splash_hwnd = None
+_splash_thread = None
+
+
+def show_native_splash():
+    """Мгновенное окно-заставка (Win32 Splash Screen) в стиле Apple Minimalist.
+    Появляется за 0.05 секунды после клика по ярлыку, давая пользователю немедленную обратную связь.
+    """
+    global _splash_hwnd, _splash_thread
+    if os.name != "nt":
+        return
+    try:
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+        kernel32 = ctypes.windll.kernel32
+
+        LRESULT = ctypes.c_int64
+        WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+        user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.DefWindowProcW.restype = LRESULT
+
+        class WNDCLASSEXW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.UINT),
+                ("style", wintypes.UINT),
+                ("lpfnWndProc", WNDPROC),
+                ("cbClsExtra", ctypes.c_int),
+                ("cbWndExtra", ctypes.c_int),
+                ("hInstance", wintypes.HINSTANCE),
+                ("hIcon", wintypes.HICON),
+                ("hCursor", wintypes.HICON),
+                ("hbrBackground", wintypes.HBRUSH),
+                ("lpszMenuName", wintypes.LPCWSTR),
+                ("lpszClassName", wintypes.LPCWSTR),
+                ("hIconSm", wintypes.HICON),
+            ]
+
+        class PAINTSTRUCT(ctypes.Structure):
+            _fields_ = [
+                ("hdc", wintypes.HDC),
+                ("fErase", wintypes.BOOL),
+                ("rcPaint", wintypes.RECT),
+                ("fRestore", wintypes.BOOL),
+                ("fIncUpdate", wintypes.BOOL),
+                ("rgbReserved", wintypes.BYTE * 32),
+            ]
+
+        class MSG(ctypes.Structure):
+            _fields_ = [
+                ("hwnd", wintypes.HWND),
+                ("message", wintypes.UINT),
+                ("wParam", wintypes.WPARAM),
+                ("lParam", wintypes.LPARAM),
+                ("time", wintypes.DWORD),
+                ("pt", wintypes.POINT),
+            ]
+
+        class_name = f"FPS_SplashClass_{os.getpid()}"
+
+        def _wnd_proc(hwnd, msg, wparam, lparam):
+            if msg == 0x000F:  # WM_PAINT
+                ps = PAINTSTRUCT()
+                hdc = user32.BeginPaint(hwnd, ctypes.byref(ps))
+                rect = wintypes.RECT()
+                user32.GetClientRect(hwnd, ctypes.byref(rect))
+
+                # Фон #F5F5F7
+                brush = gdi32.CreateSolidBrush(0x00F7F5F5)
+                user32.FillRect(hdc, ctypes.byref(rect), brush)
+                gdi32.DeleteObject(brush)
+
+                # Рамка #D1D1D6
+                pen = gdi32.CreatePen(0, 1, 0x00D6D1D1)
+                old_pen = gdi32.SelectObject(hdc, pen)
+                null_brush = gdi32.GetStockObject(5)
+                old_brush = gdi32.SelectObject(hdc, null_brush)
+                gdi32.Rectangle(hdc, 0, 0, rect.right, rect.bottom)
+                gdi32.SelectObject(hdc, old_pen)
+                gdi32.SelectObject(hdc, old_brush)
+                gdi32.DeleteObject(pen)
+
+                gdi32.SetBkMode(hdc, 1)  # TRANSPARENT
+                gdi32.SetTextColor(hdc, 0x001F1D1D)
+
+                hfont_title = gdi32.CreateFontW(22, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
+                old_font = gdi32.SelectObject(hdc, hfont_title)
+                r_title = wintypes.RECT(0, 36, rect.right, 70)
+                user32.DrawTextW(hdc, "Fero Project Shell (FPS)", -1, ctypes.byref(r_title), 0x0001 | 0x0004)
+
+                hfont_sub = gdi32.CreateFontW(15, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, "Segoe UI")
+                gdi32.SelectObject(hdc, hfont_sub)
+                gdi32.SetTextColor(hdc, 0x008B8686)
+                r_sub = wintypes.RECT(0, 74, rect.right, 105)
+                user32.DrawTextW(hdc, "Запуск системы…", -1, ctypes.byref(r_sub), 0x0001 | 0x0004)
+
+                gdi32.SelectObject(hdc, old_font)
+                gdi32.DeleteObject(hfont_title)
+                gdi32.DeleteObject(hfont_sub)
+
+                user32.EndPaint(hwnd, ctypes.byref(ps))
+                return 0
+            elif msg == 0x0010:  # WM_CLOSE
+                user32.DestroyWindow(hwnd)
+                return 0
+            elif msg == 0x0002:  # WM_DESTROY
+                user32.PostQuitMessage(0)
+                return 0
+            return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        wnd_proc_cb = WNDPROC(_wnd_proc)
+
+        def _splash_worker():
+            global _splash_hwnd
+            hinstance = kernel32.GetModuleHandleW(None)
+            hcursor = user32.LoadCursorW(0, 32650)  # IDC_APPSTARTING
+            wcex = WNDCLASSEXW()
+            wcex.cbSize = ctypes.sizeof(WNDCLASSEXW)
+            wcex.style = 3
+            wcex.lpfnWndProc = wnd_proc_cb
+            wcex.cbClsExtra = 0
+            wcex.cbWndExtra = 0
+            wcex.hInstance = hinstance
+            wcex.hIcon = 0
+            wcex.hCursor = hcursor
+            wcex.hbrBackground = 0
+            wcex.lpszMenuName = None
+            wcex.lpszClassName = class_name
+            wcex.hIconSm = 0
+
+            user32.RegisterClassExW(ctypes.byref(wcex))
+
+            width = 380
+            height = 140
+            screen_w = user32.GetSystemMetrics(0)
+            screen_h = user32.GetSystemMetrics(1)
+            x = (screen_w - width) // 2
+            y = (screen_h - height) // 2
+
+            hwnd = user32.CreateWindowExW(
+                0x00000008 | 0x00000080,  # WS_EX_TOPMOST | WS_EX_TOOLWINDOW
+                class_name,
+                "Fero Project Shell Splash",
+                0x80000000 | 0x10000000,  # WS_POPUP | WS_VISIBLE
+                x, y, width, height,
+                0, 0, hinstance, 0
+            )
+            _splash_hwnd = hwnd
+            user32.ShowWindow(hwnd, 5)
+            user32.UpdateWindow(hwnd)
+
+            msg = MSG()
+            while user32.GetMessageW(ctypes.byref(msg), 0, 0, 0) > 0:
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+
+        _splash_thread = threading.Thread(target=_splash_worker, daemon=True)
+        _splash_thread.start()
+    except Exception as e:
+        log(f"Splash screen error: {e}")
+
+
+def close_native_splash():
+    global _splash_hwnd
+    if _splash_hwnd and os.name == "nt":
+        try:
+            ctypes.windll.user32.PostMessageW(_splash_hwnd, 0x0010, 0, 0)
+        except Exception:
+            pass
+        _splash_hwnd = None
+
+
 def focus_existing_window() -> bool:
     try:
         user32 = ctypes.windll.user32
@@ -633,6 +805,9 @@ def main():
     if check_rapid_duplicate_launch(cli_args.open_path, cli_args.object_id):
         return
 
+    # Мгновенный показ заставки (Apple Minimalist splash) в первые 0.05 секунды
+    show_native_splash()
+
     readiness_deadline = time.time() + READINESS_TIMEOUT_SECONDS
 
     port, server_proc = find_or_start_server()
@@ -661,6 +836,7 @@ def main():
     remaining = max(0.1, readiness_deadline - time.time())
     objects_ok, objects_detail = wait_for_objects_ready(base_url, remaining)
     if not objects_ok:
+        close_native_splash()
         log(f"Objects readiness failed: {objects_detail}")
         if count_other_active_gui_windows() == 0:
             shutdown_server(server_proc, port)
@@ -672,6 +848,7 @@ def main():
     try:
         import webview
     except Exception as e:
+        close_native_splash()
         log(f"pywebview import failed: {e}, falling back to browser window")
         open_browser_window(base_url)
         return
@@ -698,6 +875,7 @@ def main():
     # Координированное завершение: закрытие окна проверяет, есть ли другие открытые окна
     try:
         def _on_window_closed(*args, **kwargs):
+            close_native_splash()
             other = count_other_active_gui_windows()
             if other > 0:
                 log(f"Window closed event received. Other launcher GUI windows ({other}) still active; leaving backend on port {port} alive.")
@@ -713,6 +891,7 @@ def main():
             remaining = max(0.1, readiness_deadline - time.time())
             if frontend_ready.wait(timeout=remaining):
                 log("Readiness gates passed (health+objects+loaded); maximizing window")
+                close_native_splash()
                 try:
                     window.maximize()
                 except Exception as e:
@@ -720,6 +899,7 @@ def main():
             else:
                 reason = "frontend load timeout"
                 log(f"Readiness failed: {reason}")
+                close_native_splash()
                 try:
                     window.resize(620, 360)
                 except Exception:
@@ -729,6 +909,7 @@ def main():
                 except Exception as e:
                     log(f"load_html failed: {e}")
         except Exception as e:
+            close_native_splash()
             log(f"gatekeeper failed: {e}")
 
     gatekeeper = threading.Thread(target=_gatekeeper, daemon=True)
