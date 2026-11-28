@@ -3627,6 +3627,25 @@ class LauncherHandler(BaseHTTPRequestHandler):
                 if not target.exists() or not target.is_file():
                     self.send_error(HTTPStatus.NOT_FOUND, "File not found")
                     return
+                if target.suffix.casefold() == ".pdf" and not str(target).upper().startswith("C:\\"):
+                    try:
+                        st = target.stat()
+                        if 0 < st.st_size <= 250 * 1024 * 1024:
+                            raw_key = hashlib.sha1(f"{target}|{st.st_mtime_ns}|{st.st_size}".casefold().encode("utf-8")).hexdigest()[:20]
+                            raw_dir = RUNTIME_DIR / "cache" / "raw_pdf"
+                            raw_dir.mkdir(parents=True, exist_ok=True)
+                            cached_raw = raw_dir / f"{raw_key}.pdf"
+                            if not (cached_raw.exists() and cached_raw.stat().st_size == st.st_size):
+                                with _MANIFEST_LOCK:
+                                    if not (cached_raw.exists() and cached_raw.stat().st_size == st.st_size):
+                                        import uuid
+                                        tmp_raw = raw_dir / f"{raw_key}.{uuid.uuid4().hex[:8]}.tmp"
+                                        shutil.copyfile(str(target), str(tmp_raw))
+                                        tmp_raw.replace(cached_raw)
+                            if cached_raw.exists() and cached_raw.stat().st_size == st.st_size:
+                                target = cached_raw
+                    except Exception as cache_err:
+                        logger.debug("Raw PDF SSD cache fallback to source: %s", cache_err)
                 
                 if target.suffix.casefold() in {".tif", ".tiff"}:
                     try:

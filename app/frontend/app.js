@@ -4470,19 +4470,26 @@ function showPdfPage(page, options = {}) {
 
     const rawUrl = "/api/file/raw?path=" + encodeURIComponent(targetDocPath);
     const targetPageNum = Number(page.page) || 1;
+    els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
 
     if (els.pdfDocFrame.dataset.currentDoc === targetDocPath) {
       const frameWin = els.pdfDocFrame.contentWindow;
-      if (frameWin && frameWin.PDFViewerApplication && frameWin.PDFViewerApplication.initialized) {
-        frameWin.PDFViewerApplication.page = targetPageNum;
-      } else {
-        els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
+      const app = frameWin?.PDFViewerApplication;
+      if (app && app.initialized && app.pagesCount >= targetPageNum) {
+        app.page = targetPageNum;
       }
     } else {
       els.pdfDocFrame.dataset.currentDoc = targetDocPath;
-      els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
-      const viewerUrl = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum + "&pagemode=none";
-      els.pdfDocFrame.src = viewerUrl;
+      const frameWin = els.pdfDocFrame.contentWindow;
+      const app = frameWin?.PDFViewerApplication;
+      if (app && app.initialized && typeof app.open === "function") {
+        app.open({ url: rawUrl }).catch(() => {
+          els.pdfDocFrame.src = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum + "&pagemode=none";
+        });
+      } else {
+        const viewerUrl = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum + "&pagemode=none";
+        els.pdfDocFrame.src = viewerUrl;
+      }
     }
 
     updateActivePdfThumb();
@@ -8157,9 +8164,26 @@ function initPdfDocFrameSync() {
         setTimeout(applyActiveTool, 100);
         setTimeout(applyActiveTool, 300);
 
-        app.eventBus.on("pagesloaded", applyActiveTool);
+        const applyTargetPage = () => {
+          if (els.pdfDocFrame.dataset.targetPage) {
+            const target = parseInt(els.pdfDocFrame.dataset.targetPage, 10);
+            if (target && app.pagesCount >= target && app.page !== target) {
+              app.page = target;
+            }
+          }
+        };
+
+        app.eventBus.on("pagesinit", () => {
+          applyActiveTool();
+          applyTargetPage();
+        });
+        app.eventBus.on("pagesloaded", () => {
+          applyActiveTool();
+          applyTargetPage();
+        });
         app.eventBus.on("documentloaded", () => {
           applyActiveTool();
+          applyTargetPage();
           try {
             if (app.pdfSidebar && app.pdfSidebar.isOpen) {
               app.pdfSidebar.close();
