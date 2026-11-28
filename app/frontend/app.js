@@ -4425,72 +4425,11 @@ function showPdfPage(page, options = {}) {
     return;
   }
 
-    clearExcelViewer();
+  clearExcelViewer();
   const targetDocPath = thumbPathForPage(page);
-  const isPdf = Boolean(targetDocPath && targetDocPath.toLowerCase().endsWith(".pdf") &&
-    page.previewType !== "IMAGE" &&
-    page.previewType !== "VIDEO" &&
-    page.previewType !== "TXT" &&
-    page.previewType !== "HTML" &&
-    page.type !== "missing-preview" &&
-    page.type !== "native-file");
 
-  if (isPdf) {
-    if (els.mediaVideoViewer) {
-      try { els.mediaVideoViewer.pause(); } catch (_) {}
-      els.mediaVideoViewer.hidden = true;
-      els.mediaVideoViewer.removeAttribute("src");
-    }
-    if (els.txtViewer) els.txtViewer.hidden = true;
-    if (els.wordViewer) els.wordViewer.hidden = true;
-    if (els.htmlViewer) els.htmlViewer.hidden = true;
-    if (els.pdfPageImage) {
-      els.pdfPageImage.hidden = true;
-      els.pdfPageImage.removeAttribute("src");
-    }
-    const canvas = document.getElementById("pdfPageCanvas");
-    if (canvas) canvas.hidden = true;
-    els.viewerEmpty.hidden = true;
-    els.pdfViewer.classList.remove("empty");
-    els.viewerControls.hidden = state.viewMode !== "full";
-    if (els.viewToggleDpi) els.viewToggleDpi.hidden = true;
-
-    setActiveNativePath(targetDocPath);
-    revealPathInTree(targetDocPath, { updateSelection: true, skipScroll: skipTreeScroll });
-
-    if (els.pdfDocViewer) els.pdfDocViewer.hidden = false;
-    syncActionGridVisibility();
-
-    const activeToolMode = state.viewerToolMode ?? (state.view.panMode ? 1 : 0);
-    updateViewerToolButton(activeToolMode);
-    const win = els.pdfDocFrame?.contentWindow;
-    if (win && typeof win.setViewerToolMode === "function") {
-      win.setViewerToolMode(activeToolMode);
-    }
-
-    const rawUrl = "/api/file/raw?path=" + encodeURIComponent(targetDocPath);
-    const targetPageNum = Number(page.page) || 1;
-
-    if (els.pdfDocFrame.dataset.currentDoc === targetDocPath) {
-      const frameWin = els.pdfDocFrame.contentWindow;
-      if (frameWin && frameWin.PDFViewerApplication && frameWin.PDFViewerApplication.initialized) {
-        frameWin.PDFViewerApplication.page = targetPageNum;
-      } else {
-        els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
-      }
-    } else {
-      els.pdfDocFrame.dataset.currentDoc = targetDocPath;
-      els.pdfDocFrame.dataset.targetPage = String(targetPageNum);
-      const viewerUrl = "/lib/pdfjs/web/viewer.html?file=" + encodeURIComponent(rawUrl) + "#page=" + targetPageNum + "&pagemode=none";
-      els.pdfDocFrame.src = viewerUrl;
-    }
-
-    updateActivePdfThumb();
-    updatePagePosition(page);
-    return;
-  }
-
-  // Non-PDF documents (DWG, images, fallback)
+  // Для всех документов с растровым превью (PDF, DWG-пары, изображения) используем
+  // мгновенный 150 DPI кэш + фоновый апгрейд до 300 DPI без тяжёлой загрузки сырого PDF через PDF.js
   if (els.mediaVideoViewer) {
     try { els.mediaVideoViewer.pause(); } catch (_) {}
     els.mediaVideoViewer.hidden = true;
@@ -4498,10 +4437,12 @@ function showPdfPage(page, options = {}) {
   }
   if (els.txtViewer) els.txtViewer.hidden = true;
   if (els.wordViewer) els.wordViewer.hidden = true;
+  if (els.htmlViewer) els.htmlViewer.hidden = true;
   if (els.pdfDocViewer) els.pdfDocViewer.hidden = true;
   if (els.pdfDocFrame) {
     els.pdfDocFrame.dataset.currentDoc = "";
     els.pdfDocFrame.dataset.targetPage = "";
+    els.pdfDocFrame.removeAttribute("src");
   }
   const canvas = document.getElementById("pdfPageCanvas");
   if (canvas) canvas.hidden = true;
@@ -4747,11 +4688,12 @@ function zoomThumbs(factor, originX = null, originY = null) {
     const clientX = (originX !== null && originX !== undefined) ? originX : (rect.left + rect.width / 2);
     const clientY = (originY !== null && originY !== undefined) ? originY : (rect.top + rect.height / 2);
 
-    // Точная привязка масштабирования к элементу под курсором (Zero-drift anchoring)
+    // Точная привязка масштабирования к самому изображению/холсту под курсором (Zero-drift anchoring)
     const elUnder = document.elementFromPoint(clientX, clientY);
-    const targetEl = (elUnder && els.pdfThumbs.contains(elUnder) && elUnder !== els.pdfThumbs)
+    const cardEl = (elUnder && els.pdfThumbs.contains(elUnder) && elUnder !== els.pdfThumbs)
       ? (elUnder.closest(".pdf-thumb, .thumb-wrap") || elUnder)
       : null;
+    const targetEl = cardEl ? (cardEl.querySelector("img, canvas") || cardEl) : null;
 
     if (targetEl) {
       const beforeRect = targetEl.getBoundingClientRect();
@@ -4769,8 +4711,8 @@ function zoomThumbs(factor, originX = null, originY = null) {
       const newScreenX = afterRect.left + fracX * afterRect.width;
       const newScreenY = afterRect.top + fracY * afterRect.height;
 
-      els.pdfThumbs.scrollLeft += Math.round(newScreenX - clientX);
-      els.pdfThumbs.scrollTop += Math.round(newScreenY - clientY);
+      els.pdfThumbs.scrollLeft += (newScreenX - clientX);
+      els.pdfThumbs.scrollTop += (newScreenY - clientY);
     } else {
       const mouseX = clientX - rect.left;
       const mouseY = clientY - rect.top;
